@@ -83,9 +83,10 @@ Sonne und Schleierwolken; Licht und Nebel wechseln die Stimmung mit.
 
 - **🤸 Hechtsprung-Knopf:** klassisches Verhalten (Dive immer als Doppelsprung)
   oder Kristall-Modus (Standard)
-- **💫 Hindernis-Stun-Knopf:** schaltet Knockback/Ragdoll-Stun **aller
-  Umwelt-Gefahren** (Hindernisse, Laser, Explosionen) ab — sie schieben dann
-  nur noch physisch. Boxen und Grätsche zwischen Spielern bleiben aktiv.
+- **💫 Hindernis-Stun-Knopf:** schaltet Knockback/Ragdoll-Stun von
+  Hindernis-Treffern und Lasern ab — sie schieben dann nur noch physisch.
+  **TNT-Explosionen schleudern immer**, und Boxen/Grätsche zwischen Spielern
+  bleiben aktiv.
 - Alle Optionen sowie Tag/Nacht (T) und Dreh-Modus (R) werden im Browser
   gespeichert.
 
