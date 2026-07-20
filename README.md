@@ -19,7 +19,12 @@ python3 -m http.server 8931
 |---|---|---|
 | Bewegen | W A S D | Pfeiltasten |
 | Springen | Leertaste | Enter |
-| Doppelsprung | 2× Leertaste | 2× Enter |
+| Doppelsprung/Hechtsprung | 2× Leertaste | 2× Enter |
+
+**Hechtsprung:** Der zweite Sprung in der Luft ist ein Dive — die Figur kippt
+nach vorn und bekommt einen kräftigen Boost in Bewegungs- bzw. Blickrichtung.
+Wer **während des Hechtsprungs boxt**, schleudert den Gegner 1,7× härter weg.
+Landung (oder ein ⭐-Extrasprung) richtet die Figur wieder auf.
 | Boxen | E oder linke Maustaste | − (Minus) |
 
 **Boxen:** Kurzer Faustschlag mit ~2 m Reichweite und 0,55 s Abklingzeit.
