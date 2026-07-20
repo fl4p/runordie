@@ -37,6 +37,13 @@ einschalten: Der Hechtsprung ist dann immer als Doppelsprung verfügbar, und
 💎-Kristalle geben je **+1 Extra-Hechtsprung** in der Luft (bis zu 3).
 Die Wahl wird im Browser gespeichert.
 | Boxen | E oder linke Maustaste | − (Minus) |
+| Grätsche | rechte Maustaste | . (Punkt) |
+
+**Grätsche** (Controller: **B** — Springen liegt nur noch auf A): Die Figur
+rutscht 0,55 s mit 13 m/s in Rücklage nach vorn. Ein erwischter Gegner wird
+**nach oben geschleudert und gestunnt** (ein 🛡 blockt). 1,3 s Abklingzeit,
+nur am Boden startbar; während des Slides ist keine Steuerung möglich —
+Vorsicht an Plattformkanten.
 
 **Boxen:** Kurzer Faustschlag mit ~2 m Reichweite und 0,55 s Abklingzeit.
 Trifft er, fliegt der Gegner als Ragdoll davon (ein 🛡 blockt das ab) — perfekt,

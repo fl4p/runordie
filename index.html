@@ -69,6 +69,7 @@
   Xbox-Controller: beliebigen Knopf drücken, dann mit Stick ◀ / ▶ die Seite wählen — A springt.<br>
   Power-ups einsammeln: 💎 grün = 3 Hechtsprünge · 🥊 rot = 3 harte Schläge · 🐌 violett = 4 s Zeitlupe für den GEGNER · 🧲 = zieht 6 s lang Power-ups an · 🛡 = blockt 3 Treffer.<br>
   Boxen (Gegner wegschubsen): Spieler 1 = E oder linke Maustaste · Spieler 2 = − · Controller = X.<br>
+  Grätsche (Slide, schleudert Gegner hoch + stunnt): Spieler 1 = rechte Maustaste · Spieler 2 = Punkt · Controller = B.<br>
   <b>Hechtsprung</b> (3. Sprung in der Luft, braucht 💎): Vorwärts-Dive — wer dabei boxt, schleudert härter.<br>
   <b>R</b> = Dreh-Modus (opt-in): Maus (Spieler 1) bzw. rechter Stick drehen Figur, Kamera und Box-Richtung.<br>
   <b>T</b> = Tag/Nacht-Himmel umschalten.<br><br>
@@ -692,6 +693,7 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
     padX: 0, padZ: 0,
     airCharges: 0, shield: 0, punchPower: 0, slowUntil: 0, wasSlowed: false,
     magnetUntil: 0, wasMagnet: false,
+    tackling: false, tackleCd: 0,
     punchCooldown: 0, arms: [],
     yaw: 0, padYawRate: 0, diving: false,
   };
@@ -782,6 +784,7 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
 function enterRagdoll(p, duration) {
   p.ragdoll = true;
   p.diving = false;
+  p.tackling = false;
   p.stunUntil = duration > 0 ? perfNow() + duration : Infinity;
   p.torso.fixedRotation = false;
   p.torso.updateMassProperties();
@@ -799,6 +802,7 @@ function resetPlayer(p) {
   p.alive = true; p.jumps = 0; p.jumpLock = 0; p.hitCooldown = 0;
   p.airCharges = 0; p.shield = 0; p.punchPower = 0; p.punchCooldown = 0; p.yaw = 0; p.diving = false;
   p.slowUntil = 0; p.wasSlowed = false; p.magnetUntil = 0; p.wasMagnet = false;
+  p.tackling = false; p.tackleCd = 0;
   exitRagdoll(p);
   for (const { body, mesh } of p.parts) {
     body.position.set(p.spawn.x + body.initOffset.x, p.spawn.y + body.initOffset.y, p.spawn.z + body.initOffset.z);
@@ -1477,6 +1481,7 @@ addEventListener('keydown', (e) => {
   if (!e.repeat) {
     if (e.code === 'KeyE') tryPunch(player1);
     if (e.key === '-' || e.code === 'NumpadSubtract') tryPunch(player2);
+    if (e.key === '.' || e.code === 'NumpadDecimal') tryTackle(player2);
     if (e.code === 'KeyR') toggleRotMode();
     if (e.code === 'KeyT') toggleDaySky();
   }
@@ -1536,7 +1541,7 @@ function readPad(gp) {
   if (gp.mapping === 'standard') {
     return {
       ax, ay, any, rx: gp.axes[2] || 0,
-      jump: btn(0) || btn(1), punch: btn(2), back: btn(8),
+      jump: btn(0), tackle: btn(1), punch: btn(2), back: btn(8),
       dl: btn(14), dr: btn(15), du: btn(12), dd: btn(13),
     };
   }
@@ -1552,7 +1557,8 @@ function readPad(gp) {
   }
   return {
     ax, ay, any, rx: gp.axes[2] || 0, // rechter Stick X
-    jump: btn(0) || btn(1),        // A/B
+    jump: btn(0),                  // A
+    tackle: btn(1),                // B
     punch: btn(3) || btn(2),       // X liegt meist auf 3
     back: btn(10),
     du: hatDir === 0 || hatDir === 1 || hatDir === 7,
@@ -1574,7 +1580,7 @@ function pollGamepads() {
   player2.padX = player2.padZ = player2.padYawRate = 0;
 
   for (const gp of pads) {
-    const st = (padEdge[gp.index] ??= { jump: false, left: false, right: false, back: false, punch: false });
+    const st = (padEdge[gp.index] ??= { jump: false, left: false, right: false, back: false, punch: false, tackle: false });
     const r = readPad(gp);
     const leftNow = r.ax < -0.6 || r.dl;
     const rightNow = r.ax > 0.6 || r.dr;
@@ -1610,9 +1616,13 @@ function pollGamepads() {
     if (r.dd) p.padZ = 1;
     p.padYawRate = Math.abs(r.rx) > DEAD ? r.rx : 0; // rechter Stick dreht (Dreh-Modus)
 
-    // A oder B springen (Flankenerkennung für sauberen Doppelsprung)
+    // A springen (Flankenerkennung für sauberen Doppelsprung)
     if (r.jump && !st.jump) tryJump(p);
     st.jump = r.jump;
+
+    // B grätschen
+    if (r.tackle && !st.tackle) tryTackle(p);
+    st.tackle = r.tackle;
 
     // X boxen
     if (r.punch && !st.punch) tryPunch(p);
@@ -1655,11 +1665,13 @@ renderer.domElement.addEventListener('click', () => {
   ensureAudio();
   if (rotMode) renderer.domElement.requestPointerLock?.();
 });
-// Linke Maustaste boxt für Spieler 1
+// Linke Maustaste boxt, rechte Maustaste grätscht (Spieler 1)
 addEventListener('mousedown', (e) => {
   ensureAudio();
   if (e.button === 0) tryPunch(player1);
+  if (e.button === 2) tryTackle(player1);
 });
+addEventListener('contextmenu', (e) => e.preventDefault());
 
 // ---------- Effekte: Schallwellen-Ringe ----------
 const fxRings = [];
@@ -1768,7 +1780,7 @@ function tryPunch(p) {
 }
 
 function tryJump(p) {
-  if (!p.alive || p.ragdoll || state !== 'playing') return;
+  if (!p.alive || p.ragdoll || p.tackling || state !== 'playing') return;
   // Impuls auf ALLE Körperteile, sonst bremsen die baumelnden Gliedmaßen den Sprung aus
   if (p.grounded) {
     for (const { body } of p.parts) body.velocity.y = JUMP_V;
@@ -1790,6 +1802,48 @@ function tryJump(p) {
     updatePowerupHud();
     doDive(p);
   }
+}
+
+// ---------- Grätsche: Slide nach vorn, schleudert Gegner hoch + stunnt ----------
+const TACKLE_CD = 1.3, TACKLE_TIME = 0.55, TACKLE_SPEED = 13;
+
+function tackleDirection(p) {
+  let dx = (p.keys.r ? 1 : 0) - (p.keys.l ? 1 : 0) + p.padX;
+  let dz = (p.keys.b ? 1 : 0) - (p.keys.f ? 1 : 0) + p.padZ;
+  if (rotMode && (dx || dz)) {
+    const c = Math.cos(p.yaw), s = Math.sin(p.yaw);
+    const wx = dx * c + dz * s, wz = -dx * s + dz * c;
+    dx = wx; dz = wz;
+  }
+  let len = Math.hypot(dx, dz);
+  if (len < 0.1) {
+    const v = p.torso.velocity;
+    if (rotMode) { const f = playerForward(p); dx = f.x; dz = f.z; }
+    else if (Math.hypot(v.x, v.z) > 1) { dx = v.x; dz = v.z; }
+    else { dx = 0; dz = -1; }
+    len = Math.hypot(dx, dz) || 1;
+  }
+  return { x: dx / len, z: dz / len };
+}
+
+function tryTackle(p) {
+  if (!p.alive || p.ragdoll || p.tackling || state !== 'playing') return;
+  if (!p.grounded || perfNow() < p.tackleCd) return;
+  p.tackleCd = perfNow() + TACKLE_CD;
+  const d = tackleDirection(p);
+  p.tackling = true;
+  p.tackleUntil = perfNow() + TACKLE_TIME;
+  p.tackleHit = false;
+  p.tackleDir = d;
+  for (const { body } of p.parts) {
+    body.velocity.x = d.x * TACKLE_SPEED;
+    body.velocity.z = d.z * TACKLE_SPEED;
+  }
+  // Rücklage, Beine voraus
+  const qy = new CANNON.Quaternion().setFromAxisAngle(CANNON.Vec3.UNIT_Y, Math.atan2(-d.x, -d.z));
+  const qp = new CANNON.Quaternion().setFromAxisAngle(CANNON.Vec3.UNIT_X, 0.85);
+  p.tackleQuat = qy.mult(qp);
+  playPunchMiss(); // Rutsch-Whoosh
 }
 
 // Hechtsprung: Vorwärts-Dive mit Kipp-Pose in Eingabe-/Blick-/Laufrichtung
@@ -1984,9 +2038,38 @@ function updatePlayer(p, dt) {
     if (p.ragdoll && perfNow() > p.stunUntil && t.position.y > 0) exitRagdoll(p);
 
     if (!p.ragdoll) {
+      // Grätsche: Timer + Treffer-Fenster
+      if (p.tackling) {
+        if (perfNow() > p.tackleUntil) {
+          p.tackling = false;
+          p.torso.quaternion.setFromAxisAngle(CANNON.Vec3.UNIT_Y, rotMode ? p.yaw : 0);
+        } else {
+          const foe = p === player1 ? player2 : player1;
+          if (!p.tackleHit && foe.alive && foe.torso.position.vsub(t.position).length() < 1.5) {
+            p.tackleHit = true;
+            if (foe.shield > 0) {
+              foe.shield--;
+              updatePowerupHud();
+              playDeflect();
+            } else {
+              // Gegner hochschleudern + stunnen
+              enterRagdoll(foe, 0.9);
+              for (const { body } of foe.parts) {
+                body.velocity.y += 9;
+                body.velocity.x += p.tackleDir.x * 3;
+                body.velocity.z += p.tackleDir.z * 3;
+              }
+              spawnShockwave(foe.torso.position, { x: 0, y: 1, z: 0 }, true);
+              playPunchHit();
+            }
+          }
+        }
+      }
+
       // Dreh-Modus: Blickwinkel per rechtem Stick drehen und Torso ausrichten
       if (rotMode && p.padYawRate) p.yaw -= p.padYawRate * 4.0 * dt;
       if (p.diving) p.torso.quaternion.copy(p.diveQuat);
+      else if (p.tackling) p.torso.quaternion.copy(p.tackleQuat);
       else if (rotMode) p.torso.quaternion.setFromAxisAngle(CANNON.Vec3.UNIT_Y, p.yaw);
 
       // Bewegung (Tastatur + Gamepad, analog bleibt analog)
@@ -2009,8 +2092,10 @@ function updatePlayer(p, dt) {
       if (magnet !== p.wasMagnet) { p.wasMagnet = magnet; updatePowerupHud(); }
       const spd = RUN_SPEED * (slowed ? 0.45 : 1);
       const k = p.grounded ? 0.28 : 0.07;
-      t.velocity.x += (dx * spd - t.velocity.x) * k;
-      t.velocity.z += (dz * spd - t.velocity.z) * k;
+      if (!p.tackling) { // während der Grätsche rutscht man ungebremst
+        t.velocity.x += (dx * spd - t.velocity.x) * k;
+        t.velocity.z += (dz * spd - t.velocity.z) * k;
+      }
 
       // Schwebe-Feder hält den Torso auf Laufhöhe
       if (p.grounded && perfNow() > p.jumpLock) {
