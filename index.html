@@ -1060,9 +1060,7 @@ function explodeBlock(o) {
 const lasers = [];
 const laserGlowMat = new THREE.MeshBasicMaterial({ color: 0xff2545, transparent: true, opacity: 0.2, depthWrite: false });
 
-function spawnLaser() {
-  const grp = new THREE.Group();
-  const len = PLATFORM_HALF_W * 2;
+function makeLaserBeam(len) {
   const beam = new THREE.Mesh(
     new THREE.CylinderGeometry(0.035, 0.035, len, 8),
     new THREE.MeshBasicMaterial({ color: 0xff2545 })
@@ -1070,21 +1068,57 @@ function spawnLaser() {
   beam.rotation.z = Math.PI / 2;
   const glow = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, len, 8), laserGlowMat);
   glow.rotation.z = Math.PI / 2;
-  grp.add(beam, glow);
-  const postMat = new THREE.MeshStandardMaterial({ color: 0x39404c, roughness: 0.5, metalness: 0.6 });
-  for (const sx of [-1, 1]) {
-    const post = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.34, 0.2), postMat);
-    post.position.set(sx * (PLATFORM_HALF_W - 0.1), 0, 0);
-    grp.add(post);
+  return [beam, glow];
+}
+
+// Typen: 'line' = Querstrahl (ggf. höhen-pendelnd), 'spin' = rotierender
+// Propeller-Balken um eine Nabe, 'wiper' = am Rand verankert, schwenkt auf/ab
+function spawnLaser(forceType) {
+  const r = Math.random();
+  const type = forceType ?? (r < 0.4 ? 'line' : r < 0.75 ? 'spin' : 'wiper');
+  const grp = new THREE.Group();
+  const L = { grp, type, z: SPAWN_Z, speed: 2.0 + Math.random() * 1.2 };
+
+  if (type === 'line') {
+    const [beam, glow] = makeLaserBeam(PLATFORM_HALF_W * 2);
+    grp.add(beam, glow);
+    const postMat = new THREE.MeshStandardMaterial({ color: 0x39404c, roughness: 0.5, metalness: 0.6 });
+    for (const sx of [-1, 1]) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.34, 0.2), postMat);
+      post.position.set(sx * (PLATFORM_HALF_W - 0.1), 0, 0);
+      grp.add(post);
+    }
+    L.y0 = 0.7 + Math.random() * 0.7;
+    L.amp = Math.random() < 0.5 ? 0 : 0.25 + Math.random() * 0.35;
+    L.phase = Math.random() * Math.PI * 2;
+  } else if (type === 'spin') {
+    L.len = 7;
+    L.hubY = 1.7;
+    L.angle = Math.random() * Math.PI;
+    L.angVel = (Math.random() < 0.5 ? 1 : -1) * (0.7 + Math.random() * 0.5);
+    const [beam, glow] = makeLaserBeam(L.len);
+    const hub = new THREE.Mesh(
+      new THREE.SphereGeometry(0.16, 12, 10),
+      new THREE.MeshStandardMaterial({ color: 0x2a2f38, emissive: 0xff2545, emissiveIntensity: 0.6, roughness: 0.4 })
+    );
+    grp.add(beam, glow, hub);
+  } else { // wiper
+    L.side = Math.random() < 0.5 ? -1 : 1;
+    L.len = PLATFORM_HALF_W * 1.5;
+    L.phase = Math.random() * Math.PI * 2;
+    const [beam, glow] = makeLaserBeam(L.len);
+    beam.position.x = -L.side * L.len / 2;
+    glow.position.x = -L.side * L.len / 2;
+    const post = new THREE.Mesh(
+      new THREE.BoxGeometry(0.24, 0.7, 0.24),
+      new THREE.MeshStandardMaterial({ color: 0x39404c, roughness: 0.5, metalness: 0.6 })
+    );
+    post.position.y = -0.15;
+    grp.add(beam, glow, post);
   }
+
   scene.add(grp);
-  lasers.push({
-    grp, z: SPAWN_Z,
-    y0: 0.7 + Math.random() * 0.7,
-    amp: Math.random() < 0.5 ? 0 : 0.25 + Math.random() * 0.35,
-    phase: Math.random() * Math.PI * 2,
-    speed: 2.0 + Math.random() * 1.2,
-  });
+  lasers.push(L);
 }
 
 function clearLasers() {
@@ -1103,13 +1137,40 @@ function updateLasers(dt) {
     const L = lasers[i];
     L.z += L.speed * dt;
     if (L.z > DESPAWN_Z) { scene.remove(L.grp); lasers.splice(i, 1); continue; }
-    const y = L.y0 + (L.amp ? Math.sin(elapsed * 0.8 + L.phase) * L.amp : 0);
-    L.grp.position.set(0, y, L.z);
+
+    // Transform + Treffer-Test je Typ (Test in der x/y-Ebene bei L.z)
+    let hitTest;
+    if (L.type === 'line') {
+      const y = L.y0 + (L.amp ? Math.sin(elapsed * 0.8 + L.phase) * L.amp : 0);
+      L.grp.position.set(0, y, L.z);
+      hitTest = (t) => Math.abs(t.y - y) < 0.45 && Math.abs(t.x) < PLATFORM_HALF_W;
+    } else if (L.type === 'spin') {
+      L.angle += L.angVel * dt;
+      L.grp.position.set(0, L.hubY, L.z);
+      L.grp.rotation.z = L.angle;
+      hitTest = (t) => {
+        const dx = t.x, dy = t.y - L.hubY;
+        const c = Math.cos(L.angle), s = Math.sin(L.angle);
+        const proj = Math.max(-L.len / 2, Math.min(L.len / 2, dx * c + dy * s));
+        return Math.hypot(dx - proj * c, dy - proj * s) < 0.45;
+      };
+    } else { // wiper
+      const a = 0.06 + (Math.sin(elapsed * 0.9 + L.phase) * 0.5 + 0.5) * 0.85;
+      const px = L.side * (PLATFORM_HALF_W - 0.2), py = 0.3;
+      L.grp.position.set(px, py, L.z);
+      L.grp.rotation.z = -L.side * a;
+      hitTest = (t) => {
+        const ddx = -L.side * Math.cos(a), ddy = Math.sin(a);
+        const vx = t.x - px, vy = t.y - py;
+        const proj = Math.max(0, Math.min(L.len, vx * ddx + vy * ddy));
+        return Math.hypot(vx - proj * ddx, vy - proj * ddy) < 0.45;
+      };
+    }
 
     for (const p of players) {
       if (!p.alive || perfNow() < p.hitCooldown) continue;
       const t = p.torso.position;
-      if (Math.abs(t.z - L.z) < 0.3 && Math.abs(t.y - y) < 0.45 && Math.abs(t.x) < PLATFORM_HALF_W) {
+      if (Math.abs(t.z - L.z) < 0.3 && hitTest(t)) {
         p.hitCooldown = perfNow() + 1.2;
         if (p.shield > 0) {
           p.shield--;
@@ -1122,7 +1183,7 @@ function updateLasers(dt) {
           body.velocity.z += 4;
           body.velocity.y += 5;
         }
-        spawnShockwave({ x: t.x, y, z: L.z }, { x: 0, y: 0, z: 1 }, true);
+        spawnShockwave({ x: t.x, y: t.y, z: L.z }, { x: 0, y: 0, z: 1 }, true);
         playZap();
       }
     }

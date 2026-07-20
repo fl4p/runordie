@@ -127,10 +127,15 @@ Jede 5. Spawn-Welle ist eine Formation:
 
 ## Laser
 
-Ab ca. 8 Sekunden wandern rote **Laserstrahlen** langsam über die Straße —
-volle Breite, in Sprunghöhe, manche pendeln zusätzlich auf und ab. Berührung
-zappt: Ragdoll + Schleuder (ein 🛡 blockt). Alle 12 Sekunden kommt ein
-weiterer Laser dazu (max. 5 gleichzeitig).
+Ab ca. 8 Sekunden wandern rote **Laserstrahlen** langsam über die Straße.
+Berührung zappt: Ragdoll + Schleuder (ein 🛡 blockt). Alle 12 Sekunden kommt
+ein weiterer Laser dazu (max. 5 gleichzeitig). Drei Typen:
+
+- **Querstrahl:** volle Breite in Sprunghöhe, manche pendeln auf und ab
+- **Rotierend:** ein Propeller-Balken kreist um eine schwebende Nabe —
+  Durchlaufen braucht Timing
+- **Scheibenwischer:** am Fahrbahnrand verankert, schwenkt auf und ab und
+  fegt periodisch über die halbe Bahn
 
 Das Tempo steigt mit der Zeit. Treffer werfen die Figur kurz in den vollen
 Ragdoll-Modus (keine Kontrolle) — fällt sie dabei von der Plattform, war's das.
