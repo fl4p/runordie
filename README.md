@@ -24,7 +24,9 @@ python3 -m http.server 8931
 
 **Boxen:** Kurzer Faustschlag mit ~2 m Reichweite und 0,55 s Abklingzeit.
 Trifft er, fliegt der Gegner als Ragdoll davon (ein 🛡 blockt das ab) — perfekt,
-um ihn vor ein Hindernis oder von der Plattform zu schubsen. Am Controller: **RT**.
+um ihn vor ein Hindernis oder von der Plattform zu schubsen. Am Controller: **X**.
+Die Figur jabbt dabei abwechselnd mit links und rechts und macht einen kleinen
+Ausfallschritt.
 
 **Xbox-Controller** (Gamepad API, Standard-Mapping): Ein neu erkannter
 Controller ist zunächst keiner Seite zugeordnet — ein Hinweis erscheint, und

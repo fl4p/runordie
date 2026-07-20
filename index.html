@@ -60,7 +60,7 @@
   Weiche aus, spring drüber, nutze den Doppelsprung.<br>
   Xbox-Controller: beliebigen Knopf drücken, dann mit Stick ◀ / ▶ die Seite wählen — A springt.<br>
   Power-ups einsammeln: ⭐ = Extra-Luftsprung (stapelbar) · 🛡 = blockt einen Treffer.<br>
-  Boxen (Gegner wegschubsen): Spieler 1 = E · Spieler 2 = − · Controller = RT.<br><br>
+  Boxen (Gegner wegschubsen): Spieler 1 = E · Spieler 2 = − · Controller = X.<br><br>
   <b>Beliebige Taste drücken zum Starten</b></small></div>
 
 <script type="importmap">
@@ -867,8 +867,8 @@ function pollGamepads() {
     if (jumpNow && !st.jump) tryJump(p);
     st.jump = jumpNow;
 
-    // RT boxen
-    const punchNow = (gp.buttons[7]?.value ?? 0) > 0.5 || !!gp.buttons[7]?.pressed;
+    // X boxen
+    const punchNow = !!gp.buttons[2]?.pressed;
     if (punchNow && !st.punch) tryPunch(p);
     st.punch = punchNow;
 
@@ -892,12 +892,18 @@ function tryPunch(p) {
   dir.y = 0;
   if (dir.length() > 0.01) dir.normalize(); else dir.set(0, 0, -1);
 
-  // Arme sichtbar Richtung Gegner schleudern
-  for (const arm of p.arms) {
-    arm.velocity.x += dir.x * 7;
-    arm.velocity.z += dir.z * 7;
-    arm.velocity.y += 2.5;
+  // Schlag-Animation: abwechselnd linker/rechter Arm schnellt als Jab nach vorn,
+  // die Gelenk-Constraints reißen ihn zurück -> sichtbarer Boxhieb
+  p.punchSide = p.punchSide ? 0 : 1;
+  const jabArms = p.punchSide ? [p.arms[2], p.arms[3]] : [p.arms[0], p.arms[1]];
+  for (const arm of jabArms) {
+    arm.velocity.x = dir.x * 15;
+    arm.velocity.z = dir.z * 15;
+    arm.velocity.y = 1.5;
   }
+  // kleiner Ausfallschritt hinterher
+  p.torso.velocity.x += dir.x * 1.8;
+  p.torso.velocity.z += dir.z * 1.8;
 
   if (foe.alive && dist < PUNCH_RANGE) {
     if (foe.shield > 0) {
