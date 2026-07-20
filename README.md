@@ -21,10 +21,10 @@ python3 -m http.server 8931
 | Springen | Leertaste | Enter |
 | Doppelsprung/Hechtsprung | 2× Leertaste | 2× Enter |
 
-**Hechtsprung:** Der zweite Sprung in der Luft ist ein Dive — die Figur kippt
-nach vorn und bekommt einen kräftigen Boost in Bewegungs- bzw. Blickrichtung.
+**Hechtsprung** (braucht 💎): Dritter Sprung in der Luft — die Figur kippt nach
+vorn und bekommt einen kräftigen Boost in Bewegungs- bzw. Blickrichtung.
 Wer **während des Hechtsprungs boxt**, schleudert den Gegner 1,7× härter weg.
-Landung (oder ein ⭐-Extrasprung) richtet die Figur wieder auf.
+Die Landung richtet die Figur wieder auf.
 | Boxen | E oder linke Maustaste | − (Minus) |
 
 **Boxen:** Kurzer Faustschlag mit ~2 m Reichweite und 0,55 s Abklingzeit.
@@ -65,7 +65,7 @@ Sonne und Schleierwolken; Licht und Nebel wechseln die Stimmung mit.
 
 - **Latte** (rot): niedrige Querstange — drüberspringen
 - **Wand** (lila Ziegel): Wand mit Lücke — durchlaufen. Manche Wände sind
-  **3 Sprünge hoch** (4,2 m): nur mit Dreifachsprung (⭐-Power-up) übersteigbar,
+  **3 Sprünge hoch** (4,2 m): nur mit einer Hechtsprung-Kette (💎) übersteigbar,
   sonst hilft nur die Lücke
 - **Schieber** (gelb): pendelt seitlich und drückt euch Richtung Kante
 - **Walze** (türkis): schnelle Rolle über die volle Breite — Doppelsprung!
@@ -75,8 +75,10 @@ Sonne und Schleierwolken; Licht und Nebel wechseln die Stimmung mit.
 Schweben rotierend auf der Bahn und kommen mit den Hindernissen angeflogen —
 einfach durchlaufen zum Einsammeln:
 
-- **⭐ Extra-Sprung** (grüner Kristall): +1 Luftsprung, stapelbar bis 3 —
-  damit sind Dreifach- bis Fünffachsprünge drin
+- **💎 Hechtsprung-Kristall** (grün): gibt **3 Hechtsprünge**. Der Hechtsprung
+  ist der dritte Sprung in der Luft — ein Vorwärts-Dive mit Kipp-Pose und
+  kräftigem Boost in Bewegungs-/Blickrichtung. Ohne Kristall gibt es nur den
+  normalen Doppelsprung
 - **🛡 Schild** (blauer Ring): blockt den nächsten Hindernis-Treffer
   (kein Ragdoll-Stun, nur ein abgeschwächter Schubs); sichtbar als Blase
 

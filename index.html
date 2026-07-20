@@ -59,9 +59,9 @@
   Hindernisse rollen auf euch zu und schieben euch von der Plattform — wer fällt, stirbt!<br>
   Weiche aus, spring drüber, nutze den Doppelsprung.<br>
   Xbox-Controller: beliebigen Knopf drücken, dann mit Stick ◀ / ▶ die Seite wählen — A springt.<br>
-  Power-ups einsammeln: ⭐ = Extra-Luftsprung (stapelbar) · 🛡 = blockt einen Treffer.<br>
+  Power-ups einsammeln: 💎 grüner Kristall = 3 Hechtsprünge · 🛡 = blockt einen Treffer.<br>
   Boxen (Gegner wegschubsen): Spieler 1 = E oder linke Maustaste · Spieler 2 = − · Controller = X.<br>
-  Der 2. Sprung ist ein <b>Hechtsprung</b> mit Vorwärts-Boost — wer dabei boxt, schleudert härter.<br>
+  <b>Hechtsprung</b> (3. Sprung in der Luft, braucht 💎): Vorwärts-Dive — wer dabei boxt, schleudert härter.<br>
   <b>R</b> = Dreh-Modus (opt-in): Maus (Spieler 1) bzw. rechter Stick drehen Figur, Kamera und Box-Richtung.<br>
   <b>T</b> = Tag/Nacht-Himmel umschalten.<br><br>
   <b>Beliebige Taste drücken zum Starten</b></small></div>
@@ -843,7 +843,7 @@ function spawnObstacle(speed) {
     o.body.velocity.set(0, 0, speed);
   } else if (type === 'wall') {
     // Wand mit Lücke -> durchlaufen. 30 % sind "3 Sprünge hoch" (4,2 m):
-    // nur per Dreifachsprung (⭐) übersteigbar, sonst muss man durch die Lücke.
+    // nur per Hechtsprung-Kette (💎) übersteigbar, sonst muss man durch die Lücke.
     const gapW = 2.6, gapX = (Math.random() * 2 - 1) * (PLATFORM_HALF_W - gapW / 2 - 0.6);
     const H = Math.random() < 0.3 ? 2.1 : 1.5;
     const leftW = (gapX - gapW / 2) + PLATFORM_HALF_W;
@@ -1011,7 +1011,7 @@ function clearPowerups() {
 
 function updatePowerupHud() {
   for (const [p, el] of [[player1, 'pu1'], [player2, 'pu2']]) {
-    $(el).textContent = '⭐'.repeat(p.airCharges) + (p.shield > 0 ? ' 🛡' : '');
+    $(el).textContent = '💎'.repeat(p.airCharges) + (p.shield > 0 ? ' 🛡' : '');
     p.bubble.visible = p.shield > 0;
   }
 }
@@ -1030,7 +1030,7 @@ function updatePowerups(dt) {
       const t = p.torso.position;
       const d = Math.hypot(t.x - pu.mesh.position.x, t.y - pu.mesh.position.y, t.z - pu.mesh.position.z);
       if (d < 1.15) {
-        if (pu.type === 'jump') p.airCharges = Math.min(3, p.airCharges + 1);
+        if (pu.type === 'jump') p.airCharges = 3; // ein Kristall = 3 Hechtsprünge
         else p.shield = Math.min(1, p.shield + 1);
         updatePowerupHud();
         taken = true;
@@ -1391,7 +1391,14 @@ function tryJump(p) {
     p.jumps = 1; p.jumpLock = perfNow() + 0.25;
     playJump(1);
   } else if (p.jumps < 2) {
-    // Hechtsprung: der zweite Sprung boostet nach vorn und kippt den Körper
+    // Normaler Doppelsprung (vertikal)
+    for (const { body } of p.parts) body.velocity.y = JUMP_V * 0.95;
+    p.jumps = 2;
+    playJump(2);
+  } else if (p.airCharges > 0) {
+    // 💎-Hechtsprung: nur mit Kristall-Ladung — Vorwärts-Dive mit Kipp-Pose
+    p.airCharges--;
+    updatePowerupHud();
     let dx = (p.keys.r ? 1 : 0) - (p.keys.l ? 1 : 0) + p.padX;
     let dz = (p.keys.b ? 1 : 0) - (p.keys.f ? 1 : 0) + p.padZ;
     if (rotMode && (dx || dz)) {
@@ -1414,23 +1421,12 @@ function tryJump(p) {
       body.velocity.x += dx * 7.5;
       body.velocity.z += dz * 7.5;
     }
-    p.jumps = 2;
     p.diving = true;
     const qy = new CANNON.Quaternion().setFromAxisAngle(CANNON.Vec3.UNIT_Y, Math.atan2(-dx, -dz));
     const qp = new CANNON.Quaternion().setFromAxisAngle(CANNON.Vec3.UNIT_X, -1.15);
     p.diveQuat = qy.mult(qp);
-    playJump(2);
-    playPunchMiss(); // Whoosh
-  } else if (p.airCharges > 0) {
-    // ⭐-Power-up: zusätzlicher Luftsprung (richtet nach einem Hechtsprung wieder auf)
-    p.airCharges--;
-    updatePowerupHud();
-    if (p.diving) {
-      p.diving = false;
-      p.torso.quaternion.setFromAxisAngle(CANNON.Vec3.UNIT_Y, rotMode ? p.yaw : 0);
-    }
-    for (const { body } of p.parts) body.velocity.y = JUMP_V * 0.95;
     playJump(3);
+    playPunchMiss(); // Whoosh
   }
 }
 
