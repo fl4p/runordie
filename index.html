@@ -44,6 +44,11 @@
     background: #1a2029; color: #e6edf3; cursor: pointer;
   }
   #msg button:hover { background: #242d39; }
+  #msg input {
+    pointer-events: auto; font: inherit; font-size: 16px; width: 180px;
+    padding: 7px 12px; border-radius: 8px; border: 1px solid #30363d;
+    background: #10151c; color: #e6edf3; text-transform: uppercase; text-align: center;
+  }
   .powerups { top: 12px; font-size: 22px; letter-spacing: 3px; text-shadow: 0 2px 8px #000; }
   #pu1 { left: 14px; }
   #pu2 { left: calc(50% + 16px); }
@@ -1500,6 +1505,12 @@ const JUMPKEY = { Space: player1, Enter: player2 };
 
 addEventListener('keydown', (e) => {
   ensureAudio(); // Browser erlaubt Audio erst nach Nutzer-Geste
+  // Namenseingabe im Highscore-Board: Tasten gehören dem Input
+  if (document.activeElement?.id === 'scorename') {
+    if (e.code === 'Enter' || e.code === 'NumpadEnter') submitSoloScore();
+    else if (e.code === 'Escape') { document.activeElement.blur(); backToMenu(); }
+    return;
+  }
   if (['Space', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
   if (e.code === 'Escape') { backToMenu(); return; }
   if (state === 'menu') { startGame(e.code === 'Digit1' || e.code === 'Numpad1'); return; }
@@ -1949,8 +1960,33 @@ function doDive(p) {
 let state = 'menu'; // menu | playing | roundEnd
 let elapsed = 0, spawnTimer = 0, puTimer = 0, roundEndAt = 0, firstDeathAt = 0, spawnCount = 0;
 let soloMode = false;
-let bestSolo = +(localStorage.getItem('runordie_best') || 0);
 let diveAlways = localStorage.getItem('runordie_diveAlways') === '1';
+
+// ---------- Solo-Highscores (Top 8, mit Namen) ----------
+let soloScores = [];
+try { soloScores = JSON.parse(localStorage.getItem('runordie_scores') || '[]'); } catch { /* egal */ }
+let bestSolo = soloScores[0]?.t ?? +(localStorage.getItem('runordie_best') || 0);
+
+function saveSoloScore(name, t) {
+  soloScores.push({ n: (name || 'ANONYM').slice(0, 12).toUpperCase(), t });
+  soloScores.sort((a, b) => b.t - a.t);
+  soloScores = soloScores.slice(0, 8);
+  bestSolo = soloScores[0].t;
+  localStorage.setItem('runordie_scores', JSON.stringify(soloScores));
+  localStorage.setItem('runordie_best', bestSolo);
+}
+
+function scoreboardHtml(highlightTime) {
+  if (!soloScores.length) return '';
+  const rows = soloScores.map((s, i) =>
+    `<tr${s.t === highlightTime ? ' style="color:#ffd23d;font-weight:800"' : ''}>` +
+    `<td style="padding:1px 10px;text-align:right">${i + 1}.</td>` +
+    `<td style="padding:1px 10px;text-align:left">${s.n}</td>` +
+    `<td style="padding:1px 10px;text-align:right">${s.t} s</td></tr>`
+  ).join('');
+  return `<table style="margin:10px auto 0;border-collapse:collapse;font-size:16px">` +
+    `<tr style="opacity:.6"><td></td><td style="padding:1px 10px">HIGHSCORES</td><td></td></tr>${rows}</table>`;
+}
 const clock = new THREE.Clock();
 const perfNow = () => performance.now() / 1000;
 
@@ -2020,7 +2056,22 @@ document.addEventListener('click', (e) => {
     localStorage.setItem('runordie_diveAlways', diveAlways ? '1' : '0');
     updateDiveBtn();
   }
+  if (e.target?.id === 'scoreok') submitSoloScore();
 });
+
+function submitSoloScore() {
+  const btn = $('scoreok');
+  if (!btn) return;
+  const t = +btn.dataset.time;
+  const name = ($('scorename')?.value || '').trim() || 'ANONYM';
+  localStorage.setItem('runordie_name', name);
+  saveSoloScore(name, t);
+  const m = $('msg');
+  m.innerHTML = `GAME OVER<small>Eingetragen! Nächster Versuch in 3 Sekunden … (ESC = Menü)</small>` +
+    scoreboardHtml(t);
+  roundEndAt = perfNow() + 3;
+  applySoloLayout(); // Rekord-Anzeige oben aktualisieren
+}
 
 function resetRound() {
   clearObstacles(); clearPowerups(); clearLasers();
@@ -2046,17 +2097,25 @@ function endRound() {
   if (soloMode) {
     const t = Math.floor(elapsed);
     const isRecord = t > bestSolo;
-    if (isRecord) {
-      bestSolo = t;
-      localStorage.setItem('runordie_best', bestSolo);
-    }
+    const qualifies = t >= 1 && (soloScores.length < 8 || t > soloScores[soloScores.length - 1].t);
     const m = $('msg');
-    m.innerHTML = `GAME OVER<small>${t} Sekunden überlebt` +
-      (isRecord ? ' — 🏆 NEUER REKORD!' : ` · Rekord: ${bestSolo} s`) +
-      '<br>Nächster Versuch in 3 Sekunden … (ESC = Menü)</small>';
+    if (qualifies) {
+      // Top-8-Zeit: Namenseingabe, Auto-Restart pausiert bis zum Bestätigen
+      const lastName = localStorage.getItem('runordie_name') || '';
+      m.innerHTML = `GAME OVER<small>${t} Sekunden überlebt` +
+        (isRecord ? ' — 🏆 NEUER REKORD!' : ' — Top 8!') + '</small>' +
+        `<small><input id="scorename" maxlength="12" placeholder="DEIN NAME" value="${lastName}"> ` +
+        `<button id="scoreok" data-time="${t}">Eintragen</button></small>` +
+        scoreboardHtml(-1);
+      roundEndAt = Infinity;
+      setTimeout(() => $('scorename')?.focus(), 50);
+    } else {
+      m.innerHTML = `GAME OVER<small>${t} Sekunden überlebt · Rekord: ${bestSolo} s` +
+        '<br>Nächster Versuch in 3 Sekunden … (ESC = Menü)</small>' + scoreboardHtml(-1);
+      roundEndAt = perfNow() + 3;
+    }
     m.style.color = '#4dd2ff';
     m.classList.remove('hidden');
-    roundEndAt = perfNow() + 3;
     return;
   }
   let text;
