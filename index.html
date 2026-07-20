@@ -241,6 +241,66 @@ for (const sx of [-1, 1]) {
   scene.add(edge);
 }
 
+// ---------- Sound (Web Audio, prozedural — keine Audiodateien) ----------
+let audioCtx = null;
+function ensureAudio() {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch { return; }
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function playJump(stage) { // 1 = Boden, 2 = Doppel, 3 = ⭐-Extrasprung
+  if (!audioCtx || audioCtx.state !== 'running') return;
+  const t = audioCtx.currentTime;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = 'triangle';
+  const f0 = 170 + stage * 70;
+  o.frequency.setValueAtTime(f0, t);
+  o.frequency.exponentialRampToValueAtTime(f0 * 2.6, t + 0.13);
+  g.gain.setValueAtTime(0.16, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+  o.connect(g).connect(audioCtx.destination);
+  o.start(t); o.stop(t + 0.22);
+}
+
+function playHit() { // dumpfer Einschlag: Bass-Drop + gefiltertes Rauschen
+  if (!audioCtx || audioCtx.state !== 'running') return;
+  const t = audioCtx.currentTime;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(150, t);
+  o.frequency.exponentialRampToValueAtTime(42, t + 0.26);
+  g.gain.setValueAtTime(0.55, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.32);
+  o.connect(g).connect(audioCtx.destination);
+  o.start(t); o.stop(t + 0.34);
+
+  const len = (audioCtx.sampleRate * 0.09) | 0;
+  const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+  const src = audioCtx.createBufferSource(); src.buffer = buf;
+  const f = audioCtx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 850;
+  const ng = audioCtx.createGain(); ng.gain.value = 0.4;
+  src.connect(f).connect(ng).connect(audioCtx.destination);
+  src.start(t);
+}
+
+function playDeflect() { // Schild-Block: heller metallischer Pling
+  if (!audioCtx || audioCtx.state !== 'running') return;
+  const t = audioCtx.currentTime;
+  for (const [f0, det] of [[920, 0], [1380, 3]]) {
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(f0, t); o.detune.value = det;
+    g.gain.setValueAtTime(0.14, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+    o.connect(g).connect(audioCtx.destination);
+    o.start(t); o.stop(t + 0.36);
+  }
+}
+
 // ---------- Ragdoll-Spieler ----------
 function makePart(player, halfExtents, mass, offset, color, isSphere = false) {
   const shape = isSphere ? new CANNON.Sphere(halfExtents.x) :
@@ -341,7 +401,9 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
           updatePowerupHud();
           torso.velocity.x += e.body.velocity.x * 0.35;
           torso.velocity.z += e.body.velocity.z * 0.35;
+          playDeflect();
         } else {
+          playHit();
           enterRagdoll(p, 0.9);
           torso.velocity.x += e.body.velocity.x * 0.9;
           torso.velocity.z += e.body.velocity.z * 0.9;
@@ -568,6 +630,7 @@ const KEYMAP = {
 const JUMPKEY = { Space: player1, Enter: player2 };
 
 addEventListener('keydown', (e) => {
+  ensureAudio(); // Browser erlaubt Audio erst nach Nutzer-Geste
   if (['Space', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
   if (state === 'menu') { startGame(); return; }
   const m = KEYMAP[e.code];
@@ -575,6 +638,7 @@ addEventListener('keydown', (e) => {
   const jp = JUMPKEY[e.code];
   if (jp && !e.repeat) tryJump(jp);
 });
+addEventListener('pointerdown', ensureAudio);
 addEventListener('keyup', (e) => {
   const m = KEYMAP[e.code];
   if (m) m[0].keys[m[1]] = false;
@@ -685,14 +749,17 @@ function tryJump(p) {
   if (p.grounded) {
     for (const { body } of p.parts) body.velocity.y = JUMP_V;
     p.jumps = 1; p.jumpLock = perfNow() + 0.25;
+    playJump(1);
   } else if (p.jumps < 2) {
     for (const { body } of p.parts) body.velocity.y = JUMP_V * 0.95;
     p.jumps = 2;
+    playJump(2);
   } else if (p.airCharges > 0) {
     // ⭐-Power-up: zusätzlicher Luftsprung
     p.airCharges--;
     updatePowerupHud();
     for (const { body } of p.parts) body.velocity.y = JUMP_V * 0.95;
+    playJump(3);
   }
 }
 
@@ -868,7 +935,8 @@ addEventListener('resize', () => {
 animate();
 
 // Debug-Hook für automatisierte Tests
-window.__game = { players, obstacles, powerups, world, spawnPowerup, get state() { return state; } };
+window.__game = { players, obstacles, powerups, world, spawnPowerup,
+  get state() { return state; }, get audio() { return audioCtx && audioCtx.state; } };
 </script>
 </body>
 </html>
