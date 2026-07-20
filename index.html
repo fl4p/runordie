@@ -28,6 +28,16 @@
   }
   #msg small { display: block; font-size: 17px; font-weight: 400; margin-top: 14px; opacity: .85; line-height: 1.6; }
   #speed { top: 60px; left: 50%; transform: translateX(-50%); font-size: 13px; opacity: .55; }
+  #padassign {
+    bottom: 54px; left: 50%; transform: translateX(-50%);
+    font-size: 15px; text-align: center; line-height: 1.6;
+    background: rgba(13,17,23,.88); border: 1px solid #30363d;
+    border-radius: 10px; padding: 8px 18px;
+  }
+  #padflash {
+    bottom: 112px; left: 50%; transform: translateX(-50%);
+    font-size: 22px; font-weight: 800; text-shadow: 0 2px 12px #000;
+  }
   .hidden { display: none !important; }
 </style>
 </head>
@@ -35,13 +45,15 @@
 <div id="divider"></div>
 <div class="hud" id="score"><span class="p1">SPIELER 1</span>&nbsp; <span id="s1">0</span> : <span id="s2">0</span> &nbsp;<span class="p2">SPIELER 2</span></div>
 <div class="hud" id="speed"></div>
-<div class="hud plabel" id="l1">Spieler 1 — W A S D + LEERTASTE &nbsp;·&nbsp; Controller 1: Stick + A &nbsp;·&nbsp; 2× = Doppelsprung</div>
-<div class="hud plabel" id="l2">Spieler 2 — Pfeiltasten + ENTER &nbsp;·&nbsp; Controller 2: Stick + A &nbsp;·&nbsp; 2× = Doppelsprung</div>
+<div class="hud plabel" id="l1">Spieler 1 — W A S D + LEERTASTE (2× = Doppelsprung)</div>
+<div class="hud plabel" id="l2">Spieler 2 — Pfeiltasten + ENTER (2× = Doppelsprung)</div>
+<div class="hud hidden" id="padassign"></div>
+<div class="hud hidden" id="padflash"></div>
 <div class="hud" id="msg">RUN OR DIE<small>
   Ragdoll-Splitscreen für 2 Spieler an einer Tastatur.<br>
   Hindernisse rollen auf euch zu und schieben euch von der Plattform — wer fällt, stirbt!<br>
   Weiche aus, spring drüber, nutze den Doppelsprung.<br>
-  Auch mit Xbox-Controllern spielbar: linker Stick/D-Pad bewegen, A springen.<br><br>
+  Xbox-Controller: beliebigen Knopf drücken, dann mit Stick ◀ / ▶ die Seite wählen — A springt.<br><br>
   <b>Beliebige Taste drücken zum Starten</b></small></div>
 
 <script type="importmap">
@@ -387,18 +399,87 @@ addEventListener('keyup', (e) => {
   if (m) m[0].keys[m[1]] = false;
 });
 
-// ---------- Gamepads (Xbox): Controller 1 -> Spieler 1, Controller 2 -> Spieler 2 ----------
-const padState = [{ jump: false }, { jump: false }];
+// ---------- Gamepads (Xbox): erkannte Controller wählen ihre Seite selbst ----------
+const padAssign = {}; // gamepad.index -> 0 (Spieler 1) | 1 (Spieler 2)
+const padEdge = {};   // gamepad.index -> Flankenzustände
+let padHudKey = null, padFlashTimer = 0;
+
+function flashPad(text, color) {
+  const el = $('padflash');
+  el.textContent = text; el.style.color = color;
+  el.classList.remove('hidden');
+  clearTimeout(padFlashTimer);
+  padFlashTimer = setTimeout(() => el.classList.add('hidden'), 2200);
+}
+
+function assignPad(gp, side) {
+  // Pro Seite nur ein Pad: bisheriges Pad dieser Seite wird wieder frei
+  for (const k of Object.keys(padAssign)) if (padAssign[k] === side) delete padAssign[k];
+  padAssign[gp.index] = side;
+  flashPad(side === 0 ? '🎮 ◀ SPIELER 1' : 'SPIELER 2 ▶ 🎮', side === 0 ? '#4dd2ff' : '#ff9f43');
+}
+
+function updatePadHud(pads) {
+  const key = pads.map((g) => `${g.index}:${padAssign[g.index] ?? 'u'}`).join(',');
+  if (key === padHudKey) return;
+  padHudKey = key;
+
+  const unassigned = pads.some((g) => padAssign[g.index] === undefined);
+  const box = $('padassign');
+  box.classList.toggle('hidden', !unassigned);
+  if (unassigned) {
+    box.innerHTML = `🎮 <b>Controller erkannt</b> — Seite wählen: Stick/Steuerkreuz ` +
+      `<b style="color:#4dd2ff">◀ links = Spieler 1</b> &nbsp;·&nbsp; ` +
+      `<b style="color:#ff9f43">rechts ▶ = Spieler 2</b> &nbsp;<span style="opacity:.6">(Back-Taste gibt ein Pad wieder frei)</span>`;
+  }
+
+  const has = [false, false];
+  for (const k in padAssign) has[padAssign[k]] = true;
+  $('l1').textContent = `Spieler 1 — W A S D + LEERTASTE (2× = Doppelsprung)${has[0] ? ' · 🎮 verbunden' : ''}`;
+  $('l2').textContent = `Spieler 2 — Pfeiltasten + ENTER (2× = Doppelsprung)${has[1] ? ' · 🎮 verbunden' : ''}`;
+}
+
 function pollGamepads() {
   const pads = (navigator.getGamepads ? Array.from(navigator.getGamepads()) : [])
     .filter((g) => g && g.connected);
-  for (let i = 0; i < 2; i++) {
-    const p = players[i], gp = pads[i], st = padState[i];
-    if (!gp) { p.padX = 0; p.padZ = 0; st.jump = false; continue; }
+
+  // Getrennte Controller freigeben
+  const present = new Set(pads.map((g) => g.index));
+  for (const k of Object.keys(padAssign)) if (!present.has(+k)) { delete padAssign[k]; delete padEdge[k]; }
+
+  player1.padX = player1.padZ = 0;
+  player2.padX = player2.padZ = 0;
+
+  for (const gp of pads) {
+    const st = (padEdge[gp.index] ??= { jump: false, left: false, right: false, back: false });
+    const ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
+    const leftNow = ax < -0.6 || !!gp.buttons[14]?.pressed;
+    const rightNow = ax > 0.6 || !!gp.buttons[15]?.pressed;
+    const side = padAssign[gp.index];
+
+    if (side === undefined) {
+      // Unzugeordnet: steuert niemanden, wählt nur per Flanke die Seite
+      if (leftNow && !st.left) assignPad(gp, 0);
+      else if (rightNow && !st.right) assignPad(gp, 1);
+      st.left = leftNow; st.right = rightNow;
+      st.jump = !!(gp.buttons[0]?.pressed || gp.buttons[1]?.pressed);
+      continue;
+    }
+    st.left = leftNow; st.right = rightNow;
+
+    // Back/View-Taste gibt das Pad wieder frei (Seite neu wählbar)
+    const backNow = !!gp.buttons[8]?.pressed;
+    if (backNow && !st.back) {
+      delete padAssign[gp.index];
+      st.back = backNow;
+      flashPad('🎮 freigegeben', '#e6edf3');
+      continue;
+    }
+    st.back = backNow;
 
     // Linker Stick (analog) + D-Pad
+    const p = players[side];
     const DEAD = 0.25;
-    const ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
     p.padX = Math.abs(ax) > DEAD ? ax : 0;
     p.padZ = Math.abs(ay) > DEAD ? ay : 0;
     if (gp.buttons[14]?.pressed) p.padX = -1;
@@ -413,6 +494,8 @@ function pollGamepads() {
 
     if (state === 'menu' && gp.buttons.some((b) => b.pressed)) startGame();
   }
+
+  updatePadHud(pads);
 }
 
 function tryJump(p) {
