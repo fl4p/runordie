@@ -87,7 +87,7 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 
 // ---------- Konstanten ----------
-const PLATFORM_HALF_W = 8;
+const PLATFORM_HALF_W = 9; // 3 Spuren à 6 m
 const PLATFORM_Z_MIN = -46, PLATFORM_Z_MAX = 9;
 const SPAWN_Z = -44, DESPAWN_Z = 13;
 const GRAVITY = -25;
@@ -311,11 +311,14 @@ scene.add(platMesh);
 // Fahrbahn-Streifen für Geschwindigkeitsgefühl
 const stripeMat = new THREE.MeshStandardMaterial({ color: 0xcfcfc2, roughness: 0.85, transparent: true, opacity: 0.75 });
 const stripes = [];
-for (let z = PLATFORM_Z_MIN; z < PLATFORM_Z_MAX; z += 4) {
-  const s = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.02, 2), stripeMat);
-  s.position.set(0, 0.02, z);
-  s.receiveShadow = true;
-  scene.add(s); stripes.push(s);
+// 3-spurig: zwei gestrichelte Spurlinien bei ±⅓ der Breite
+for (const lx of [-PLATFORM_HALF_W / 3, PLATFORM_HALF_W / 3]) {
+  for (let z = PLATFORM_Z_MIN; z < PLATFORM_Z_MAX; z += 4) {
+    const s = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.02, 2), stripeMat);
+    s.position.set(lx, 0.02, z);
+    s.receiveShadow = true;
+    scene.add(s); stripes.push(s);
+  }
 }
 // ---------- Graffiti (prozedurale Spray-Tags, transparent) ----------
 const GRAFFITI_WORDS = ['RUN', 'DIE!', 'JUMP', 'BONK', 'OOF', 'GG', 'YOLO', 'RAGDOLL', '↑↑A'];
