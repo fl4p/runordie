@@ -564,9 +564,12 @@ function playLaunch() { // Sprung-Pad: aufsteigender Zap
   o.start(t); o.stop(t + 0.34);
 }
 
+let lastBoomAt = 0;
 function playBoom() { // Explosion: Rausch-Knall + tiefer Sub-Drop
   if (!audioCtx || audioCtx.state !== 'running') return;
   const t = audioCtx.currentTime;
+  if (t - lastBoomAt < 0.08) return; // Kettenreaktionen drosseln
+  lastBoomAt = t;
   const len = (audioCtx.sampleRate * 0.3) | 0;
   const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
   const d = buf.getChannelData(0);
@@ -1143,32 +1146,51 @@ const padMat = new THREE.MeshStandardMaterial({
   map: texPad, emissive: 0x2bff66, emissiveMap: texPad, emissiveIntensity: 0.9, roughness: 0.4,
 });
 
+function spawnBoomBlock(x, y, z, speed) {
+  const o = addObstBody(
+    new CANNON.Box(new CANNON.Vec3(0.45, 0.45, 0.45)),
+    new CANNON.Vec3(x, y, z),
+    (() => { const m = boomBaseMat.clone(); m.userData.ownedMat = true; return m; })(),
+    new THREE.BoxGeometry(0.9, 0.9, 0.9)
+  );
+  o.body.velocity.set(0, 0, speed);
+  o.body.isObstacle = false; // kein normaler Stun — die Explosion erledigt das
+  o.boom = { armed: false, fuseAt: 0 };
+  o.body.addEventListener('collide', (e) => {
+    if (o.boom.armed) return;
+    if (e.body.collisionFilterGroup & (GROUP.P1 | GROUP.P2)) {
+      o.boom.armed = true;
+      o.boom.fuseAt = perfNow() + 0.3;
+    }
+  });
+  return o;
+}
+
 function spawnWave(speed) {
   const roll = Math.random();
-  if (roll < 0.3) {
+  if (roll < 0.18) {
     // Feld aus explodierenden Blöcken: Berührung zündet, Explosion schleudert weg
     const n = 6 + Math.floor(Math.random() * 3);
     for (let i = 0; i < n; i++) {
-      const o = addObstBody(
-        new CANNON.Box(new CANNON.Vec3(0.45, 0.45, 0.45)),
-        new CANNON.Vec3((Math.random() * 2 - 1) * (PLATFORM_HALF_W - 1), 0.45, SPAWN_Z + (Math.random() * 2 - 1) * 4),
-        (() => { const m = boomBaseMat.clone(); m.userData.ownedMat = true; return m; })(),
-        new THREE.BoxGeometry(0.9, 0.9, 0.9)
+      spawnBoomBlock(
+        (Math.random() * 2 - 1) * (PLATFORM_HALF_W - 1),
+        0.45,
+        SPAWN_Z + (Math.random() * 2 - 1) * 4,
+        speed
       );
-      o.body.velocity.set(0, 0, speed);
-      o.body.isObstacle = false; // kein normaler Stun — die Explosion erledigt das
-      o.boom = { armed: false, fuseAt: 0 };
-      o.body.addEventListener('collide', (e) => {
-        if (o.boom.armed) return;
-        if (e.body.collisionFilterGroup & (GROUP.P1 | GROUP.P2)) {
-          o.boom.armed = true;
-          o.boom.fuseAt = perfNow() + 0.3;
-        }
-      });
     }
     return;
   }
-  if (roll < 0.65) {
+  if (roll < 0.32) {
+    // TNT-MAUER: volle Breite, 2-3 Reihen hoch — eine Berührung sprengt
+    // per Kettenreaktion ein Loch (oder gleich die halbe Mauer)
+    const rows = 2 + (Math.random() < 0.5 ? 1 : 0);
+    for (let r = 0; r < rows; r++)
+      for (let x = -PLATFORM_HALF_W + 0.5; x <= PLATFORM_HALF_W - 0.45; x += 0.92)
+        spawnBoomBlock(x, 0.45 + r * 0.92, SPAWN_Z, speed);
+    return;
+  }
+  if (roll < 0.66) {
     // Mega-Wand über die volle Breite (5,2 m — ohne Pad unmöglich),
     // 9 m davor läuft ein Katapult-Pad. Rote Ziegel, und sie stunnt NICHT:
     // wer das Pad verpasst, wird nur geschoben und behält die Kontrolle.
