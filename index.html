@@ -306,6 +306,59 @@ for (let i = 0; i < 9; i++) {
   scene.add(m);
 }
 
+// ---------- Gulli-Deckel (prozedurales Gusseisen) ----------
+function manholeTex() {
+  const S = 128;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const g = c.getContext('2d');
+  g.fillStyle = '#26282b';
+  g.beginPath(); g.arc(64, 64, 63, 0, 7); g.fill();
+  // Rand-Rille + Lichtkante
+  g.strokeStyle = '#141519'; g.lineWidth = 5;
+  g.beginPath(); g.arc(64, 64, 54, 0, 7); g.stroke();
+  g.strokeStyle = '#43474d'; g.lineWidth = 2;
+  g.beginPath(); g.arc(64, 64, 60, 0, 7); g.stroke();
+  // Schachbrett-Noppen innen
+  for (let i = 0; i < 12; i++)
+    for (let j = 0; j < 12; j++) {
+      const x = 16 + i * 8, y = 16 + j * 8;
+      if ((i + j) % 2 || Math.hypot(x - 64, y - 64) > 46) continue;
+      g.fillStyle = '#34373c';
+      g.fillRect(x, y, 7, 7);
+      g.fillStyle = '#1c1e21';
+      g.fillRect(x + 4, y + 4, 3, 3);
+    }
+  // Rost-Sprenkel + zwei Hebelöcher
+  for (let i = 0; i < 26; i++) {
+    g.fillStyle = `rgba(122,80,48,${0.12 + Math.random() * 0.2})`;
+    g.beginPath();
+    g.arc(64 + (Math.random() - 0.5) * 100, 64 + (Math.random() - 0.5) * 100, Math.random() * 3 + 1, 0, 7);
+    g.fill();
+  }
+  g.fillStyle = '#0e0f12';
+  for (const dx of [-40, 40]) { g.beginPath(); g.arc(64 + dx, 64, 4, 0, 7); g.fill(); }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+{
+  const mhTop = new THREE.MeshStandardMaterial({ map: manholeTex(), roughness: 0.8, metalness: 0.4 });
+  const mhSide = new THREE.MeshStandardMaterial({ color: 0x141519, roughness: 0.9 });
+  for (let i = 0; i < 7; i++) {
+    const r = 0.48 + Math.random() * 0.14;
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.035, 24), [mhSide, mhTop, mhSide]);
+    m.position.set(
+      (Math.random() * 2 - 1) * (PLATFORM_HALF_W - 1.8),
+      0.018,
+      PLATFORM_Z_MIN + 6 + i * (platL - 12) / 7 + (Math.random() - 0.5) * 3
+    );
+    m.rotation.y = Math.random() * Math.PI;
+    m.receiveShadow = true;
+    scene.add(m);
+  }
+}
+
 // Graffiti-Decal an eine Hindernis-Wand hängen (fährt als Kind-Mesh mit)
 function addWallGraffiti(mesh, w, halfH, depth) {
   if (w < 1.6 || Math.random() > 0.65) return;
