@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ragdoll Runner 2P</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; overflow: hidden; }
+  body { background: #111; font-family: sans-serif; }
+  #container { position: relative; width: 100vw; height: 100vh; }
+  #gameCanvas {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  }
+  #splitLine {
+    position: absolute; top: 0; left: 50%; width: 2px; height: 100%;
+    background: #fff; transform: translateX(-50%); pointer-events: none;
+  }
+  #ui {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    pointer-events: none; display: flex; flex-direction: column;
+    justify-content: space-between; padding: 20px; color: #fff;
+  }
+  #overlay {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.85); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; color: #fff; z-index: 10;
+  }
+  h1 { font-size: 3rem; margin-bottom: 10px; }
+  p { font-size: 1.1rem; margin: 4px 0; }
+  button {
+    margin-top: 20px; padding: 12px 28px; font-size: 1.2rem;
+    background: #ff4081; color: #fff; border: none; border-radius: 6px;
+    cursor: pointer; pointer-events: auto;
+  }
+  button:hover { background: #e73370; }
+  .hud { display: flex; justify-content: space-between; font-size: 1.3rem; font-weight: bold; text-shadow: 0 0 4px #000; }
+  .controls { display: flex; justify-content: space-between; font-size: 0.9rem; opacity: 0.9; text-shadow: 0 0 4px #000; }
+</style>
+</head>
+<body>
+<div id="container">
+  <canvas id="gameCanvas"></canvas>
+  <div id="splitLine"></div>
+  <div id="ui">
+    <div class="hud">
+      <span id="p1lives">P1: 3 Leben</span>
+      <span id="score">Punktzahl: 0</span>
+      <span id="p2lives">P2: 3 Leben</span>
+    </div>
+    <div class="controls">
+      <span>P1: WASD + SPACE</span>
+      <span>P2: Pfeiltasten + ENTER</span>
+    </div>
+  </div>
+  <div id="overlay">
+    <h1>Ragdoll Runner 2P</h1>
+    <p>Weiche den Hindernissen aus. Laufen, springen, doppelspringen.</p>
+    <p>Fällst du von der Plattform, verlierst du ein Leben.</p>
+    <p>P1: WASD bewegen, SPACE springen</p>
+    <p>P2: Pfeiltasten bewegen, ENTER springen</p>
+    <button id="startBtn">Start</button>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+<script>
+const KEYS = {};
+const controlCodes = new Set(['KeyW','KeyS','KeyA','KeyD','Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Enter']);
+window.addEventListener('keydown', e => {
+  if (controlCodes.has(e.code)) e.preventDefault();
+  KEYS[e.code] = true;
+});
+window.addEventListener('keyup', e => {
+  if (controlCodes.has(e.code)) e.preventDefault();
+  KEYS[e.code] = false;
+});
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.Fog(0x87ceeb, 30, 150);
+
+const world = new CANNON.World();
+world.gravity.set(0, -30, 0);
+world.broadphase = new CANNON.NaiveBroadphase();
+world.solver.iterations = 12;
+
+const materialGround = new CANNON.Material();
+const materialPlayer = new CANNON.Material();
+const materialObstacle = new CANNON.Material();
+const materialPlayerPlayer = new CANNON.Material();
+
+const contactGroundPlayer = new CANNON.ContactMaterial(materialGround, materialPlayer, { friction: 0.9, restitution: 0.05 });
+const contactObstaclePlayer = new CANNON.ContactMaterial(materialObstacle, materialPlayer, { friction: 0.2, restitution: 0.5 });
+const contactPlayerPlayer = new CANNON.ContactMaterial(materialPlayer, materialPlayer, { friction: 0.3, restitution: 0.2 });
+world.addContactMaterial(contactGroundPlayer);
+world.addContactMaterial(contactObstaclePlayer);
+world.addContactMaterial(contactPlayerPlayer);
+
+const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.8);
+scene.add(hemiLight);
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(20, 40, 20);
+scene.add(dirLight);
+
+const groundSize = { x: 36, z: 320 };
+const groundGeo = new THREE.BoxGeometry(groundSize.x, 2, groundSize.z);
+const groundMat = new THREE.MeshLambertMaterial({ color: 0x3a7a3a });
+const groundMesh = new THREE.Mesh(groundGeo, groundMat);
+groundMesh.position.set(0, -1, 0);
+scene.add(groundMesh);
+
+const groundBody = new CANNON.Body({ mass: 0, material: materialGround });
+groundBody.addShape(new CANNON.Box(new CANNON.Vec3(groundSize.x/2, 1, groundSize.z/2)));
+groundBody.position.set(0, -1, 0);
+world.addBody(groundBody);
+
+const deathY = -20;
+const startZ = 130;
+const finishZ = -130;
+
+function createBoxMesh(w, h, d, color) {
+  const geo = new THREE.BoxGeometry(w, h, d);
+  const mat = new THREE.MeshLambertMaterial({ color });
+  const mesh = new THREE.Mesh(geo, mat);
+  return mesh;
+}
+
+function createSphereMesh(r, color) {
+  const geo = new THREE.SphereGeometry(r, 16, 16);
+  const mat = new THREE.MeshLambertMaterial({ color });
+  const mesh = new THREE.Mesh(geo, mat);
+  return mesh;
+}
+
+class Ragdoll {
+  constructor(color, startX, controls) {
+    this.color = color;
+    this.controls = controls;
+    this.parts = [];
+    this.constraints = [];
+    this.jumps = 0;
+    this.maxJumps = 2;
+    this.onGround = false;
+    this.lives = 3;
+    this.dead = false;
+    this.startX = startX;
+    this.startZ = 100;
+    this.startY = 4;
+    this.meshGroup = new THREE.Group();
+    scene.add(this.meshGroup);
+    this.createRagdoll(startX);
+  }
+
+  createBoxPart(w, h, d, x, y, z, mass) {
+    const mesh = createBoxMesh(w, h, d, this.color);
+    this.meshGroup.add(mesh);
+    const body = new CANNON.Body({ mass, material: materialPlayer });
+    body.addShape(new CANNON.Box(new CANNON.Vec3(w/2, h/2, d/2)));
+    body.position.set(x, y, z);
+    body.linearDamping = 0.1;
+    body.angularDamping = 0.1;
+    world.addBody(body);
+    this.parts.push({ mesh, body });
+    return { mesh, body, index: this.parts.length - 1 };
+  }
+
+  createSpherePart(r, x, y, z, mass) {
+    const mesh = createSphereMesh(r, this.color);
+    this.meshGroup.add(mesh);
+    const body = new CANNON.Body({ mass, material: materialPlayer });
+    body.addShape(new CANNON.Sphere(r));
+    body.position.set(x, y, z);
+    body.linearDamping = 0.1;
+    body.angularDamping = 0.1;
+    world.addBody(body);
+    this.parts.push({ mesh, body });
+    return { mesh, body, index: this.parts.length - 1 };
+  }
+
+  createRagdoll(startX) {
+    const x = startX, y = this.startY, z = this.startZ;
+    const torso = this.createBoxPart(0.6, 1.0, 0.35, x, y, z, 5);
+    const head = this.createSpherePart(0.28, x, y + 0.85, z, 1.5);
+    const hip = this.createBoxPart(0.55, 0.35, 0.35, x, y - 0.75, z, 4);
+    const armL = this.createBoxPart(0.2, 0.9, 0.2, x - 0.55, y, z, 1.5);
+    const armR = this.createBoxPart(0.2, 0.9, 0.2, x + 0.55, y, z, 1.5);
+    const legL = this.createBoxPart(0.22, 1.0, 0.22, x - 0.2, y - 1.6, z, 2.5);
+    const legR = this.createBoxPart(0.22, 1.0, 0.22, x + 0.2, y - 1.6, z, 2.5);
+
+    this.head = head; this.torso = torso; this.hip = hip;
+    this.armL = armL; this.armR = armR; this.legL = legL; this.legR = legR;
+    this.mainBody = torso.body;
+
+    this.link(torso, head, new CANNON.Vec3(0, 0.5, 0), new CANNON.Vec3(0, -0.28, 0));
+    this.link(torso, hip, new CANNON.Vec3(0, -0.5, 0), new CANNON.Vec3(0, 0.175, 0));
+    this.link(torso, armL, new CANNON.Vec3(-0.35, 0.4, 0), new CANNON.Vec3(0, 0.4, 0));
+    this.link(torso, armR, new CANNON.Vec3(0.35, 0.4, 0), new CANNON.Vec3(0, 0.4, 0));
+    this.link(hip, legL, new CANNON.Vec3(-0.18, -0.175, 0), new CANNON.Vec3(0, 0.5, 0));
+    this.link(hip, legR, new CANNON.Vec3(0.18, -0.175, 0), new CANNON.Vec3(0, 0.5, 0));
+  }
+
+  link(a, b, pivotA, pivotB) {
+    const c = new CANNON.PointToPointConstraint(a.body, pivotA, b.body, pivotB);
+    world.addConstraint(c);
+    this.constraints.push(c);
+  }
+
+  reset() {
+    this.dead = false;
+    const x = this.startX, y = this.startY, z = this.startZ;
+    const positions = [
+      [x, y, z],
+      [x, y + 0.85, z],
+      [x, y - 0.75, z],
+      [x - 0.55, y, z],
+      [x + 0.55, y, z],
+      [x - 0.2, y - 1.6, z],
+      [x + 0.2, y - 1.6, z]
+    ];
+    for (let i = 0; i < this.parts.length; i++) {
+      const p = this.parts[i];
+      p.body.position.set(...positions[i]);
+      p.body.velocity.set(0, 0, 0);
+      p.body.angularVelocity.set(0, 0, 0);
+      p.body.quaternion.set(0, 0, 0, 1);
+      p.body.wakeUp();
+    }
+    this.jumps = 0;
+  }
+
+  checkGround() {
+    this.onGround = false;
+    for (let i = 0; i < world.contacts.length; i++) {
+      const c = world.contacts[i];
+      const isGround = c.bi === groundBody || c.bj === groundBody;
+      if (!isGround) continue;
+      for (let p of this.parts) {
+        if (c.bi === p.body || c.bj === p.body) {
+          const normal = c.bi === groundBody ? c.ni : c.ni.negate(new CANNON.Vec3());
+          if (normal.y > 0.5) {
+            this.onGround = true;
+            return;
+          }
+        }
+      }
+    }
+  }
+
+  update(dt) {
+    if (this.dead) return;
+    const body = this.mainBody;
+    const speed = 14;
+    const jumpImpulse = 15;
+
+    this.checkGround();
+    if (this.onGround && body.velocity.y < 0.5) this.jumps = 0;
+
+    let vx = 0, vz = 0;
+    if (KEYS[this.controls.left]) vx -= 1;
+    if (KEYS[this.controls.right]) vx += 1;
+    if (KEYS[this.controls.forward]) vz -= 1;
+    if (KEYS[this.controls.back]) vz += 1;
+
+    if (vx !== 0 || vz !== 0) {
+      const len = Math.sqrt(vx*vx + vz*vz);
+      vx /= len; vz /= len;
+    }
+
+    body.velocity.x = vx * speed;
+    body.velocity.z = vz * speed;
+
+    for (let p of this.parts) {
+      p.body.angularDamping = 0.9;
+    }
+    body.angularVelocity.set(0, body.angularVelocity.y * 0.8, 0);
+
+    if (KEYS[this.controls.jump]) {
+      if (this.jumps < this.maxJumps) {
+        body.velocity.y = 0;
+        body.applyImpulse(new CANNON.Vec3(0, jumpImpulse, 0), body.position);
+        this.jumps++;
+      }
+      KEYS[this.controls.jump] = false;
+    }
+
+    const limitX = groundSize.x / 2 - 1;
+    if (body.position.x < -limitX) {
+      body.position.x = -limitX;
+      body.velocity.x *= -0.5;
+    } else if (body.position.x > limitX) {
+      body.position.x = limitX;
+      body.velocity.x *= -0.5;
+    }
+
+    if (body.position.z < finishZ) {
+      body.position.z = finishZ;
+      body.velocity.z = 0;
+    }
+
+    for (let p of this.parts) {
+      p.mesh.position.copy(p.body.position);
+      p.mesh.quaternion.copy(p.body.quaternion);
+    }
+
+    if (body.position.y < deathY) {
+      this.lives--;
+      this.dead = true;
+      setTimeout(() => { if (this.lives > 0) this.reset(); }, 1200);
+    }
+  }
+}
+
+const player1 = new Ragdoll(0x3f51b5, -5, {
+  forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space'
+});
+
+const player2 = new Ragdoll(0xe91e63, 5, {
+  forward: 'ArrowUp', back: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', jump: 'Enter'
+});
+
+const players = [player1, player2];
+
+const canvas = document.getElementById('gameCanvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.autoClear = false;
+
+const camera1 = new THREE.PerspectiveCamera(60, (window.innerWidth/2)/window.innerHeight, 0.1, 300);
+const camera2 = new THREE.PerspectiveCamera(60, (window.innerWidth/2)/window.innerHeight, 0.1, 300);
+
+const obstacles = [];
+let obstacleTimer = 0;
+let obstacleInterval = 1.5;
+let score = 0;
+let started = false;
+
+const obstacleColors = [0xff5722, 0xff9800, 0x9c27b0, 0x009688, 0xf44336];
+
+function spawnObstacle() {
+  const type = Math.random();
+  const z = startZ + 40;
+  const x = (Math.random() - 0.5) * (groundSize.x - 6);
+  const color = obstacleColors[Math.floor(Math.random() * obstacleColors.length)];
+
+  let body, mesh, size;
+  if (type < 0.33) {
+    size = { w: 2 + Math.random() * 2, h: 1.5, d: 1.5 };
+    mesh = createBoxMesh(size.w, size.h, size.d, color);
+    body = new CANNON.Body({ mass: 18, material: materialObstacle });
+    body.addShape(new CANNON.Box(new CANNON.Vec3(size.w/2, size.h/2, size.d/2)));
+  } else if (type < 0.66) {
+    const r = 1.2;
+    mesh = createSphereMesh(r, color);
+    body = new CANNON.Body({ mass: 14, material: materialObstacle });
+    body.addShape(new CANNON.Sphere(r));
+  } else {
+    size = { w: 1.5, h: 1.5, d: 3 + Math.random() * 3 };
+    mesh = createBoxMesh(size.w, size.h, size.d, color);
+    body = new CANNON.Body({ mass: 24, material: materialObstacle });
+    body.addShape(new CANNON.Box(new CANNON.Vec3(size.w/2, size.h/2, size.d/2)));
+  }
+
+  body.position.set(x, 2, z);
+  body.velocity.set(0, 0, -25 - Math.random() * 10);
+  body.linearDamping = 0;
+  body.angularDamping = 0.1;
+  world.addBody(body);
+  scene.add(mesh);
+  obstacles.push({ body, mesh });
+}
+
+function updateObstacles(dt) {
+  obstacleTimer += dt;
+  if (obstacleTimer > obstacleInterval) {
+    spawnObstacle();
+    obstacleTimer = 0;
+    obstacleInterval = Math.max(0.5, obstacleInterval - 0.015);
+  }
+
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    const o = obstacles[i];
+    o.body.velocity.z = -25 - Math.min(20, score / 50);
+    o.body.velocity.y *= 0.95;
+    o.body.position.y = Math.max(o.body.position.y, 0.5);
+    o.mesh.position.copy(o.body.position);
+    o.mesh.quaternion.copy(o.body.quaternion);
+
+    for (let p of players) {
+      if (p.dead) continue;
+      const dx = o.body.position.x - p.mainBody.position.x;
+      const dy = o.body.position.y - p.mainBody.position.y;
+      const dz = o.body.position.z - p.mainBody.position.z;
+      const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+      if (dist < 3) {
+        const push = new CANNON.Vec3(dx, 0.2, dz).unit().scale(10);
+        p.mainBody.applyImpulse(push, p.mainBody.position);
+      }
+    }
+
+    if (o.body.position.z < finishZ - 20) {
+      world.removeBody(o.body);
+      scene.remove(o.mesh);
+      obstacles.splice(i, 1);
+      score += 10;
+      document.getElementById('score').textContent = 'Punktzahl: ' + score;
+    }
+  }
+}
+
+function updateCameras() {
+  for (let i = 0; i < players.length; i++) {
+    const p = players[i].mainBody;
+    const cam = i === 0 ? camera1 : camera2;
+    const offset = new THREE.Vector3(0, 7, 16);
+    const target = new THREE.Vector3(p.position.x, p.position.y + 1.5, p.position.z);
+    cam.position.copy(target).add(offset);
+    cam.lookAt(target);
+  }
+}
+
+const clock = new THREE.Clock();
+
+function render() {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  if (started) {
+    world.step(1/60, dt, 3);
+    for (let p of players) p.update(dt);
+    updateObstacles(dt);
+    updateCameras();
+  }
+
+  document.getElementById('p1lives').textContent = 'P1: ' + player1.lives + ' Leben';
+  document.getElementById('p2lives').textContent = 'P2: ' + player2.lives + ' Leben';
+
+  const w = window.innerWidth / 2;
+  const h = window.innerHeight;
+
+  renderer.clear();
+  renderer.setViewport(0, 0, w, h);
+  renderer.setScissor(0, 0, w, h);
+  renderer.setScissorTest(true);
+  renderer.render(scene, camera1);
+
+  renderer.setViewport(w, 0, w, h);
+  renderer.setScissor(w, 0, w, h);
+  renderer.render(scene, camera2);
+  renderer.setScissorTest(false);
+
+  requestAnimationFrame(render);
+}
+
+function resize() {
+  const w = window.innerWidth / 2;
+  const h = window.innerHeight;
+  camera1.aspect = w / h;
+  camera2.aspect = w / h;
+  camera1.updateProjectionMatrix();
+  camera2.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, h);
+}
+window.addEventListener('resize', resize);
+resize();
+
+document.getElementById('startBtn').addEventListener('click', () => {
+  document.getElementById('overlay').style.display = 'none';
+  started = true;
+});
+
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#090b14" />
+    <meta name="description" content="Run or Die – lokales 3D Split-Screen Jump-and-Run für zwei Spieler." />
+    <title>RUN OR DIE</title>
+  </head>
+  <body>
+    <main id="game-shell">
+      <canvas id="game" aria-label="3D Split-Screen Spielfeld"></canvas>
+
+      <header class="topbar">
+        <div class="brand" aria-label="Run or Die">
+          <span>RUN</span><i>/</i><span>OR</span><i>/</i><strong>DIE</strong>
+        </div>
+        <div class="round-pill"><span>RUNDE</span><b id="round-number">1</b></div>
+        <button id="sound-toggle" class="icon-button" type="button" aria-label="Ton umschalten">♪</button>
+      </header>
+
+      <section class="player-hud player-hud--one" aria-label="Spieler 1">
+        <div class="player-tag"><span class="player-dot"></span> P1</div>
+        <div class="score"><b id="score-one">0</b><span>SIEGE</span></div>
+        <div class="jump-meter" id="jumps-one"><i></i><i></i></div>
+      </section>
+
+      <section class="player-hud player-hud--two" aria-label="Spieler 2">
+        <div class="player-tag"><span class="player-dot"></span> P2</div>
+        <div class="score"><b id="score-two">0</b><span>SIEGE</span></div>
+        <div class="jump-meter" id="jumps-two"><i></i><i></i></div>
+      </section>
+
+      <div class="split-line" aria-hidden="true"><span>VS</span></div>
+
+      <section id="start-screen" class="overlay overlay--visible">
+        <div class="start-card">
+          <p class="eyebrow">LOCAL MULTIPLAYER · 2 SPIELER</p>
+          <h1><span>RUN</span><br />OR <strong>DIE</strong></h1>
+          <p class="intro">Bleibt auf der Plattform. Weicht aus.<br />Und vor allem: <b>Fallt nicht.</b></p>
+
+          <div class="controls">
+            <div class="control-card control-card--one">
+              <div><span class="player-dot"></span><b>SPIELER 1</b></div>
+              <div class="key-row"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>LAUFEN</span></div>
+              <div class="key-row"><kbd class="key-wide">LEER</kbd><span>DOPPELSPRUNG</span></div>
+            </div>
+            <div class="control-card control-card--two">
+              <div><span class="player-dot"></span><b>SPIELER 2</b></div>
+              <div class="key-row"><kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd><span>LAUFEN</span></div>
+              <div class="key-row"><kbd class="key-wide">ENTER</kbd><span>DOPPELSPRUNG</span></div>
+            </div>
+          </div>
+
+          <button id="start-button" class="start-button" type="button">
+            <span>LOS GEHT'S</span><i>→</i>
+          </button>
+          <small>Drücke eine Sprungtaste zum Starten</small>
+        </div>
+      </section>
+
+      <section id="countdown" class="countdown" aria-live="polite"></section>
+
+      <section id="round-result" class="round-result" aria-live="polite">
+        <p id="result-kicker">RUNDE BEENDET</p>
+        <h2 id="result-title">SPIELER 1<br /><span>GEWINNT</span></h2>
+        <div class="result-countdown">NÄCHSTE RUNDE IN <b id="restart-count">3</b></div>
+      </section>
+
+      <div id="event-toast" class="event-toast">TEMPO STEIGT</div>
+      <div class="speed-indicator"><span>TEMPO</span><div><i id="speed-fill"></i></div><b id="speed-label">1.0×</b></div>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
