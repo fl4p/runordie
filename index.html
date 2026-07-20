@@ -59,7 +59,7 @@
   Hindernisse rollen auf euch zu und schieben euch von der Plattform — wer fällt, stirbt!<br>
   Weiche aus, spring drüber, nutze den Doppelsprung.<br>
   Xbox-Controller: beliebigen Knopf drücken, dann mit Stick ◀ / ▶ die Seite wählen — A springt.<br>
-  Power-ups einsammeln: 💎 grüner Kristall = 3 Hechtsprünge · 🛡 = blockt einen Treffer.<br>
+  Power-ups einsammeln: 💎 grüner Kristall = 3 Hechtsprünge · 🥊 roter Kristall = 3 harte Schläge · 🛡 = blockt einen Treffer.<br>
   Boxen (Gegner wegschubsen): Spieler 1 = E oder linke Maustaste · Spieler 2 = − · Controller = X.<br>
   <b>Hechtsprung</b> (3. Sprung in der Luft, braucht 💎): Vorwärts-Dive — wer dabei boxt, schleudert härter.<br>
   <b>R</b> = Dreh-Modus (opt-in): Maus (Spieler 1) bzw. rechter Stick drehen Figur, Kamera und Box-Richtung.<br>
@@ -611,7 +611,7 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
     jumpLock: 0, stunUntil: -1, hitCooldown: 0,
     keys: { f: false, b: false, l: false, r: false },
     padX: 0, padZ: 0,
-    airCharges: 0, shield: 0,
+    airCharges: 0, shield: 0, punchPower: 0,
     punchCooldown: 0, arms: [],
     yaw: 0, padYawRate: 0, diving: false,
   };
@@ -709,7 +709,7 @@ function exitRagdoll(p) {
 
 function resetPlayer(p) {
   p.alive = true; p.jumps = 0; p.jumpLock = 0; p.hitCooldown = 0;
-  p.airCharges = 0; p.shield = 0; p.punchCooldown = 0; p.yaw = 0; p.diving = false;
+  p.airCharges = 0; p.shield = 0; p.punchPower = 0; p.punchCooldown = 0; p.yaw = 0; p.diving = false;
   exitRagdoll(p);
   for (const { body, mesh } of p.parts) {
     body.position.set(p.spawn.x + body.initOffset.x, p.spawn.y + body.initOffset.y, p.spawn.z + body.initOffset.z);
@@ -986,12 +986,15 @@ const powerups = [];
 const puMats = {
   jump: new THREE.MeshStandardMaterial({ color: 0x7bed6a, emissive: 0x2f9e22, roughness: 0.3 }),
   shield: new THREE.MeshStandardMaterial({ color: 0x66e0ff, emissive: 0x1a7fae, roughness: 0.3 }),
+  punch: new THREE.MeshStandardMaterial({ color: 0xff6b4a, emissive: 0xb32c12, roughness: 0.3 }),
 };
 
 function spawnPowerup(type, x, z) {
   const mesh = type === 'jump'
     ? new THREE.Mesh(new THREE.OctahedronGeometry(0.38), puMats.jump)
-    : new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.11, 10, 22), puMats.shield);
+    : type === 'punch'
+      ? new THREE.Mesh(new THREE.IcosahedronGeometry(0.36), puMats.punch)
+      : new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.11, 10, 22), puMats.shield);
   mesh.castShadow = true;
   mesh.position.set(x, 1.15, z);
   scene.add(mesh);
@@ -999,7 +1002,8 @@ function spawnPowerup(type, x, z) {
 }
 
 function spawnRandomPowerup() {
-  const type = Math.random() < 0.6 ? 'jump' : 'shield';
+  const r = Math.random();
+  const type = r < 0.45 ? 'jump' : r < 0.72 ? 'punch' : 'shield';
   const x = (Math.random() * 2 - 1) * (PLATFORM_HALF_W - 1.5);
   spawnPowerup(type, x, SPAWN_Z);
 }
@@ -1011,7 +1015,7 @@ function clearPowerups() {
 
 function updatePowerupHud() {
   for (const [p, el] of [[player1, 'pu1'], [player2, 'pu2']]) {
-    $(el).textContent = '💎'.repeat(p.airCharges) + (p.shield > 0 ? ' 🛡' : '');
+    $(el).textContent = '💎'.repeat(p.airCharges) + '🥊'.repeat(p.punchPower) + (p.shield > 0 ? ' 🛡' : '');
     p.bubble.visible = p.shield > 0;
   }
 }
@@ -1030,7 +1034,8 @@ function updatePowerups(dt) {
       const t = p.torso.position;
       const d = Math.hypot(t.x - pu.mesh.position.x, t.y - pu.mesh.position.y, t.z - pu.mesh.position.z);
       if (d < 1.15) {
-        if (pu.type === 'jump') p.airCharges = 3; // ein Kristall = 3 Hechtsprünge
+        if (pu.type === 'jump') p.airCharges = 3;       // ein Kristall = 3 Hechtsprünge
+        else if (pu.type === 'punch') p.punchPower = 3; // 3 verstärkte Schläge
         else p.shield = Math.min(1, p.shield + 1);
         updatePowerupHud();
         taken = true;
@@ -1358,8 +1363,13 @@ function tryPunch(p) {
   // Im Dreh-Modus muss der Gegner grob vor einem stehen
   const inFront = !rotMode || (dir.x * toFoe.x + dir.z * toFoe.z) > 0.35;
   if (foe.alive && dist < PUNCH_RANGE && inFront) {
-    // Im Hechtsprung getroffen -> deutlich härterer Schlag
-    const boost = p.diving ? 1.7 : 1;
+    // Im Hechtsprung getroffen -> deutlich härterer Schlag; 🥊-Power-up verstärkt zusätzlich
+    let boost = p.diving ? 1.7 : 1;
+    if (p.punchPower > 0) {
+      boost *= 1.8;
+      p.punchPower--;
+      updatePowerupHud();
+    }
     if (foe.shield > 0) {
       // Schild blockt auch Faustschläge
       foe.shield--;

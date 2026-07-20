@@ -79,6 +79,8 @@ einfach durchlaufen zum Einsammeln:
   ist der dritte Sprung in der Luft — ein Vorwärts-Dive mit Kipp-Pose und
   kräftigem Boost in Bewegungs-/Blickrichtung. Ohne Kristall gibt es nur den
   normalen Doppelsprung
+- **🥊 Schlagkraft-Kristall** (rot): die nächsten **3 treffenden Box-Schläge**
+  schleudern 1,8× härter (kombiniert sich mit dem Hechtsprung-Bonus)
 - **🛡 Schild** (blauer Ring): blockt den nächsten Hindernis-Treffer
   (kein Ragdoll-Stun, nur ein abgeschwächter Schubs); sichtbar als Blase
 
