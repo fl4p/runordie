@@ -48,8 +48,8 @@
 <div id="divider"></div>
 <div class="hud" id="score"><span class="p1">SPIELER 1</span>&nbsp; <span id="s1">0</span> : <span id="s2">0</span> &nbsp;<span class="p2">SPIELER 2</span></div>
 <div class="hud" id="speed"></div>
-<div class="hud plabel" id="l1">Spieler 1 — W A S D + LEERTASTE (2× = Doppelsprung)</div>
-<div class="hud plabel" id="l2">Spieler 2 — Pfeiltasten + ENTER (2× = Doppelsprung)</div>
+<div class="hud plabel" id="l1">Spieler 1 — W A S D + LEERTASTE (2× = Doppelsprung) · E = Boxen</div>
+<div class="hud plabel" id="l2">Spieler 2 — Pfeiltasten + ENTER (2× = Doppelsprung) · − = Boxen</div>
 <div class="hud hidden" id="padassign"></div>
 <div class="hud hidden" id="padflash"></div>
 <div class="hud powerups" id="pu1"></div>
@@ -59,7 +59,8 @@
   Hindernisse rollen auf euch zu und schieben euch von der Plattform — wer fällt, stirbt!<br>
   Weiche aus, spring drüber, nutze den Doppelsprung.<br>
   Xbox-Controller: beliebigen Knopf drücken, dann mit Stick ◀ / ▶ die Seite wählen — A springt.<br>
-  Power-ups einsammeln: ⭐ = Extra-Luftsprung (stapelbar) · 🛡 = blockt einen Treffer.<br><br>
+  Power-ups einsammeln: ⭐ = Extra-Luftsprung (stapelbar) · 🛡 = blockt einen Treffer.<br>
+  Boxen (Gegner wegschubsen): Spieler 1 = E · Spieler 2 = − · Controller = RT.<br><br>
   <b>Beliebige Taste drücken zum Starten</b></small></div>
 
 <script type="importmap">
@@ -287,6 +288,44 @@ function playHit() { // dumpfer Einschlag: Bass-Drop + gefiltertes Rauschen
   src.start(t);
 }
 
+function playPunchHit() { // Schmatz: Rausch-Knall + kurzer Wumms
+  if (!audioCtx || audioCtx.state !== 'running') return;
+  const t = audioCtx.currentTime;
+  const len = (audioCtx.sampleRate * 0.06) | 0;
+  const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len) ** 2;
+  const src = audioCtx.createBufferSource(); src.buffer = buf;
+  const f = audioCtx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1800; f.Q.value = 0.8;
+  const ng = audioCtx.createGain(); ng.gain.value = 0.5;
+  src.connect(f).connect(ng).connect(audioCtx.destination);
+  src.start(t);
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(220, t);
+  o.frequency.exponentialRampToValueAtTime(70, t + 0.12);
+  g.gain.setValueAtTime(0.35, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+  o.connect(g).connect(audioCtx.destination);
+  o.start(t); o.stop(t + 0.16);
+}
+
+function playPunchMiss() { // Whoosh: abfallendes Bandpass-Rauschen
+  if (!audioCtx || audioCtx.state !== 'running') return;
+  const t = audioCtx.currentTime;
+  const len = (audioCtx.sampleRate * 0.18) | 0;
+  const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.sin((i / len) * Math.PI);
+  const src = audioCtx.createBufferSource(); src.buffer = buf;
+  const f = audioCtx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 1.2;
+  f.frequency.setValueAtTime(1400, t);
+  f.frequency.exponentialRampToValueAtTime(350, t + 0.18);
+  const ng = audioCtx.createGain(); ng.gain.value = 0.22;
+  src.connect(f).connect(ng).connect(audioCtx.destination);
+  src.start(t);
+}
+
 function playDeflect() { // Schild-Block: heller metallischer Pling
   if (!audioCtx || audioCtx.state !== 'running') return;
   const t = audioCtx.currentTime;
@@ -344,6 +383,7 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
     keys: { f: false, b: false, l: false, r: false },
     padX: 0, padZ: 0,
     airCharges: 0, shield: 0,
+    punchCooldown: 0, arms: [],
   };
 
   const v = (x, y, z) => new CANNON.Vec3(x, y, z);
@@ -380,6 +420,7 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
     joint(torso, uArm, v(s * 0.36, 0.30, 0), v(0, 0.19, 0));
     const lArm = makePart(p, v(0.06, 0.17, 0.06), 0.25, v(s * 0.43, -0.27, 0), color);
     joint(uArm, lArm, v(0, -0.19, 0), v(0, 0.17, 0));
+    p.arms.push(uArm, lArm);
 
     const uLeg = makePart(p, v(0.09, 0.21, 0.09), 0.6, v(s * 0.14, -0.63, 0), darkColor);
     joint(torso, uLeg, v(s * 0.14, -0.42, 0), v(0, 0.21, 0));
@@ -434,7 +475,7 @@ function exitRagdoll(p) {
 
 function resetPlayer(p) {
   p.alive = true; p.jumps = 0; p.jumpLock = 0; p.hitCooldown = 0;
-  p.airCharges = 0; p.shield = 0;
+  p.airCharges = 0; p.shield = 0; p.punchCooldown = 0;
   exitRagdoll(p);
   for (const { body, mesh } of p.parts) {
     body.position.set(p.spawn.x + body.initOffset.x, p.spawn.y + body.initOffset.y, p.spawn.z + body.initOffset.z);
@@ -637,6 +678,11 @@ addEventListener('keydown', (e) => {
   if (m) m[0].keys[m[1]] = true;
   const jp = JUMPKEY[e.code];
   if (jp && !e.repeat) tryJump(jp);
+  // Boxen: E = Spieler 1, "-" = Spieler 2 (layoutunabhängig über e.key, plus Numpad)
+  if (!e.repeat) {
+    if (e.code === 'KeyE') tryPunch(player1);
+    if (e.key === '-' || e.code === 'NumpadSubtract') tryPunch(player2);
+  }
 });
 addEventListener('pointerdown', ensureAudio);
 addEventListener('keyup', (e) => {
@@ -680,8 +726,8 @@ function updatePadHud(pads) {
 
   const has = [false, false];
   for (const k in padAssign) has[padAssign[k]] = true;
-  $('l1').textContent = `Spieler 1 — W A S D + LEERTASTE (2× = Doppelsprung)${has[0] ? ' · 🎮 verbunden' : ''}`;
-  $('l2').textContent = `Spieler 2 — Pfeiltasten + ENTER (2× = Doppelsprung)${has[1] ? ' · 🎮 verbunden' : ''}`;
+  $('l1').textContent = `Spieler 1 — W A S D + LEERTASTE (2× = Doppelsprung) · E = Boxen${has[0] ? ' · 🎮 verbunden' : ''}`;
+  $('l2').textContent = `Spieler 2 — Pfeiltasten + ENTER (2× = Doppelsprung) · − = Boxen${has[1] ? ' · 🎮 verbunden' : ''}`;
 }
 
 function pollGamepads() {
@@ -696,7 +742,7 @@ function pollGamepads() {
   player2.padX = player2.padZ = 0;
 
   for (const gp of pads) {
-    const st = (padEdge[gp.index] ??= { jump: false, left: false, right: false, back: false });
+    const st = (padEdge[gp.index] ??= { jump: false, left: false, right: false, back: false, punch: false });
     const ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
     const leftNow = ax < -0.6 || !!gp.buttons[14]?.pressed;
     const rightNow = ax > 0.6 || !!gp.buttons[15]?.pressed;
@@ -737,10 +783,58 @@ function pollGamepads() {
     if (jumpNow && !st.jump) tryJump(p);
     st.jump = jumpNow;
 
+    // RT boxen
+    const punchNow = (gp.buttons[7]?.value ?? 0) > 0.5 || !!gp.buttons[7]?.pressed;
+    if (punchNow && !st.punch) tryPunch(p);
+    st.punch = punchNow;
+
     if (state === 'menu' && gp.buttons.some((b) => b.pressed)) startGame();
   }
 
   updatePadHud(pads);
+}
+
+// ---------- Boxen ----------
+const PUNCH_RANGE = 1.9, PUNCH_CD = 0.55;
+
+function tryPunch(p) {
+  if (!p.alive || p.ragdoll || state !== 'playing') return;
+  if (perfNow() < p.punchCooldown) return;
+  p.punchCooldown = perfNow() + PUNCH_CD;
+
+  const foe = p === player1 ? player2 : player1;
+  const dir = foe.torso.position.vsub(p.torso.position);
+  const dist = dir.length();
+  dir.y = 0;
+  if (dir.length() > 0.01) dir.normalize(); else dir.set(0, 0, -1);
+
+  // Arme sichtbar Richtung Gegner schleudern
+  for (const arm of p.arms) {
+    arm.velocity.x += dir.x * 7;
+    arm.velocity.z += dir.z * 7;
+    arm.velocity.y += 2.5;
+  }
+
+  if (foe.alive && dist < PUNCH_RANGE) {
+    if (foe.shield > 0) {
+      // Schild blockt auch Faustschläge
+      foe.shield--;
+      updatePowerupHud();
+      foe.torso.velocity.x += dir.x * 2.5;
+      foe.torso.velocity.z += dir.z * 2.5;
+      playDeflect();
+    } else {
+      enterRagdoll(foe, 0.5);
+      for (const { body } of foe.parts) {
+        body.velocity.x += dir.x * 7;
+        body.velocity.z += dir.z * 7;
+        body.velocity.y += 3.5;
+      }
+      playPunchHit();
+    }
+  } else {
+    playPunchMiss();
+  }
 }
 
 function tryJump(p) {
