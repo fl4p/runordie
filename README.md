@@ -31,6 +31,11 @@ den 2-Spieler-Splitscreen. **ESC** führt jederzeit zurück ins Menü.
 vorn und bekommt einen kräftigen Boost in Bewegungs- bzw. Blickrichtung.
 Wer **während des Hechtsprungs boxt**, schleudert den Gegner 1,7× härter weg.
 Die Landung richtet die Figur wieder auf.
+
+Über den **🤸-Knopf im Hauptmenü** lässt sich das klassische Verhalten
+einschalten: Der Hechtsprung ist dann immer als Doppelsprung verfügbar, und
+💎-Kristalle geben je **+1 Extra-Hechtsprung** in der Luft (bis zu 3).
+Die Wahl wird im Browser gespeichert.
 | Boxen | E oder linke Maustaste | − (Minus) |
 
 **Boxen:** Kurzer Faustschlag mit ~2 m Reichweite und 0,55 s Abklingzeit.

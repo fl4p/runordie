@@ -38,6 +38,12 @@
     bottom: 112px; left: 50%; transform: translateX(-50%);
     font-size: 22px; font-weight: 800; text-shadow: 0 2px 12px #000;
   }
+  #msg button {
+    pointer-events: auto; margin-top: 12px; font: inherit; font-size: 15px;
+    padding: 8px 18px; border-radius: 8px; border: 1px solid #30363d;
+    background: #1a2029; color: #e6edf3; cursor: pointer;
+  }
+  #msg button:hover { background: #242d39; }
   .powerups { top: 12px; font-size: 22px; letter-spacing: 3px; text-shadow: 0 2px 8px #000; }
   #pu1 { left: 14px; }
   #pu2 { left: calc(50% + 16px); }
@@ -67,7 +73,8 @@
   <b>R</b> = Dreh-Modus (opt-in): Maus (Spieler 1) bzw. rechter Stick drehen Figur, Kamera und Box-Richtung.<br>
   <b>T</b> = Tag/Nacht-Himmel umschalten.<br><br>
   <b>Taste 1 = Einzelspieler (Überlebenszeit) · beliebige andere Taste = 2 Spieler</b><br>
-  <span style="opacity:.6">ESC = zurück ins Menü</span></small></div>
+  <span style="opacity:.6">ESC = zurück ins Menü</span><br>
+  <button id="divebtn"></button></small></div>
 
 <script type="importmap">
 { "imports": {
@@ -1303,7 +1310,8 @@ function updatePowerups(dt) {
       const t = p.torso.position;
       const d = Math.hypot(t.x - pu.mesh.position.x, t.y - pu.mesh.position.y, t.z - pu.mesh.position.z);
       if (d < 1.15) {
-        if (pu.type === 'jump') p.airCharges = 3;       // ein Kristall = 3 Hechtsprünge
+        // Klassik-Modus: Kristall gibt +1 Extra-Hechtsprung; sonst 3 Ladungen
+        if (pu.type === 'jump') p.airCharges = diveAlways ? Math.min(3, p.airCharges + 1) : 3;
         else if (pu.type === 'punch') p.punchPower = 3; // 3 verstärkte Schläge
         else if (pu.type === 'slow') {
           // 🐌 trifft den GEGNER: 4 s Zeitlupe
@@ -1681,43 +1689,53 @@ function tryJump(p) {
     p.jumps = 1; p.jumpLock = perfNow() + 0.25;
     playJump(1);
   } else if (p.jumps < 2) {
-    // Normaler Doppelsprung (vertikal)
-    for (const { body } of p.parts) body.velocity.y = JUMP_V * 0.95;
     p.jumps = 2;
-    playJump(2);
+    if (diveAlways) {
+      // Klassik-Modus: der Doppelsprung IST der Hechtsprung
+      doDive(p);
+    } else {
+      // Normaler Doppelsprung (vertikal)
+      for (const { body } of p.parts) body.velocity.y = JUMP_V * 0.95;
+      playJump(2);
+    }
   } else if (p.airCharges > 0) {
-    // 💎-Hechtsprung: nur mit Kristall-Ladung — Vorwärts-Dive mit Kipp-Pose
+    // 💎-Ladung: (weiterer) Hechtsprung in der Luft
     p.airCharges--;
     updatePowerupHud();
-    let dx = (p.keys.r ? 1 : 0) - (p.keys.l ? 1 : 0) + p.padX;
-    let dz = (p.keys.b ? 1 : 0) - (p.keys.f ? 1 : 0) + p.padZ;
-    if (rotMode && (dx || dz)) {
-      const c = Math.cos(p.yaw), s = Math.sin(p.yaw);
-      const wx = dx * c + dz * s, wz = -dx * s + dz * c;
-      dx = wx; dz = wz;
-    }
-    let len = Math.hypot(dx, dz);
-    if (len < 0.1) {
-      // Ohne Richtungseingabe: Blickrichtung bzw. aktuelle Laufrichtung, sonst nach vorn
-      const v = p.torso.velocity;
-      if (rotMode) { const f = playerForward(p); dx = f.x; dz = f.z; }
-      else if (Math.hypot(v.x, v.z) > 1) { dx = v.x; dz = v.z; }
-      else { dx = 0; dz = -1; }
-      len = Math.hypot(dx, dz) || 1;
-    }
-    dx /= len; dz /= len;
-    for (const { body } of p.parts) {
-      body.velocity.y = JUMP_V * 0.8;
-      body.velocity.x += dx * 7.5;
-      body.velocity.z += dz * 7.5;
-    }
-    p.diving = true;
-    const qy = new CANNON.Quaternion().setFromAxisAngle(CANNON.Vec3.UNIT_Y, Math.atan2(-dx, -dz));
-    const qp = new CANNON.Quaternion().setFromAxisAngle(CANNON.Vec3.UNIT_X, -1.15);
-    p.diveQuat = qy.mult(qp);
-    playJump(3);
-    playPunchMiss(); // Whoosh
+    doDive(p);
   }
+}
+
+// Hechtsprung: Vorwärts-Dive mit Kipp-Pose in Eingabe-/Blick-/Laufrichtung
+function doDive(p) {
+  let dx = (p.keys.r ? 1 : 0) - (p.keys.l ? 1 : 0) + p.padX;
+  let dz = (p.keys.b ? 1 : 0) - (p.keys.f ? 1 : 0) + p.padZ;
+  if (rotMode && (dx || dz)) {
+    const c = Math.cos(p.yaw), s = Math.sin(p.yaw);
+    const wx = dx * c + dz * s, wz = -dx * s + dz * c;
+    dx = wx; dz = wz;
+  }
+  let len = Math.hypot(dx, dz);
+  if (len < 0.1) {
+    // Ohne Richtungseingabe: Blickrichtung bzw. aktuelle Laufrichtung, sonst nach vorn
+    const v = p.torso.velocity;
+    if (rotMode) { const f = playerForward(p); dx = f.x; dz = f.z; }
+    else if (Math.hypot(v.x, v.z) > 1) { dx = v.x; dz = v.z; }
+    else { dx = 0; dz = -1; }
+    len = Math.hypot(dx, dz) || 1;
+  }
+  dx /= len; dz /= len;
+  for (const { body } of p.parts) {
+    body.velocity.y = JUMP_V * 0.8;
+    body.velocity.x += dx * 7.5;
+    body.velocity.z += dz * 7.5;
+  }
+  p.diving = true;
+  const qy = new CANNON.Quaternion().setFromAxisAngle(CANNON.Vec3.UNIT_Y, Math.atan2(-dx, -dz));
+  const qp = new CANNON.Quaternion().setFromAxisAngle(CANNON.Vec3.UNIT_X, -1.15);
+  p.diveQuat = qy.mult(qp);
+  playJump(3);
+  playPunchMiss(); // Whoosh
 }
 
 // ---------- Spiel-Logik ----------
@@ -1725,6 +1743,7 @@ let state = 'menu'; // menu | playing | roundEnd
 let elapsed = 0, spawnTimer = 0, puTimer = 0, roundEndAt = 0, firstDeathAt = 0, spawnCount = 0;
 let soloMode = false;
 let bestSolo = +(localStorage.getItem('runordie_best') || 0);
+let diveAlways = localStorage.getItem('runordie_diveAlways') === '1';
 const clock = new THREE.Clock();
 const perfNow = () => performance.now() / 1000;
 
@@ -1777,7 +1796,24 @@ function backToMenu() {
   if (MENU_HTML) m.innerHTML = MENU_HTML;
   m.style.color = '';
   m.classList.remove('hidden');
+  updateDiveBtn();
 }
+
+function updateDiveBtn() {
+  const b = $('divebtn');
+  if (b) b.textContent = diveAlways
+    ? '🤸 Hechtsprung: IMMER (klassisch) — 💎 gibt +1 Extra-Hechtsprung'
+    : '🤸 Hechtsprung: nur mit 💎 (3 pro Kristall)';
+}
+
+// Klick-Delegation: überlebt das Neuaufbauen des Menü-HTML
+document.addEventListener('click', (e) => {
+  if (e.target?.id === 'divebtn') {
+    diveAlways = !diveAlways;
+    localStorage.setItem('runordie_diveAlways', diveAlways ? '1' : '0');
+    updateDiveBtn();
+  }
+});
 
 function resetRound() {
   clearObstacles(); clearPowerups(); clearLasers();
@@ -2014,6 +2050,7 @@ addEventListener('resize', () => {
 });
 
 MENU_HTML = $('msg').innerHTML;
+updateDiveBtn();
 animate();
 
 // Debug-Hook für automatisierte Tests
