@@ -1126,12 +1126,26 @@ function spawnLaser(forceType) {
     grp.add(beam, glow, post);
   }
 
+  // Roter Lichtschein auf der Straße: Position/Intensität folgen der Strahlrichtung
+  L.light = new THREE.PointLight(0xff2545, 1.0, 11, 1.6);
+  scene.add(L.light);
+  if (type === 'spin') {
+    L.light2 = new THREE.PointLight(0xff2545, 1.0, 11, 1.6);
+    scene.add(L.light2);
+  }
+
   scene.add(grp);
   lasers.push(L);
 }
 
+function removeLaser(L) {
+  scene.remove(L.grp);
+  scene.remove(L.light);
+  if (L.light2) scene.remove(L.light2);
+}
+
 function clearLasers() {
-  for (const L of lasers) scene.remove(L.grp);
+  for (const L of lasers) removeLaser(L);
   lasers.length = 0;
 }
 
@@ -1145,7 +1159,7 @@ function updateLasers(dt) {
   for (let i = lasers.length - 1; i >= 0; i--) {
     const L = lasers[i];
     L.z += L.speed * dt;
-    if (L.z > DESPAWN_Z) { scene.remove(L.grp); lasers.splice(i, 1); continue; }
+    if (L.z > DESPAWN_Z) { removeLaser(L); lasers.splice(i, 1); continue; }
 
     // Transform + Treffer-Test je Typ (Test in der x/y-Ebene bei L.z)
     let hitTest;
@@ -1153,27 +1167,41 @@ function updateLasers(dt) {
       const y = L.y0 + (L.amp ? Math.sin(elapsed * 0.8 + L.phase) * L.amp : 0);
       L.grp.position.set(0, y, L.z);
       hitTest = (t) => Math.abs(t.y - y) < 0.45 && Math.abs(t.x) < PLATFORM_HALF_W;
+      // Schein: je tiefer der Strahl, desto heller glüht die Straße darunter
+      L.light.position.set(0, Math.max(0.25, y * 0.7), L.z);
+      L.light.intensity = 2.6 / (0.5 + y);
     } else if (L.type === 'spin') {
       L.angle += L.angVel * dt;
       L.grp.position.set(0, L.hubY, L.z);
       L.grp.rotation.z = L.angle;
+      const c = Math.cos(L.angle), s = Math.sin(L.angle);
       hitTest = (t) => {
         const dx = t.x, dy = t.y - L.hubY;
-        const c = Math.cos(L.angle), s = Math.sin(L.angle);
         const proj = Math.max(-L.len / 2, Math.min(L.len / 2, dx * c + dy * s));
         return Math.hypot(dx - proj * c, dy - proj * s) < 0.45;
       };
+      // Schein: je ein Licht pro Balkenspitze, hell wenn die Spitze der Straße nahekommt
+      const r = L.len / 2;
+      for (const [light, sgn] of [[L.light, 1], [L.light2, -1]]) {
+        const tx = sgn * c * r, ty = L.hubY + sgn * s * r;
+        light.position.set(tx, Math.max(0.25, ty), L.z);
+        light.intensity = Math.max(0.1, 2.2 - Math.max(0, ty) * 0.9);
+      }
     } else { // wiper
       const a = 0.06 + (Math.sin(elapsed * 0.9 + L.phase) * 0.5 + 0.5) * 0.85;
       const px = L.side * (PLATFORM_HALF_W - 0.2), py = 0.3;
       L.grp.position.set(px, py, L.z);
       L.grp.rotation.z = -L.side * a;
+      const ddx = -L.side * Math.cos(a), ddy = Math.sin(a);
       hitTest = (t) => {
-        const ddx = -L.side * Math.cos(a), ddy = Math.sin(a);
         const vx = t.x - px, vy = t.y - py;
         const proj = Math.max(0, Math.min(L.len, vx * ddx + vy * ddy));
         return Math.hypot(vx - proj * ddx, vy - proj * ddy) < 0.45;
       };
+      // Schein: Licht wandert mit dem Strahl, hell wenn er tief über die Bahn fegt
+      const mx = px + ddx * L.len * 0.55, my = py + ddy * L.len * 0.55;
+      L.light.position.set(mx, Math.max(0.25, Math.min(my, 2.5)), L.z);
+      L.light.intensity = Math.max(0.12, 2.4 - my * 0.55);
     }
 
     for (const p of players) {
