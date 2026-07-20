@@ -1214,6 +1214,39 @@ addEventListener('mousedown', (e) => {
   if (e.button === 0) tryPunch(player1);
 });
 
+// ---------- Effekte: Schallwellen-Ringe ----------
+const fxRings = [];
+function spawnShockwave(pos, dir, strong) {
+  const mesh = new THREE.Mesh(
+    new THREE.RingGeometry(0.28, 0.44, 26),
+    new THREE.MeshBasicMaterial({
+      color: strong ? 0xffd23d : 0xffffff,
+      transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false,
+    })
+  );
+  mesh.position.set(pos.x, pos.y, pos.z);
+  mesh.lookAt(pos.x + dir.x, pos.y + (dir.y || 0), pos.z + dir.z); // Ring senkrecht zur Schlagrichtung
+  scene.add(mesh);
+  fxRings.push({ mesh, t: 0, life: strong ? 0.45 : 0.3, grow: strong ? 10 : 6 });
+}
+
+function updateFx(dt) {
+  for (let i = fxRings.length - 1; i >= 0; i--) {
+    const e = fxRings[i];
+    e.t += dt;
+    const k = e.t / e.life;
+    if (k >= 1) {
+      scene.remove(e.mesh);
+      e.mesh.geometry.dispose();
+      e.mesh.material.dispose();
+      fxRings.splice(i, 1);
+      continue;
+    }
+    e.mesh.scale.setScalar(1 + e.grow * k);
+    e.mesh.material.opacity = 0.85 * (1 - k) ** 1.5;
+  }
+}
+
 // ---------- Boxen ----------
 const PUNCH_RANGE = 1.9, PUNCH_CD = 0.55;
 
@@ -1250,6 +1283,10 @@ function tryPunch(p) {
   p.torso.velocity.x += dir.x * 1.8;
   p.torso.velocity.z += dir.z * 1.8;
 
+  // Schallwelle an der Faust
+  const tp = p.torso.position;
+  spawnShockwave({ x: tp.x + dir.x * 0.9, y: tp.y + 0.25, z: tp.z + dir.z * 0.9 }, dir, false);
+
   // Im Dreh-Modus muss der Gegner grob vor einem stehen
   const inFront = !rotMode || (dir.x * toFoe.x + dir.z * toFoe.z) > 0.35;
   if (foe.alive && dist < PUNCH_RANGE && inFront) {
@@ -1269,6 +1306,8 @@ function tryPunch(p) {
         body.velocity.z += dir.z * 7 * boost;
         body.velocity.y += 3.5 * boost;
       }
+      // Kräftige Schallwelle am Getroffenen
+      spawnShockwave(foe.torso.position, dir, true);
       playPunchHit();
     }
   } else {
@@ -1507,6 +1546,7 @@ function animate() {
   }
 
   for (const p of players) updatePlayer(p, dt);
+  updateFx(dt);
 
   if (state === 'playing' && firstDeathAt && perfNow() > firstDeathAt + 0.7) endRound();
   if (state === 'roundEnd' && perfNow() > roundEndAt) resetRound();
@@ -1533,7 +1573,7 @@ addEventListener('resize', () => {
 animate();
 
 // Debug-Hook für automatisierte Tests
-window.__game = { players, obstacles, powerups, world, cams, spawnPowerup, spawnWave, toggleRotMode,
+window.__game = { players, obstacles, powerups, world, cams, fxRings, spawnPowerup, spawnWave, toggleRotMode,
   get state() { return state; }, get audio() { return audioCtx && audioCtx.state; },
   get rotMode() { return rotMode; } };
 </script>
