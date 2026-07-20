@@ -326,6 +326,19 @@ function playPunchMiss() { // Whoosh: abfallendes Bandpass-Rauschen
   src.start(t);
 }
 
+function playLaunch() { // Sprung-Pad: aufsteigender Zap
+  if (!audioCtx || audioCtx.state !== 'running') return;
+  const t = audioCtx.currentTime;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(140, t);
+  o.frequency.exponentialRampToValueAtTime(950, t + 0.28);
+  g.gain.setValueAtTime(0.14, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.32);
+  o.connect(g).connect(audioCtx.destination);
+  o.start(t); o.stop(t + 0.34);
+}
+
 function playDeflect() { // Schild-Block: heller metallischer Pling
   if (!audioCtx || audioCtx.state !== 'running') return;
   const t = audioCtx.currentTime;
@@ -433,6 +446,9 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
   const onHit = (e) => {
     if (!p.alive || state !== 'playing') return;
     if (e.body.isObstacle && perfNow() > p.hitCooldown) {
+      // Landung auf einer Oberseite (Kontaktnormale ~vertikal) ist kein Treffer —
+      // sonst wäre z.B. das Tunneldach nicht bespielbar
+      if (Math.abs(e.contact.ni.y) > 0.6) return;
       const impact = Math.abs(e.contact.getImpactVelocityAlongNormal());
       if (impact > 4) {
         p.hitCooldown = perfNow() + 1.2;
@@ -555,7 +571,8 @@ function concreteTex() {
 
 const texBar = stripeTex('#d84b3f', '#ece7dc');       // rot-weiß
 const texHazard = stripeTex('#23241f', '#e6b93c');    // schwarz-gelb
-const texBrick = brickTex([148, 88, 176], '#4a3d55'); // lila Ziegel
+const texBrick = brickTex([148, 88, 176], '#4a3d55');    // lila Ziegel
+const texBrickRed = brickTex([196, 72, 58], '#54221c');  // rote Ziegel (Mega-Wand)
 const texConcrete = concreteTex();
 texHazard.repeat.set(1.6, 1);
 texConcrete.repeat.set(3, 1.2);
@@ -666,6 +683,76 @@ function removeObstacle(o) {
 function clearObstacles() {
   for (const o of obstacles) removeObstacle(o);
   obstacles.length = 0;
+}
+
+// ---------- Wellen: Sprung-Pad + Mega-Wand oder Tunnel ----------
+const LAUNCH_V = 18;
+const texPad = canvasTex(128, 64, (g, w, h) => { // grüne Chevrons
+  g.fillStyle = '#0d2416'; g.fillRect(0, 0, w, h);
+  g.fillStyle = '#3aff7a';
+  for (const x0 of [0, 64]) {
+    g.beginPath();
+    g.moveTo(x0 + 8, h - 10); g.lineTo(x0 + 32, 10); g.lineTo(x0 + 56, h - 10);
+    g.lineTo(x0 + 44, h - 10); g.lineTo(x0 + 32, 26); g.lineTo(x0 + 20, h - 10);
+    g.closePath(); g.fill();
+  }
+});
+texPad.repeat.set(6, 1);
+const padMat = new THREE.MeshStandardMaterial({
+  map: texPad, emissive: 0x2bff66, emissiveMap: texPad, emissiveIntensity: 0.9, roughness: 0.4,
+});
+
+function spawnWave(speed) {
+  if (Math.random() < 0.5) {
+    // Mega-Wand über die volle Breite (5,2 m — ohne Pad unmöglich),
+    // 9 m davor läuft ein Katapult-Pad. Rote Ziegel, und sie stunnt NICHT:
+    // wer das Pad verpasst, wird nur geschoben und behält die Kontrolle.
+    const H = 2.6;
+    const wall = addObstBody(
+      new CANNON.Box(new CANNON.Vec3(PLATFORM_HALF_W, H, 0.4)),
+      new CANNON.Vec3(0, H, SPAWN_Z),
+      tiledMat(texBrickRed, (PLATFORM_HALF_W * 2) / 1.6, (H * 2) / 1.6, { roughness: 0.85 }),
+      new THREE.BoxGeometry(PLATFORM_HALF_W * 2, H * 2, 0.8)
+    );
+    wall.body.velocity.set(0, 0, speed);
+    wall.body.isObstacle = false; // kein Stun
+
+    const pad = addObstBody(
+      new CANNON.Box(new CANNON.Vec3(PLATFORM_HALF_W, 0.09, 0.8)),
+      new CANNON.Vec3(0, 0.09, SPAWN_Z + 9),
+      padMat,
+      new THREE.BoxGeometry(PLATFORM_HALF_W * 2, 0.18, 1.6)
+    );
+    pad.body.velocity.set(0, 0, speed);
+    pad.body.isObstacle = false; // Pad stunnt nicht
+    pad.body.isJumpPad = true;
+    pad.pulse = true;
+  } else {
+    // Tunnel: Betondach + Pfeiler mit 2 Durchgängen; oben drüber geht per Doppelsprung
+    const zHalf = 2, pillarH = 1.1, roofH = 0.35, roofY = pillarH * 2 + roofH;
+    const roof = addObstBody(
+      new CANNON.Box(new CANNON.Vec3(PLATFORM_HALF_W, roofH, zHalf)),
+      new CANNON.Vec3(0, roofY, SPAWN_Z),
+      tiledMat(texConcrete, 4, 1.2, { roughness: 0.7 }),
+      new THREE.BoxGeometry(PLATFORM_HALF_W * 2, roofH * 2, zHalf * 2)
+    );
+    roof.body.velocity.set(0, 0, speed);
+
+    const g1 = -(1.4 + Math.random() * (PLATFORM_HALF_W - 3));
+    const g2 = 1.4 + Math.random() * (PLATFORM_HALF_W - 3);
+    const spans = [[-PLATFORM_HALF_W, g1 - 1.2], [g1 + 1.2, g2 - 1.2], [g2 + 1.2, PLATFORM_HALF_W]];
+    for (const [a, b] of spans) {
+      const w = b - a;
+      if (w < 0.35) continue;
+      const pillar = addObstBody(
+        new CANNON.Box(new CANNON.Vec3(w / 2, pillarH, zHalf)),
+        new CANNON.Vec3((a + b) / 2, pillarH, SPAWN_Z),
+        tiledMat(texConcrete, Math.max(1, w / 2), 1, { roughness: 0.7 }),
+        new THREE.BoxGeometry(w, pillarH * 2, zHalf * 2)
+      );
+      pillar.body.velocity.set(0, 0, speed);
+    }
+  }
 }
 
 // ---------- Power-ups ----------
@@ -950,7 +1037,7 @@ function tryJump(p) {
 
 // ---------- Spiel-Logik ----------
 let state = 'menu'; // menu | playing | roundEnd
-let elapsed = 0, spawnTimer = 0, puTimer = 0, roundEndAt = 0, firstDeathAt = 0;
+let elapsed = 0, spawnTimer = 0, puTimer = 0, roundEndAt = 0, firstDeathAt = 0, spawnCount = 0;
 const clock = new THREE.Clock();
 const perfNow = () => performance.now() / 1000;
 
@@ -964,7 +1051,7 @@ function startGame() {
 
 function resetRound() {
   clearObstacles(); clearPowerups();
-  elapsed = 0; spawnTimer = 1.2; puTimer = 4; firstDeathAt = 0;
+  elapsed = 0; spawnTimer = 1.2; puTimer = 4; firstDeathAt = 0; spawnCount = 0;
   resetPlayer(player1); resetPlayer(player2);
   updatePowerupHud();
   state = 'playing';
@@ -1009,6 +1096,15 @@ function updatePlayer(p, dt) {
     p.grounded = res.hasHit;
     if (p.grounded && t.velocity.y <= 0.5) p.jumps = 0;
 
+    // Sprung-Pad: katapultiert über Mega-Wände
+    if (p.grounded && res.body?.isJumpPad && perfNow() > (p.padCd || 0)) {
+      p.padCd = perfNow() + 0.8;
+      p.jumpLock = perfNow() + 0.35;
+      for (const { body } of p.parts) body.velocity.y = LAUNCH_V;
+      p.jumps = 1; // ein Luftsprung bleibt zum Nachsteuern
+      playLaunch();
+    }
+
     // Stun abgelaufen -> wieder aufrichten
     if (p.ragdoll && perfNow() > p.stunUntil && t.position.y > 0) exitRagdoll(p);
 
@@ -1046,6 +1142,7 @@ function syncMeshes() {
     o.mesh.position.copy(o.body.position);
     if (o.spin) o.mesh.children[0].rotation.x += o.spin * 0.016;
     else o.mesh.quaternion.copy(o.body.quaternion);
+    if (o.pulse) o.mesh.material.emissiveIntensity = 0.75 + 0.45 * Math.sin(elapsed * 6);
   }
 }
 
@@ -1059,8 +1156,14 @@ function animate() {
     elapsed += dt;
     spawnTimer -= dt;
     if (spawnTimer <= 0) {
-      spawnObstacle(baseSpeed());
-      spawnTimer = Math.max(0.8, 2.2 - elapsed * 0.035);
+      // Jede 5. Welle ist eine Formation (Sprung-Pad + Mega-Wand oder Tunnel)
+      if (++spawnCount % 5 === 0) {
+        spawnWave(baseSpeed());
+        spawnTimer = Math.max(1.6, 3.2 - elapsed * 0.035); // Formation braucht mehr Abstand
+      } else {
+        spawnObstacle(baseSpeed());
+        spawnTimer = Math.max(0.8, 2.2 - elapsed * 0.035);
+      }
     }
     puTimer -= dt;
     if (puTimer <= 0) {
@@ -1119,7 +1222,7 @@ addEventListener('resize', () => {
 animate();
 
 // Debug-Hook für automatisierte Tests
-window.__game = { players, obstacles, powerups, world, spawnPowerup,
+window.__game = { players, obstacles, powerups, world, spawnPowerup, spawnWave,
   get state() { return state; }, get audio() { return audioCtx && audioCtx.state; } };
 </script>
 </body>

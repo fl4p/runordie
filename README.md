@@ -60,6 +60,19 @@ einfach durchlaufen zum Einsammeln:
 Die Anzeige oben links in jeder Bildschirmhälfte zeigt den aktuellen Vorrat.
 Power-ups verfallen beim Rundenende.
 
+## Wellen-Formationen
+
+Jede 5. Spawn-Welle ist eine Formation:
+
+- **Sprung-Pad + Mega-Wand:** Eine 5,2 m hohe Wand aus **roten Ziegeln** über
+  die volle Breite — ohne Hilfe unüberwindbar. 9 m davor läuft ein grün
+  pulsierendes **Sprung-Pad** mit: wer beim Vorbeiziehen draufsteht, wird hoch
+  genug katapultiert (ein Luftsprung bleibt zum Nachsteuern). Die rote Wand
+  stunnt nicht — wer sie verpasst, wird nur geschoben.
+- **Tunnel:** Betonröhre mit zwei Durchgängen unten — durchlaufen, oder per
+  Doppelsprung aufs Dach und oben drüber. Landungen auf Oberseiten zählen nicht
+  als Treffer.
+
 Das Tempo steigt mit der Zeit. Treffer werfen die Figur kurz in den vollen
 Ragdoll-Modus (keine Kontrolle) — fällt sie dabei von der Plattform, war's das.
 
