@@ -489,13 +489,90 @@ const player1 = createPlayer(1, 0x4dd2ff, 0x2286b3, -2.5, GROUP.P1, GROUP.P2);
 const player2 = createPlayer(2, 0xff9f43, 0xc46a1a, 2.5, GROUP.P2, GROUP.P1);
 const players = [player1, player2];
 
+// ---------- Hindernis-Texturen (prozedural, kachelbar) ----------
+function canvasTex(w, h, draw) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+// 45°-Schrägstreifen, exakt kachelbar (Periode 128 px, vertikaler Versatz = Höhe = Periode)
+function stripeTex(colA, colB) {
+  return canvasTex(256, 128, (g, w, h) => {
+    g.fillStyle = colA; g.fillRect(0, 0, w, h);
+    g.fillStyle = colB;
+    const P = 64;
+    for (let x = -h; x < w + h; x += P * 2) {
+      g.beginPath();
+      g.moveTo(x, 0); g.lineTo(x + P, 0); g.lineTo(x + P + h, h); g.lineTo(x + h, h);
+      g.closePath(); g.fill();
+    }
+    for (let i = 0; i < 260; i++) { // Abnutzung
+      g.fillStyle = `rgba(0,0,0,${Math.random() * 0.09})`;
+      g.fillRect(Math.random() * w, Math.random() * h, 2 + Math.random() * 5, 1 + Math.random() * 3);
+    }
+  });
+}
+
+function brickTex(brickCol, mortarCol) {
+  const [br, bg, bb] = brickCol;
+  return canvasTex(256, 256, (g, w, h) => {
+    g.fillStyle = mortarCol; g.fillRect(0, 0, w, h);
+    const bw = 64, bh = 32, m = 3, nC = w / bw;
+    for (let row = 0; row < h / bh; row++) {
+      const off = (row % 2) * (bw / 2);
+      for (let col = -1; col <= nC; col++) {
+        const ci = ((col % nC) + nC) % nC; // Ziegel am Rand identisch -> nahtlos
+        const l = 0.8 + (Math.abs(Math.sin(row * 37.7 + ci * 91.3)) * 0.4);
+        g.fillStyle = `rgb(${br * l | 0},${bg * l | 0},${bb * l | 0})`;
+        g.fillRect(col * bw + off + m / 2, row * bh + m / 2, bw - m, bh - m);
+      }
+    }
+  });
+}
+
+function concreteTex() {
+  return canvasTex(256, 256, (g, w, h) => {
+    g.fillStyle = '#787d86'; g.fillRect(0, 0, w, h);
+    const img = g.getImageData(0, 0, w, h), d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const n = (Math.random() - 0.5) * 22;
+      d[i] += n; d[i + 1] += n; d[i + 2] += n;
+    }
+    g.putImageData(img, 0, 0);
+    for (let i = 0; i < 350; i++) {
+      g.fillStyle = Math.random() < 0.5 ? 'rgba(30,32,36,0.25)' : 'rgba(210,214,220,0.18)';
+      g.beginPath(); g.arc(Math.random() * w, Math.random() * h, Math.random() * 1.6 + 0.3, 0, 7); g.fill();
+    }
+    g.fillStyle = 'rgba(30,32,36,0.2)'; // Schalungsfugen
+    for (const y of [h * 0.25, h * 0.75]) g.fillRect(0, y, w, 2);
+  });
+}
+
+const texBar = stripeTex('#d84b3f', '#ece7dc');       // rot-weiß
+const texHazard = stripeTex('#23241f', '#e6b93c');    // schwarz-gelb
+const texBrick = brickTex([148, 88, 176], '#4a3d55'); // lila Ziegel
+const texConcrete = concreteTex();
+texHazard.repeat.set(1.6, 1);
+texConcrete.repeat.set(3, 1.2);
+
+// Material mit pro-Hindernis gekachelter Textur (Klon wird beim Entfernen disposed)
+function tiledMat(baseTex, rx, ry, extra = {}) {
+  const t = baseTex.clone(); t.needsUpdate = true; t.repeat.set(rx, ry);
+  const m = new THREE.MeshStandardMaterial({ map: t, roughness: 0.65, ...extra });
+  m.userData.owned = true;
+  return m;
+}
+
 // ---------- Hindernisse ----------
 const obstacles = [];
 const obstMats = {
-  bar: new THREE.MeshStandardMaterial({ color: 0xe74c3c, roughness: 0.5 }),
-  wall: new THREE.MeshStandardMaterial({ color: 0x9b59b6, roughness: 0.5 }),
-  sweeper: new THREE.MeshStandardMaterial({ color: 0xf1c40f, roughness: 0.4 }),
-  roller: new THREE.MeshStandardMaterial({ color: 0x1abc9c, roughness: 0.35 }),
+  sweeper: new THREE.MeshStandardMaterial({ map: texHazard, roughness: 0.5 }),
+  roller: new THREE.MeshStandardMaterial({ map: texConcrete, roughness: 0.7 }),
 };
 
 function addObstBody(shape, pos, mat, geo) {
@@ -524,7 +601,7 @@ function spawnObstacle(speed) {
     const o = addObstBody(
       new CANNON.Box(new CANNON.Vec3(PLATFORM_HALF_W, h, 0.28)),
       new CANNON.Vec3(0, h, SPAWN_Z),
-      obstMats.bar,
+      tiledMat(texBar, 5.5, 1),
       new THREE.BoxGeometry(PLATFORM_HALF_W * 2, h * 2, 0.56)
     );
     o.body.velocity.set(0, 0, speed);
@@ -539,7 +616,7 @@ function spawnObstacle(speed) {
       const o = addObstBody(
         new CANNON.Box(new CANNON.Vec3(w / 2, H, 0.35)),
         new CANNON.Vec3(cx, H, SPAWN_Z),
-        obstMats.wall,
+        tiledMat(texBrick, w / 1.6, (H * 2) / 1.6, { roughness: 0.85 }),
         new THREE.BoxGeometry(w, H * 2, 0.7)
       );
       o.body.velocity.set(0, 0, speed);
@@ -578,8 +655,15 @@ function spawnObstacle(speed) {
   }
 }
 
+function removeObstacle(o) {
+  world.removeBody(o.body);
+  scene.remove(o.mesh);
+  const m = o.mesh.material ?? o.mesh.children[0]?.material;
+  if (m?.userData.owned) { m.map?.dispose(); m.dispose(); }
+}
+
 function clearObstacles() {
-  for (const o of obstacles) { world.removeBody(o.body); scene.remove(o.mesh); }
+  for (const o of obstacles) removeObstacle(o);
   obstacles.length = 0;
 }
 
@@ -996,8 +1080,7 @@ function animate() {
   // Abgefahrene Hindernisse entfernen
   for (let i = obstacles.length - 1; i >= 0; i--) {
     if (obstacles[i].body.position.z > DESPAWN_Z) {
-      world.removeBody(obstacles[i].body);
-      scene.remove(obstacles[i].mesh);
+      removeObstacle(obstacles[i]);
       obstacles.splice(i, 1);
     }
   }
