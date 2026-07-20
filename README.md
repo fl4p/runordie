@@ -13,6 +13,12 @@ python3 -m http.server 8931
 # dann http://localhost:8931 öffnen
 ```
 
+## Spielmodi
+
+Im Hauptmenü: **Taste 1** startet den **Einzelspieler-Modus** (Vollbild,
+Überlebenszeit zählt, Rekord wird im Browser gespeichert), jede andere Taste
+den 2-Spieler-Splitscreen. **ESC** führt jederzeit zurück ins Menü.
+
 ## Steuerung
 
 | | Spieler 1 (blau) | Spieler 2 (orange) |

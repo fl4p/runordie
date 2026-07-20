@@ -66,7 +66,8 @@
   <b>Hechtsprung</b> (3. Sprung in der Luft, braucht 💎): Vorwärts-Dive — wer dabei boxt, schleudert härter.<br>
   <b>R</b> = Dreh-Modus (opt-in): Maus (Spieler 1) bzw. rechter Stick drehen Figur, Kamera und Box-Richtung.<br>
   <b>T</b> = Tag/Nacht-Himmel umschalten.<br><br>
-  <b>Beliebige Taste drücken zum Starten</b></small></div>
+  <b>Taste 1 = Einzelspieler (Überlebenszeit) · beliebige andere Taste = 2 Spieler</b><br>
+  <span style="opacity:.6">ESC = zurück ins Menü</span></small></div>
 
 <script type="importmap">
 { "imports": {
@@ -1372,7 +1373,8 @@ const JUMPKEY = { Space: player1, Enter: player2 };
 addEventListener('keydown', (e) => {
   ensureAudio(); // Browser erlaubt Audio erst nach Nutzer-Geste
   if (['Space', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
-  if (state === 'menu') { startGame(); return; }
+  if (e.code === 'Escape') { backToMenu(); return; }
+  if (state === 'menu') { startGame(e.code === 'Digit1' || e.code === 'Numpad1'); return; }
   const m = KEYMAP[e.code];
   if (m) m[0].keys[m[1]] = true;
   const jp = JUMPKEY[e.code];
@@ -1721,21 +1723,67 @@ function tryJump(p) {
 // ---------- Spiel-Logik ----------
 let state = 'menu'; // menu | playing | roundEnd
 let elapsed = 0, spawnTimer = 0, puTimer = 0, roundEndAt = 0, firstDeathAt = 0, spawnCount = 0;
+let soloMode = false;
+let bestSolo = +(localStorage.getItem('runordie_best') || 0);
 const clock = new THREE.Clock();
 const perfNow = () => performance.now() / 1000;
 
 const $ = (id) => document.getElementById(id);
+let MENU_HTML = null; // Original-Startbildschirm, wird bei ESC restauriert
 
-function startGame() {
+function parkPlayer2() {
+  player2.alive = false;
+  for (const { body, mesh } of player2.parts) {
+    body.position.set(0, -100, 200);
+    body.velocity.setZero(); body.angularVelocity.setZero();
+    body.sleep?.();
+    mesh.visible = false;
+  }
+}
+
+function unparkPlayer2() {
+  for (const { body, mesh } of player2.parts) {
+    body.wakeUp?.();
+    mesh.visible = true;
+  }
+}
+
+function applySoloLayout() {
+  $('divider').style.display = soloMode ? 'none' : '';
+  $('l2').classList.toggle('hidden', soloMode);
+  $('pu2').classList.toggle('hidden', soloMode);
+  if (soloMode) {
+    $('score').innerHTML = `<span class="p1">SOLO</span>&nbsp; <span id="solotime">0</span> s &nbsp;· Rekord ${bestSolo} s`;
+  } else {
+    $('score').innerHTML = `<span class="p1">SPIELER 1</span>&nbsp; <span id="s1">${player1.score}</span> : ` +
+      `<span id="s2">${player2.score}</span> &nbsp;<span class="p2">SPIELER 2</span>`;
+  }
+  cams[0].aspect = (soloMode ? innerWidth : innerWidth / 2) / innerHeight;
+  cams[0].updateProjectionMatrix();
+}
+
+function startGame(solo = false) {
+  soloMode = solo;
+  applySoloLayout();
   state = 'playing';
   $('msg').classList.add('hidden');
   resetRound();
+}
+
+function backToMenu() {
+  state = 'menu';
+  clearObstacles(); clearPowerups(); clearLasers();
+  const m = $('msg');
+  if (MENU_HTML) m.innerHTML = MENU_HTML;
+  m.style.color = '';
+  m.classList.remove('hidden');
 }
 
 function resetRound() {
   clearObstacles(); clearPowerups(); clearLasers();
   elapsed = 0; spawnTimer = 1.2; puTimer = 4; firstDeathAt = 0; spawnCount = 0;
   resetPlayer(player1); resetPlayer(player2);
+  if (soloMode) parkPlayer2(); else unparkPlayer2();
   updatePowerupHud();
   state = 'playing';
   $('msg').classList.add('hidden');
@@ -1752,6 +1800,22 @@ function killPlayer(p) {
 
 function endRound() {
   state = 'roundEnd';
+  if (soloMode) {
+    const t = Math.floor(elapsed);
+    const isRecord = t > bestSolo;
+    if (isRecord) {
+      bestSolo = t;
+      localStorage.setItem('runordie_best', bestSolo);
+    }
+    const m = $('msg');
+    m.innerHTML = `GAME OVER<small>${t} Sekunden überlebt` +
+      (isRecord ? ' — 🏆 NEUER REKORD!' : ` · Rekord: ${bestSolo} s`) +
+      '<br>Nächster Versuch in 3 Sekunden … (ESC = Menü)</small>';
+    m.style.color = '#4dd2ff';
+    m.classList.remove('hidden');
+    roundEndAt = perfNow() + 3;
+    return;
+  }
   let text;
   if (!player1.alive && !player2.alive) text = 'UNENTSCHIEDEN!';
   else {
@@ -1882,6 +1946,7 @@ function animate() {
     updatePowerups(dt);
     updateLasers(dt);
     $('speed').textContent = `Tempo ${baseSpeed().toFixed(1)} m/s · ${elapsed.toFixed(0)} s`;
+    if (soloMode) { const st = $('solotime'); if (st) st.textContent = Math.floor(elapsed); }
   }
 
   // Sweeper seitlich bewegen (über Geschwindigkeit, damit Physik korrekt schiebt)
@@ -1911,7 +1976,10 @@ function animate() {
     }
   }
 
-  for (const p of players) updatePlayer(p, dt);
+  for (const p of players) {
+    if (soloMode && p === player2) continue; // Spieler 2 ist geparkt
+    updatePlayer(p, dt);
+  }
   updateFx(dt);
 
   if (state === 'playing' && firstDeathAt && perfNow() > firstDeathAt + 0.7) endRound();
@@ -1919,29 +1987,39 @@ function animate() {
 
   syncMeshes();
   updateCam(cams[0], player1, dt);
-  updateCam(cams[1], player2, dt);
+  if (!soloMode) updateCam(cams[1], player2, dt);
 
-  // Splitscreen-Rendering
   const w = innerWidth, h = innerHeight, hw = Math.floor(w / 2);
-  renderer.setScissorTest(true);
-  renderer.setViewport(0, 0, hw, h); renderer.setScissor(0, 0, hw, h);
-  renderer.render(scene, cams[0]);
-  renderer.setViewport(hw, 0, w - hw, h); renderer.setScissor(hw, 0, w - hw, h);
-  renderer.render(scene, cams[1]);
-  renderer.setScissorTest(false);
+  if (soloMode) {
+    // Einzelspieler: ein Vollbild-Viewport
+    renderer.setScissorTest(false);
+    renderer.setViewport(0, 0, w, h);
+    renderer.render(scene, cams[0]);
+  } else {
+    // Splitscreen-Rendering
+    renderer.setScissorTest(true);
+    renderer.setViewport(0, 0, hw, h); renderer.setScissor(0, 0, hw, h);
+    renderer.render(scene, cams[0]);
+    renderer.setViewport(hw, 0, w - hw, h); renderer.setScissor(hw, 0, w - hw, h);
+    renderer.render(scene, cams[1]);
+    renderer.setScissorTest(false);
+  }
 }
 
 addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
-  for (const c of cams) { c.aspect = (innerWidth / 2) / innerHeight; c.updateProjectionMatrix(); }
+  cams[0].aspect = (soloMode ? innerWidth : innerWidth / 2) / innerHeight;
+  cams[1].aspect = (innerWidth / 2) / innerHeight;
+  for (const c of cams) c.updateProjectionMatrix();
 });
 
+MENU_HTML = $('msg').innerHTML;
 animate();
 
 // Debug-Hook für automatisierte Tests
 window.__game = { players, obstacles, powerups, world, cams, fxRings, lasers, spawnLaser, spawnPowerup, spawnWave, toggleRotMode,
   get state() { return state; }, get audio() { return audioCtx && audioCtx.state; },
-  get rotMode() { return rotMode; }, get dayMode() { return dayMode; } };
+  get rotMode() { return rotMode; }, get dayMode() { return dayMode; }, get soloMode() { return soloMode; } };
 </script>
 </body>
 </html>
