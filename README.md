@@ -38,6 +38,19 @@ erst nach dem ersten Tastendruck auf dem Pad.
 - **Schieber** (gelb): pendelt seitlich und drückt euch Richtung Kante
 - **Walze** (türkis): schnelle Rolle über die volle Breite — Doppelsprung!
 
+## Power-ups
+
+Schweben rotierend auf der Bahn und kommen mit den Hindernissen angeflogen —
+einfach durchlaufen zum Einsammeln:
+
+- **⭐ Extra-Sprung** (grüner Kristall): +1 Luftsprung, stapelbar bis 3 —
+  damit sind Dreifach- bis Fünffachsprünge drin
+- **🛡 Schild** (blauer Ring): blockt den nächsten Hindernis-Treffer
+  (kein Ragdoll-Stun, nur ein abgeschwächter Schubs); sichtbar als Blase
+
+Die Anzeige oben links in jeder Bildschirmhälfte zeigt den aktuellen Vorrat.
+Power-ups verfallen beim Rundenende.
+
 Das Tempo steigt mit der Zeit. Treffer werfen die Figur kurz in den vollen
 Ragdoll-Modus (keine Kontrolle) — fällt sie dabei von der Plattform, war's das.
 

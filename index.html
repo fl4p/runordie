@@ -38,6 +38,9 @@
     bottom: 112px; left: 50%; transform: translateX(-50%);
     font-size: 22px; font-weight: 800; text-shadow: 0 2px 12px #000;
   }
+  .powerups { top: 12px; font-size: 22px; letter-spacing: 3px; text-shadow: 0 2px 8px #000; }
+  #pu1 { left: 14px; }
+  #pu2 { left: calc(50% + 16px); }
   .hidden { display: none !important; }
 </style>
 </head>
@@ -49,11 +52,14 @@
 <div class="hud plabel" id="l2">Spieler 2 — Pfeiltasten + ENTER (2× = Doppelsprung)</div>
 <div class="hud hidden" id="padassign"></div>
 <div class="hud hidden" id="padflash"></div>
+<div class="hud powerups" id="pu1"></div>
+<div class="hud powerups" id="pu2"></div>
 <div class="hud" id="msg">RUN OR DIE<small>
   Ragdoll-Splitscreen für 2 Spieler an einer Tastatur.<br>
   Hindernisse rollen auf euch zu und schieben euch von der Plattform — wer fällt, stirbt!<br>
   Weiche aus, spring drüber, nutze den Doppelsprung.<br>
-  Xbox-Controller: beliebigen Knopf drücken, dann mit Stick ◀ / ▶ die Seite wählen — A springt.<br><br>
+  Xbox-Controller: beliebigen Knopf drücken, dann mit Stick ◀ / ▶ die Seite wählen — A springt.<br>
+  Power-ups einsammeln: ⭐ = Extra-Luftsprung (stapelbar) · 🛡 = blockt einen Treffer.<br><br>
   <b>Beliebige Taste drücken zum Starten</b></small></div>
 
 <script type="importmap">
@@ -185,6 +191,7 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
     jumpLock: 0, stunUntil: -1, hitCooldown: 0,
     keys: { f: false, b: false, l: false, r: false },
     padX: 0, padZ: 0,
+    airCharges: 0, shield: 0,
   };
 
   const v = (x, y, z) => new CANNON.Vec3(x, y, z);
@@ -193,6 +200,14 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
   torso.fixedRotation = true; torso.updateMassProperties();
   torso.linearDamping = 0.02;
   p.torso = torso;
+
+  // Schild-Blase (sichtbar solange ein Schild aktiv ist)
+  p.bubble = new THREE.Mesh(
+    new THREE.SphereGeometry(0.85, 20, 14),
+    new THREE.MeshStandardMaterial({ color: 0x66e0ff, transparent: true, opacity: 0.22, emissive: 0x2288bb, roughness: 0.2 })
+  );
+  p.bubble.visible = false;
+  p.parts[0].mesh.add(p.bubble);
 
   const head = makePart(p, v(0.21, 0, 0), 0.8, v(0, 0.72, 0), color, true);
   joint(torso, head, v(0, 0.44, 0), v(0, -0.28, 0));
@@ -220,20 +235,30 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
     joint(uLeg, lLeg, v(0, -0.21, 0), v(0, 0.20, 0));
   }
 
-  // Treffer durch Hindernisse -> kurzer Ragdoll-Stun
-  torso.addEventListener('collide', (e) => {
+  // Treffer durch Hindernisse -> Schild oder kurzer Ragdoll-Stun.
+  // An ALLEN Körperteilen, sonst zählen Bein-/Kopftreffer (niedrige Latten!) nicht.
+  const onHit = (e) => {
     if (!p.alive || state !== 'playing') return;
     if (e.body.isObstacle && perfNow() > p.hitCooldown) {
       const impact = Math.abs(e.contact.getImpactVelocityAlongNormal());
       if (impact > 4) {
         p.hitCooldown = perfNow() + 1.2;
-        enterRagdoll(p, 0.9);
-        torso.velocity.x += e.body.velocity.x * 0.9;
-        torso.velocity.z += e.body.velocity.z * 0.9;
-        torso.velocity.y += 3;
+        if (p.shield > 0) {
+          // Schild schluckt den Stun, nur abgeschwächter Schubs
+          p.shield--;
+          updatePowerupHud();
+          torso.velocity.x += e.body.velocity.x * 0.35;
+          torso.velocity.z += e.body.velocity.z * 0.35;
+        } else {
+          enterRagdoll(p, 0.9);
+          torso.velocity.x += e.body.velocity.x * 0.9;
+          torso.velocity.z += e.body.velocity.z * 0.9;
+          torso.velocity.y += 3;
+        }
       }
     }
-  });
+  };
+  for (const part of p.parts) part.body.addEventListener('collide', onHit);
 
   return p;
 }
@@ -255,6 +280,7 @@ function exitRagdoll(p) {
 
 function resetPlayer(p) {
   p.alive = true; p.jumps = 0; p.jumpLock = 0; p.hitCooldown = 0;
+  p.airCharges = 0; p.shield = 0;
   exitRagdoll(p);
   for (const { body, mesh } of p.parts) {
     body.position.set(p.spawn.x + body.initOffset.x, p.spawn.y + body.initOffset.y, p.spawn.z + body.initOffset.z);
@@ -360,6 +386,69 @@ function spawnObstacle(speed) {
 function clearObstacles() {
   for (const o of obstacles) { world.removeBody(o.body); scene.remove(o.mesh); }
   obstacles.length = 0;
+}
+
+// ---------- Power-ups ----------
+const powerups = [];
+const puMats = {
+  jump: new THREE.MeshStandardMaterial({ color: 0x7bed6a, emissive: 0x2f9e22, roughness: 0.3 }),
+  shield: new THREE.MeshStandardMaterial({ color: 0x66e0ff, emissive: 0x1a7fae, roughness: 0.3 }),
+};
+
+function spawnPowerup(type, x, z) {
+  const mesh = type === 'jump'
+    ? new THREE.Mesh(new THREE.OctahedronGeometry(0.38), puMats.jump)
+    : new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.11, 10, 22), puMats.shield);
+  mesh.castShadow = true;
+  mesh.position.set(x, 1.15, z);
+  scene.add(mesh);
+  powerups.push({ mesh, type, speed: baseSpeed() });
+}
+
+function spawnRandomPowerup() {
+  const type = Math.random() < 0.6 ? 'jump' : 'shield';
+  const x = (Math.random() * 2 - 1) * (PLATFORM_HALF_W - 1.5);
+  spawnPowerup(type, x, SPAWN_Z);
+}
+
+function clearPowerups() {
+  for (const pu of powerups) scene.remove(pu.mesh);
+  powerups.length = 0;
+}
+
+function updatePowerupHud() {
+  for (const [p, el] of [[player1, 'pu1'], [player2, 'pu2']]) {
+    $(el).textContent = '⭐'.repeat(p.airCharges) + (p.shield > 0 ? ' 🛡' : '');
+    p.bubble.visible = p.shield > 0;
+  }
+}
+
+function updatePowerups(dt) {
+  for (let i = powerups.length - 1; i >= 0; i--) {
+    const pu = powerups[i];
+    pu.mesh.position.z += pu.speed * dt;
+    pu.mesh.position.y = 1.15 + Math.sin(elapsed * 3 + i) * 0.15;
+    pu.mesh.rotation.y += 2.5 * dt;
+    pu.mesh.rotation.x = pu.type === 'shield' ? Math.PI / 2 : 0.4;
+
+    let taken = false;
+    for (const p of players) {
+      if (!p.alive || p.ragdoll) continue;
+      const t = p.torso.position;
+      const d = Math.hypot(t.x - pu.mesh.position.x, t.y - pu.mesh.position.y, t.z - pu.mesh.position.z);
+      if (d < 1.15) {
+        if (pu.type === 'jump') p.airCharges = Math.min(3, p.airCharges + 1);
+        else p.shield = Math.min(1, p.shield + 1);
+        updatePowerupHud();
+        taken = true;
+        break;
+      }
+    }
+    if (taken || pu.mesh.position.z > DESPAWN_Z) {
+      scene.remove(pu.mesh);
+      powerups.splice(i, 1);
+    }
+  }
 }
 
 // ---------- Kameras (Splitscreen) ----------
@@ -507,12 +596,17 @@ function tryJump(p) {
   } else if (p.jumps < 2) {
     for (const { body } of p.parts) body.velocity.y = JUMP_V * 0.95;
     p.jumps = 2;
+  } else if (p.airCharges > 0) {
+    // ⭐-Power-up: zusätzlicher Luftsprung
+    p.airCharges--;
+    updatePowerupHud();
+    for (const { body } of p.parts) body.velocity.y = JUMP_V * 0.95;
   }
 }
 
 // ---------- Spiel-Logik ----------
 let state = 'menu'; // menu | playing | roundEnd
-let elapsed = 0, spawnTimer = 0, roundEndAt = 0, firstDeathAt = 0;
+let elapsed = 0, spawnTimer = 0, puTimer = 0, roundEndAt = 0, firstDeathAt = 0;
 const clock = new THREE.Clock();
 const perfNow = () => performance.now() / 1000;
 
@@ -525,9 +619,10 @@ function startGame() {
 }
 
 function resetRound() {
-  clearObstacles();
-  elapsed = 0; spawnTimer = 1.2; firstDeathAt = 0;
+  clearObstacles(); clearPowerups();
+  elapsed = 0; spawnTimer = 1.2; puTimer = 4; firstDeathAt = 0;
   resetPlayer(player1); resetPlayer(player2);
+  updatePowerupHud();
   state = 'playing';
   $('msg').classList.add('hidden');
 }
@@ -623,6 +718,12 @@ function animate() {
       spawnObstacle(baseSpeed());
       spawnTimer = Math.max(0.8, 2.2 - elapsed * 0.035);
     }
+    puTimer -= dt;
+    if (puTimer <= 0) {
+      spawnRandomPowerup();
+      puTimer = 5 + Math.random() * 5;
+    }
+    updatePowerups(dt);
     $('speed').textContent = `Tempo ${baseSpeed().toFixed(1)} m/s · ${elapsed.toFixed(0)} s`;
   }
 
@@ -675,7 +776,7 @@ addEventListener('resize', () => {
 animate();
 
 // Debug-Hook für automatisierte Tests
-window.__game = { players, obstacles, world, get state() { return state; } };
+window.__game = { players, obstacles, powerups, world, spawnPowerup, get state() { return state; } };
 </script>
 </body>
 </html>
