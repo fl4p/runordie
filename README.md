@@ -88,6 +88,13 @@ Sonne und Schleierwolken; Licht und Nebel wechseln die Stimmung mit.
 - **Schieber** (gelb): pendelt seitlich und drückt euch Richtung Kante
 - **Walze** (türkis): schnelle Rolle über die volle Breite — Doppelsprung!
 
+## Kanten-Hängen
+
+Wer über eine Seiten- oder Hinterkante fällt, greift automatisch zu und
+**hängt an den Armen** an der Kante. Die **Sprungtaste zieht Stück für Stück
+hoch** (~4 Züge), bis sich die Figur über die Lippe stemmt. Ohne Ziehen werden
+die Arme nach 3 Sekunden müde; Eingabe von der Kante weg lässt bewusst los.
+
 ## Power-ups
 
 Schweben rotierend auf der Bahn und kommen mit den Hindernissen angeflogen —

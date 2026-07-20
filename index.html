@@ -694,6 +694,7 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
     airCharges: 0, shield: 0, punchPower: 0, slowUntil: 0, wasSlowed: false,
     magnetUntil: 0, wasMagnet: false,
     tackling: false, tackleCd: 0,
+    hanging: false, hangCd: 0, hangLift: 0, hangUntil: 0,
     punchCooldown: 0, arms: [],
     yaw: 0, padYawRate: 0, diving: false,
   };
@@ -785,6 +786,7 @@ function enterRagdoll(p, duration) {
   p.ragdoll = true;
   p.diving = false;
   p.tackling = false;
+  p.hanging = false;
   p.stunUntil = duration > 0 ? perfNow() + duration : Infinity;
   p.torso.fixedRotation = false;
   p.torso.updateMassProperties();
@@ -802,7 +804,7 @@ function resetPlayer(p) {
   p.alive = true; p.jumps = 0; p.jumpLock = 0; p.hitCooldown = 0;
   p.airCharges = 0; p.shield = 0; p.punchPower = 0; p.punchCooldown = 0; p.yaw = 0; p.diving = false;
   p.slowUntil = 0; p.wasSlowed = false; p.magnetUntil = 0; p.wasMagnet = false;
-  p.tackling = false; p.tackleCd = 0;
+  p.tackling = false; p.tackleCd = 0; p.hanging = false; p.hangCd = 0; p.hangLift = 0;
   exitRagdoll(p);
   for (const { body, mesh } of p.parts) {
     body.position.set(p.spawn.x + body.initOffset.x, p.spawn.y + body.initOffset.y, p.spawn.z + body.initOffset.z);
@@ -1781,6 +1783,27 @@ function tryPunch(p) {
 
 function tryJump(p) {
   if (!p.alive || p.ragdoll || p.tackling || state !== 'playing') return;
+  // Hängend: jede Sprungtaste zieht ein Stück hoch, oben angekommen -> über die Kante stemmen
+  if (p.hanging) {
+    p.hangLift += 0.3;
+    p.hangUntil = perfNow() + 3; // Ziehen frischt den Griff auf
+    playJump(1);
+    if (-0.75 + p.hangLift > 0.35) {
+      const e = p.hangEdge;
+      p.hanging = false;
+      p.hangCd = perfNow() + 0.5;
+      // Torso über die Lippe stemmen, sonst blockiert die Plattform-Seitenwand
+      p.torso.position.y = Math.max(p.torso.position.y, 0.7);
+      for (const { body } of p.parts) {
+        body.velocity.y = 7;
+        body.velocity.x += e.inX * 3.5;
+        body.velocity.z += e.inZ * 3.5;
+      }
+      p.jumps = 1;
+      playJump(2);
+    }
+    return;
+  }
   // Impuls auf ALLE Körperteile, sonst bremsen die baumelnden Gliedmaßen den Sprung aus
   if (p.grounded) {
     for (const { body } of p.parts) body.velocity.y = JUMP_V;
@@ -1802,6 +1825,22 @@ function tryJump(p) {
     updatePowerupHud();
     doDive(p);
   }
+}
+
+// ---------- Kanten-Hängen: an der Plattformkante festhalten, Sprungtaste zieht hoch ----------
+function edgeGrabInfo(pos) {
+  if (pos.y > -0.1 || pos.y < -1.4) return null;
+  // Seitenkanten
+  if (Math.abs(pos.x) > PLATFORM_HALF_W && Math.abs(pos.x) < PLATFORM_HALF_W + 0.8 &&
+      pos.z > PLATFORM_Z_MIN && pos.z < PLATFORM_Z_MAX) {
+    const side = Math.sign(pos.x);
+    return { holdX: side * (PLATFORM_HALF_W + 0.3), holdZ: pos.z, inX: -side, inZ: 0 };
+  }
+  // Hintere Kante
+  if (pos.z > PLATFORM_Z_MAX && pos.z < PLATFORM_Z_MAX + 0.8 && Math.abs(pos.x) < PLATFORM_HALF_W) {
+    return { holdX: pos.x, holdZ: PLATFORM_Z_MAX + 0.3, inX: 0, inZ: -1 };
+  }
+  return null;
 }
 
 // ---------- Grätsche: Slide nach vorn, schleudert Gegner hoch + stunnt ----------
@@ -2037,6 +2076,45 @@ function updatePlayer(p, dt) {
     // Stun abgelaufen -> wieder aufrichten
     if (p.ragdoll && perfNow() > p.stunUntil && t.position.y > 0) exitRagdoll(p);
 
+    // Kanten-Hängen: greifen, halten, hochziehen
+    if (!p.ragdoll && !p.grounded && !p.hanging && !p.diving && !p.tackling &&
+        t.velocity.y < 2 && perfNow() > p.hangCd) {
+      const e = edgeGrabInfo(t.position);
+      if (e) {
+        p.hanging = true;
+        p.hangEdge = e;
+        p.hangLift = 0;
+        p.hangUntil = perfNow() + 3; // nach 3 s werden die Arme "müde"
+        playJump(1);
+      }
+    }
+    if (p.hanging) {
+      const e = p.hangEdge;
+      // Loslassen: Eingabe von der Kante weg, Arme müde oder Stun
+      const dxIn = (p.keys.r ? 1 : 0) - (p.keys.l ? 1 : 0) + p.padX;
+      const dzIn = (p.keys.b ? 1 : 0) - (p.keys.f ? 1 : 0) + p.padZ;
+      if (p.ragdoll || perfNow() > p.hangUntil || dxIn * e.inX + dzIn * e.inZ < -0.5) {
+        p.hanging = false;
+        p.hangCd = perfNow() + 0.7;
+      } else {
+        // Torso unter der Lippe halten
+        t.velocity.set(0, 0, 0);
+        t.position.x = e.holdX;
+        t.position.z = e.holdZ;
+        t.position.y += ((-0.75 + p.hangLift) - t.position.y) * 0.4;
+        // Arme greifen zur Kantenlippe
+        const perpX = e.inZ, perpZ = -e.inX;
+        p.arms.forEach((arm, i) => {
+          const off = (i < 2 ? -1 : 1) * 0.16;
+          arm.velocity.set(
+            (t.position.x + e.inX * 0.45 + perpX * off - arm.position.x) * 10,
+            (t.position.y + 0.85 - arm.position.y) * 10,
+            (t.position.z + e.inZ * 0.45 + perpZ * off - arm.position.z) * 10
+          );
+        });
+      }
+    }
+
     if (!p.ragdoll) {
       // Grätsche: Timer + Treffer-Fenster
       if (p.tackling) {
@@ -2103,8 +2181,8 @@ function updatePlayer(p, dt) {
         t.velocity.y = Math.max(-6, Math.min(6, (RIDE_HEIGHT - d) * 14));
       }
 
-      // Von der Kante gefallen -> voller Ragdoll
-      if (t.position.y < -0.4) enterRagdoll(p, -1);
+      // Von der Kante gefallen -> voller Ragdoll (außer man hängt an der Kante)
+      if (t.position.y < -0.4 && !p.hanging) enterRagdoll(p, -1);
     }
 
     if (t.position.y < DEATH_Y) killPlayer(p);
