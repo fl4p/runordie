@@ -61,7 +61,7 @@
   Später wandern rote Laser über die Bahn (drüberspringen!) — mit der Zeit werden es mehr.<br>
   Weiche aus, spring drüber, nutze den Doppelsprung.<br>
   Xbox-Controller: beliebigen Knopf drücken, dann mit Stick ◀ / ▶ die Seite wählen — A springt.<br>
-  Power-ups einsammeln: 💎 grüner Kristall = 3 Hechtsprünge · 🥊 roter Kristall = 3 harte Schläge · 🛡 = blockt einen Treffer.<br>
+  Power-ups einsammeln: 💎 grün = 3 Hechtsprünge · 🥊 rot = 3 harte Schläge · 🐌 violett = 4 s Zeitlupe für den GEGNER · 🛡 = blockt einen Treffer.<br>
   Boxen (Gegner wegschubsen): Spieler 1 = E oder linke Maustaste · Spieler 2 = − · Controller = X.<br>
   <b>Hechtsprung</b> (3. Sprung in der Luft, braucht 💎): Vorwärts-Dive — wer dabei boxt, schleudert härter.<br>
   <b>R</b> = Dreh-Modus (opt-in): Maus (Spieler 1) bzw. rechter Stick drehen Figur, Kamera und Box-Richtung.<br>
@@ -593,6 +593,19 @@ function playZap() { // Laser-Treffer: schnarrender Abwärts-Zap
   o.start(t); o.stop(t + 0.28);
 }
 
+function playSlowmo() { // 🐌: absinkendes Wabern
+  if (!audioCtx || audioCtx.state !== 'running') return;
+  const t = audioCtx.currentTime;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(520, t);
+  o.frequency.exponentialRampToValueAtTime(130, t + 0.45);
+  g.gain.setValueAtTime(0.18, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+  o.connect(g).connect(audioCtx.destination);
+  o.start(t); o.stop(t + 0.52);
+}
+
 function playDeflect() { // Schild-Block: heller metallischer Pling
   if (!audioCtx || audioCtx.state !== 'running') return;
   const t = audioCtx.currentTime;
@@ -650,7 +663,7 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
     jumpLock: 0, stunUntil: -1, hitCooldown: 0,
     keys: { f: false, b: false, l: false, r: false },
     padX: 0, padZ: 0,
-    airCharges: 0, shield: 0, punchPower: 0,
+    airCharges: 0, shield: 0, punchPower: 0, slowUntil: 0, wasSlowed: false,
     punchCooldown: 0, arms: [],
     yaw: 0, padYawRate: 0, diving: false,
   };
@@ -669,6 +682,14 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
   );
   p.bubble.visible = false;
   p.parts[0].mesh.add(p.bubble);
+
+  // Zeitlupen-Blase (violett, solange der Gegner einen 🐌 gezündet hat)
+  p.slowBubble = new THREE.Mesh(
+    new THREE.SphereGeometry(0.95, 20, 14),
+    new THREE.MeshStandardMaterial({ color: 0xc86bff, transparent: true, opacity: 0.16, emissive: 0x6a1fa8, roughness: 0.2 })
+  );
+  p.slowBubble.visible = false;
+  p.parts[0].mesh.add(p.slowBubble);
 
   const head = makePart(p, v(0.21, 0, 0), 0.8, v(0, 0.72, 0), color, true);
   joint(torso, head, v(0, 0.44, 0), v(0, -0.28, 0));
@@ -749,6 +770,7 @@ function exitRagdoll(p) {
 function resetPlayer(p) {
   p.alive = true; p.jumps = 0; p.jumpLock = 0; p.hitCooldown = 0;
   p.airCharges = 0; p.shield = 0; p.punchPower = 0; p.punchCooldown = 0; p.yaw = 0; p.diving = false;
+  p.slowUntil = 0; p.wasSlowed = false;
   exitRagdoll(p);
   for (const { body, mesh } of p.parts) {
     body.position.set(p.spawn.x + body.initOffset.x, p.spawn.y + body.initOffset.y, p.spawn.z + body.initOffset.z);
@@ -1183,6 +1205,7 @@ const puMats = {
   jump: new THREE.MeshStandardMaterial({ color: 0x7bed6a, emissive: 0x2f9e22, roughness: 0.3 }),
   shield: new THREE.MeshStandardMaterial({ color: 0x66e0ff, emissive: 0x1a7fae, roughness: 0.3 }),
   punch: new THREE.MeshStandardMaterial({ color: 0xff6b4a, emissive: 0xb32c12, roughness: 0.3 }),
+  slow: new THREE.MeshStandardMaterial({ color: 0xc86bff, emissive: 0x6a1fa8, roughness: 0.3 }),
 };
 
 function spawnPowerup(type, x, z) {
@@ -1190,7 +1213,9 @@ function spawnPowerup(type, x, z) {
     ? new THREE.Mesh(new THREE.OctahedronGeometry(0.38), puMats.jump)
     : type === 'punch'
       ? new THREE.Mesh(new THREE.IcosahedronGeometry(0.36), puMats.punch)
-      : new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.11, 10, 22), puMats.shield);
+      : type === 'slow'
+        ? new THREE.Mesh(new THREE.DodecahedronGeometry(0.36), puMats.slow)
+        : new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.11, 10, 22), puMats.shield);
   mesh.castShadow = true;
   mesh.position.set(x, 1.15, z);
   scene.add(mesh);
@@ -1199,7 +1224,7 @@ function spawnPowerup(type, x, z) {
 
 function spawnRandomPowerup() {
   const r = Math.random();
-  const type = r < 0.45 ? 'jump' : r < 0.72 ? 'punch' : 'shield';
+  const type = r < 0.4 ? 'jump' : r < 0.62 ? 'punch' : r < 0.8 ? 'slow' : 'shield';
   const x = (Math.random() * 2 - 1) * (PLATFORM_HALF_W - 1.5);
   spawnPowerup(type, x, SPAWN_Z);
 }
@@ -1211,8 +1236,11 @@ function clearPowerups() {
 
 function updatePowerupHud() {
   for (const [p, el] of [[player1, 'pu1'], [player2, 'pu2']]) {
-    $(el).textContent = '💎'.repeat(p.airCharges) + '🥊'.repeat(p.punchPower) + (p.shield > 0 ? ' 🛡' : '');
+    const slowed = perfNow() < p.slowUntil;
+    $(el).textContent = '💎'.repeat(p.airCharges) + '🥊'.repeat(p.punchPower)
+      + (p.shield > 0 ? ' 🛡' : '') + (slowed ? ' 🐌' : '');
     p.bubble.visible = p.shield > 0;
+    p.slowBubble.visible = slowed;
   }
 }
 
@@ -1232,6 +1260,12 @@ function updatePowerups(dt) {
       if (d < 1.15) {
         if (pu.type === 'jump') p.airCharges = 3;       // ein Kristall = 3 Hechtsprünge
         else if (pu.type === 'punch') p.punchPower = 3; // 3 verstärkte Schläge
+        else if (pu.type === 'slow') {
+          // 🐌 trifft den GEGNER: 4 s Zeitlupe
+          const foe = p === player1 ? player2 : player1;
+          foe.slowUntil = perfNow() + 4;
+          playSlowmo();
+        }
         else p.shield = Math.min(1, p.shield + 1);
         updatePowerupHud();
         taken = true;
@@ -1734,9 +1768,13 @@ function updatePlayer(p, dt) {
         const wz = -dx * s + dz * c;
         dx = wx; dz = wz;
       }
+      // 🐌-Zeitlupe: Gegner hat sie gezündet -> nur 45 % Lauftempo
+      const slowed = perfNow() < p.slowUntil;
+      if (slowed !== p.wasSlowed) { p.wasSlowed = slowed; updatePowerupHud(); }
+      const spd = RUN_SPEED * (slowed ? 0.45 : 1);
       const k = p.grounded ? 0.28 : 0.07;
-      t.velocity.x += (dx * RUN_SPEED - t.velocity.x) * k;
-      t.velocity.z += (dz * RUN_SPEED - t.velocity.z) * k;
+      t.velocity.x += (dx * spd - t.velocity.x) * k;
+      t.velocity.z += (dz * spd - t.velocity.z) * k;
 
       // Schwebe-Feder hält den Torso auf Laufhöhe
       if (p.grounded && perfNow() > p.jumpLock) {

@@ -81,6 +81,9 @@ einfach durchlaufen zum Einsammeln:
   normalen Doppelsprung
 - **🥊 Schlagkraft-Kristall** (rot): die nächsten **3 treffenden Box-Schläge**
   schleudern 1,8× härter (kombiniert sich mit dem Hechtsprung-Bonus)
+- **🐌 Zeitlupe** (violetter Kristall): verpasst dem **Gegner** 4 Sekunden
+  Zeitlupe — nur noch 45 % Lauftempo, markiert durch eine violette Blase und
+  🐌 in dessen HUD
 - **🛡 Schild** (blauer Ring): blockt den nächsten Hindernis-Treffer
   (kein Ragdoll-Stun, nur ein abgeschwächter Schubs); sichtbar als Blase
 
