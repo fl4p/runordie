@@ -61,7 +61,7 @@
   Später wandern rote Laser über die Bahn (drüberspringen!) — mit der Zeit werden es mehr.<br>
   Weiche aus, spring drüber, nutze den Doppelsprung.<br>
   Xbox-Controller: beliebigen Knopf drücken, dann mit Stick ◀ / ▶ die Seite wählen — A springt.<br>
-  Power-ups einsammeln: 💎 grün = 3 Hechtsprünge · 🥊 rot = 3 harte Schläge · 🐌 violett = 4 s Zeitlupe für den GEGNER · 🧲 = zieht 6 s lang Power-ups an · 🛡 = blockt einen Treffer.<br>
+  Power-ups einsammeln: 💎 grün = 3 Hechtsprünge · 🥊 rot = 3 harte Schläge · 🐌 violett = 4 s Zeitlupe für den GEGNER · 🧲 = zieht 6 s lang Power-ups an · 🛡 = blockt 3 Treffer.<br>
   Boxen (Gegner wegschubsen): Spieler 1 = E oder linke Maustaste · Spieler 2 = − · Controller = X.<br>
   <b>Hechtsprung</b> (3. Sprung in der Luft, braucht 💎): Vorwärts-Dive — wer dabei boxt, schleudert härter.<br>
   <b>R</b> = Dreh-Modus (opt-in): Maus (Spieler 1) bzw. rechter Stick drehen Figur, Kamera und Box-Richtung.<br>
@@ -1268,7 +1268,7 @@ function updatePowerupHud() {
   for (const [p, el] of [[player1, 'pu1'], [player2, 'pu2']]) {
     const slowed = perfNow() < p.slowUntil;
     $(el).textContent = '💎'.repeat(p.airCharges) + '🥊'.repeat(p.punchPower)
-      + (p.shield > 0 ? ' 🛡' : '') + (slowed ? ' 🐌' : '')
+      + (p.shield > 0 ? ' ' + '🛡'.repeat(p.shield) : '') + (slowed ? ' 🐌' : '')
       + (perfNow() < p.magnetUntil ? ' 🧲' : '');
     p.bubble.visible = p.shield > 0;
     p.slowBubble.visible = slowed;
@@ -1314,7 +1314,7 @@ function updatePowerups(dt) {
           p.magnetUntil = perfNow() + 6; // zieht 6 s lang Power-ups an
           playMagnet();
         }
-        else p.shield = Math.min(1, p.shield + 1);
+        else p.shield = 3; // ein Ring = 3 Schild-Blocks
         updatePowerupHud();
         taken = true;
         break;
