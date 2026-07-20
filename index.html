@@ -902,6 +902,36 @@ function updatePadHud(pads) {
   $('l2').textContent = `Spieler 2 — Pfeiltasten + ENTER (2× = Doppelsprung) · − = Boxen${has[1] ? ' · 🎮 verbunden' : ''}`;
 }
 
+// Normalisiert Standard- UND Nicht-Standard-Pads (z.B. GameSir-G7 Pro: mapping "",
+// 15 Buttons, D-Pad als Hut-Achse axes[9], X auf Button 3 statt 2)
+function readPad(gp) {
+  const btn = (i) => !!gp.buttons[i]?.pressed;
+  const ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
+  const any = gp.buttons.some((b) => b.pressed);
+  if (gp.mapping === 'standard') {
+    return {
+      ax, ay, any,
+      jump: btn(0) || btn(1), punch: btn(2), back: btn(8),
+      dl: btn(14), dr: btn(15), du: btn(12), dd: btn(13),
+    };
+  }
+  // Xbox-artiges HID-Pad ohne Standard-Mapping: Hut-Achse dekodieren
+  // (8 Richtungen von -1=oben im Uhrzeigersinn bis 1; losgelassen liegt außerhalb ±1)
+  const hat = gp.axes[9];
+  const hatDir = (typeof hat === 'number' && hat >= -1.001 && hat <= 1.001)
+    ? Math.round((hat + 1) / (2 / 7)) : -1;
+  return {
+    ax, ay, any,
+    jump: btn(0) || btn(1),        // A/B
+    punch: btn(3) || btn(2),       // X liegt meist auf 3
+    back: btn(10),
+    du: hatDir === 0 || hatDir === 1 || hatDir === 7,
+    dr: hatDir === 1 || hatDir === 2 || hatDir === 3,
+    dd: hatDir === 3 || hatDir === 4 || hatDir === 5,
+    dl: hatDir === 5 || hatDir === 6 || hatDir === 7,
+  };
+}
+
 function pollGamepads() {
   const pads = (navigator.getGamepads ? Array.from(navigator.getGamepads()) : [])
     .filter((g) => g && g.connected);
@@ -915,9 +945,9 @@ function pollGamepads() {
 
   for (const gp of pads) {
     const st = (padEdge[gp.index] ??= { jump: false, left: false, right: false, back: false, punch: false });
-    const ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
-    const leftNow = ax < -0.6 || !!gp.buttons[14]?.pressed;
-    const rightNow = ax > 0.6 || !!gp.buttons[15]?.pressed;
+    const r = readPad(gp);
+    const leftNow = r.ax < -0.6 || r.dl;
+    const rightNow = r.ax > 0.6 || r.dr;
     const side = padAssign[gp.index];
 
     if (side === undefined) {
@@ -925,42 +955,39 @@ function pollGamepads() {
       if (leftNow && !st.left) assignPad(gp, 0);
       else if (rightNow && !st.right) assignPad(gp, 1);
       st.left = leftNow; st.right = rightNow;
-      st.jump = !!(gp.buttons[0]?.pressed || gp.buttons[1]?.pressed);
+      st.jump = r.jump;
       continue;
     }
     st.left = leftNow; st.right = rightNow;
 
     // Back/View-Taste gibt das Pad wieder frei (Seite neu wählbar)
-    const backNow = !!gp.buttons[8]?.pressed;
-    if (backNow && !st.back) {
+    if (r.back && !st.back) {
       delete padAssign[gp.index];
-      st.back = backNow;
+      st.back = r.back;
       flashPad('🎮 freigegeben', '#e6edf3');
       continue;
     }
-    st.back = backNow;
+    st.back = r.back;
 
     // Linker Stick (analog) + D-Pad
     const p = players[side];
     const DEAD = 0.25;
-    p.padX = Math.abs(ax) > DEAD ? ax : 0;
-    p.padZ = Math.abs(ay) > DEAD ? ay : 0;
-    if (gp.buttons[14]?.pressed) p.padX = -1;
-    if (gp.buttons[15]?.pressed) p.padX = 1;
-    if (gp.buttons[12]?.pressed) p.padZ = -1;
-    if (gp.buttons[13]?.pressed) p.padZ = 1;
+    p.padX = Math.abs(r.ax) > DEAD ? r.ax : 0;
+    p.padZ = Math.abs(r.ay) > DEAD ? r.ay : 0;
+    if (r.dl) p.padX = -1;
+    if (r.dr) p.padX = 1;
+    if (r.du) p.padZ = -1;
+    if (r.dd) p.padZ = 1;
 
     // A oder B springen (Flankenerkennung für sauberen Doppelsprung)
-    const jumpNow = !!(gp.buttons[0]?.pressed || gp.buttons[1]?.pressed);
-    if (jumpNow && !st.jump) tryJump(p);
-    st.jump = jumpNow;
+    if (r.jump && !st.jump) tryJump(p);
+    st.jump = r.jump;
 
     // X boxen
-    const punchNow = !!gp.buttons[2]?.pressed;
-    if (punchNow && !st.punch) tryPunch(p);
-    st.punch = punchNow;
+    if (r.punch && !st.punch) tryPunch(p);
+    st.punch = r.punch;
 
-    if (state === 'menu' && gp.buttons.some((b) => b.pressed)) startGame();
+    if (state === 'menu' && r.any) startGame();
   }
 
   updatePadHud(pads);
