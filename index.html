@@ -868,7 +868,12 @@ function addObstBody(shape, pos, mat, geo) {
 }
 
 function spawnObstacle(speed) {
-  const type = ['bar', 'bar', 'wall', 'sweeper', 'roller'][Math.floor(Math.random() * 5)];
+  // Rot-weiße Latten werden mit der Zeit seltener und kommen ab 30 s gar nicht mehr
+  const barWeight = Math.max(0, 1 - elapsed / 30) * 2;
+  const r = Math.random() * (barWeight + 3);
+  const type = r < barWeight
+    ? 'bar'
+    : ['wall', 'sweeper', 'roller'][Math.min(2, Math.floor(r - barWeight))];
 
   if (type === 'bar') {
     // Niedrige Latte über die volle Breite -> drüberspringen
