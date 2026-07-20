@@ -1294,7 +1294,26 @@ function spawnWave(speed) {
         spawnBoomBlock(x, 0.45 + r * 0.92, SPAWN_Z, speed);
     return;
   }
-  if (roll < 0.66) {
+  if (roll < 0.46) {
+    // TREPPE: kleiner Block -> größerer Block -> hohe Mauer.
+    // Route: Stufe für Stufe hochspringen und über die Mauer.
+    const steps = [
+      { h: 0.5, dz: 8, tex: texConcrete },   // Spitze 1,0 m — kommt zuerst an
+      { h: 1.05, dz: 4, tex: texConcrete },  // Spitze 2,1 m
+      { h: 1.8, dz: 0, tex: texBrick },      // Mauer, Spitze 3,6 m
+    ];
+    for (const s of steps) {
+      const o = addObstBody(
+        new CANNON.Box(new CANNON.Vec3(PLATFORM_HALF_W, s.h, 0.6)),
+        new CANNON.Vec3(0, s.h, SPAWN_Z + s.dz),
+        tiledMat(s.tex, (PLATFORM_HALF_W * 2) / 3, (s.h * 2) / 1.5, { roughness: 0.8 }),
+        new THREE.BoxGeometry(PLATFORM_HALF_W * 2, s.h * 2, 1.2)
+      );
+      o.body.velocity.set(0, 0, speed);
+    }
+    return;
+  }
+  if (roll < 0.7) {
     // Mega-Wand über die volle Breite (5,2 m — ohne Pad unmöglich),
     // 9 m davor läuft ein Katapult-Pad. Rote Ziegel, und sie stunnt NICHT:
     // wer das Pad verpasst, wird nur geschoben und behält die Kontrolle.
