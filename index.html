@@ -841,12 +841,23 @@ function updateCam(cam, p, dt) {
   const t = p.torso.position;
   const k = 1 - Math.exp(-6 * dt);
   if (rotMode) {
-    // Kamera hängt hinter der Blickrichtung der Figur
-    const f = playerForward(p);
-    cam.position.lerp(new THREE.Vector3(t.x - f.x * 7.5, Math.max(t.y, 0) + 4.4, t.z - f.z * 7.5), k);
-    cam.lookAt(t.x + f.x * 6, Math.max(t.y, -2) + 0.8, t.z + f.z * 6);
+    // Gedämpftes Rig: Yaw und Ankerpunkt werden GEMEINSAM geglättet, Position und
+    // LookAt aus demselben Zustand berechnet — sonst wackelt es bei Maus-Drehung
+    const ud = cam.userData;
+    if (ud.yaw === undefined) {
+      ud.yaw = p.yaw;
+      ud.anchor = new THREE.Vector3(t.x, Math.max(t.y, 0), t.z);
+    }
+    let d = p.yaw - ud.yaw; // kürzester Drehweg
+    d = ((d + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+    ud.yaw += d * (1 - Math.exp(-9 * dt));
+    ud.anchor.lerp(new THREE.Vector3(t.x, Math.max(t.y, 0), t.z), 1 - Math.exp(-8 * dt));
+    const fx = -Math.sin(ud.yaw), fz = -Math.cos(ud.yaw);
+    cam.position.set(ud.anchor.x - fx * 7.5, ud.anchor.y + 4.4, ud.anchor.z - fz * 7.5);
+    cam.lookAt(ud.anchor.x + fx * 6, ud.anchor.y + 0.8, ud.anchor.z + fz * 6);
     return;
   }
+  delete cam.userData.yaw; // beim Rückwechsel in den klassischen Modus Rig verwerfen
   const tx = Math.max(-PLATFORM_HALF_W, Math.min(PLATFORM_HALF_W, t.x));
   cam.position.lerp(new THREE.Vector3(tx * 0.7, Math.max(t.y, 0) + 4.4, t.z + 7.5), k);
   cam.lookAt(tx * 0.7, Math.max(t.y, -2) + 0.8, t.z - 6);
@@ -1330,7 +1341,7 @@ addEventListener('resize', () => {
 animate();
 
 // Debug-Hook für automatisierte Tests
-window.__game = { players, obstacles, powerups, world, spawnPowerup, spawnWave, toggleRotMode,
+window.__game = { players, obstacles, powerups, world, cams, spawnPowerup, spawnWave, toggleRotMode,
   get state() { return state; }, get audio() { return audioCtx && audioCtx.state; },
   get rotMode() { return rotMode; } };
 </script>
