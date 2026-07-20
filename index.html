@@ -239,6 +239,93 @@ for (let z = PLATFORM_Z_MIN; z < PLATFORM_Z_MAX; z += 4) {
   s.receiveShadow = true;
   scene.add(s); stripes.push(s);
 }
+// ---------- Graffiti (prozedurale Spray-Tags, transparent) ----------
+const GRAFFITI_WORDS = ['RUN', 'DIE!', 'JUMP', 'BONK', 'OOF', 'GG', 'YOLO', 'RAGDOLL', '↑↑A'];
+const GRAFFITI_COLORS = [
+  ['#ff3d81', '#3a0f22'], ['#39ff7a', '#0d3a1c'], ['#3db9ff', '#0d283a'],
+  ['#ffd23d', '#3a300d'], ['#c86bff', '#280d3a'], ['#ff7a39', '#3a1c0d'],
+];
+
+function graffitiTex(word) {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 256;
+  const g = c.getContext('2d');
+  const [col, dark] = GRAFFITI_COLORS[Math.floor(Math.random() * GRAFFITI_COLORS.length)];
+  g.translate(256, 118);
+  g.rotate((Math.random() - 0.5) * 0.16);
+  const size = Math.min(150, 460 / Math.max(2, word.length) * 1.5);
+  g.font = `bold ${size}px "Marker Felt", "Comic Sans MS", fantasy`;
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.shadowColor = col; g.shadowBlur = 22; // Sprühnebel
+  g.lineWidth = 12; g.lineJoin = 'round';
+  g.strokeStyle = dark;
+  g.strokeText(word, 0, 0);
+  g.fillStyle = col;
+  g.fillText(word, 0, 0);
+  g.shadowBlur = 0;
+  g.fillStyle = 'rgba(255,255,255,0.55)'; // Glanzkante
+  g.fillText(word, -3, -4);
+  // Farbnasen (Drips)
+  g.fillStyle = col;
+  for (let i = 0; i < 5; i++) {
+    const x = (Math.random() - 0.5) * 300, y = 30 + Math.random() * 20;
+    const len = 12 + Math.random() * 34;
+    g.fillRect(x, y, 5, len);
+    g.beginPath(); g.arc(x + 2.5, y + len, 2.5, 0, 7); g.fill();
+  }
+  // Sprenkel
+  for (let i = 0; i < 22; i++) {
+    g.globalAlpha = 0.25 + Math.random() * 0.4;
+    g.beginPath();
+    g.arc((Math.random() - 0.5) * 420, (Math.random() - 0.5) * 190, Math.random() * 3 + 0.5, 0, 7);
+    g.fill();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+const graffitiPool = GRAFFITI_WORDS.map(graffitiTex);
+const pickGraffiti = () => graffitiPool[Math.floor(Math.random() * graffitiPool.length)];
+
+// Auf die Straße gesprühte Tags (statisch)
+for (let i = 0; i < 9; i++) {
+  const w = 2.6 + Math.random() * 1.8;
+  const mat = new THREE.MeshStandardMaterial({
+    map: pickGraffiti(), transparent: true, opacity: 0.85, roughness: 1, depthWrite: false,
+  });
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, w * 0.5), mat);
+  m.rotation.x = -Math.PI / 2;
+  m.rotation.z = (Math.random() - 0.5) * 0.9;
+  m.position.set(
+    (Math.random() * 2 - 1) * (PLATFORM_HALF_W - 2.2),
+    0.045,
+    PLATFORM_Z_MIN + 4 + i * (platL - 10) / 9 + Math.random() * 2
+  );
+  m.renderOrder = 1;
+  scene.add(m);
+}
+
+// Graffiti-Decal an eine Hindernis-Wand hängen (fährt als Kind-Mesh mit)
+function addWallGraffiti(mesh, w, halfH, depth) {
+  if (w < 1.6 || Math.random() > 0.65) return;
+  const gw = Math.min(w * 0.85, 4.2);
+  const gh = gw * 0.5;
+  const yMax = Math.min(halfH - gh / 2, -halfH + 2.4);
+  if (yMax < -halfH + gh / 2) return;
+  const mat = new THREE.MeshStandardMaterial({
+    map: pickGraffiti(), transparent: true, roughness: 0.95, depthWrite: false,
+  });
+  mat.userData.ownedMat = true; // Material entsorgen, Textur bleibt im Pool
+  const plane = new THREE.Mesh(new THREE.PlaneGeometry(gw, gh), mat);
+  plane.position.set(
+    (Math.random() - 0.5) * Math.max(0, w - gw - 0.2),
+    -halfH + gh / 2 + 0.15 + Math.random() * Math.max(0, yMax - (-halfH + gh / 2)),
+    depth + 0.02
+  );
+  plane.renderOrder = 1;
+  mesh.add(plane);
+}
+
 // Randmarkierung
 for (const sx of [-1, 1]) {
   const edge = new THREE.Mesh(
@@ -648,6 +735,7 @@ function spawnObstacle(speed) {
         new THREE.BoxGeometry(w, H * 2, 0.7)
       );
       o.body.velocity.set(0, 0, speed);
+      addWallGraffiti(o.mesh, w, H, 0.35);
     }
   } else if (type === 'sweeper') {
     // Seitlich pendelnder Schieber -> drückt Spieler Richtung Kante
@@ -687,8 +775,12 @@ function spawnObstacle(speed) {
 function removeObstacle(o) {
   world.removeBody(o.body);
   scene.remove(o.mesh);
-  const m = o.mesh.material ?? o.mesh.children[0]?.material;
-  if (m?.userData.owned) { m.map?.dispose(); m.dispose(); }
+  o.mesh.traverse((n) => {
+    const m = n.material;
+    if (!m) return;
+    if (m.userData.owned) { m.map?.dispose(); m.dispose(); }       // geklonte Textur + Material
+    else if (m.userData.ownedMat) m.dispose();                     // Graffiti: Textur bleibt im Pool
+  });
 }
 
 function clearObstacles() {
@@ -727,6 +819,7 @@ function spawnWave(speed) {
     );
     wall.body.velocity.set(0, 0, speed);
     wall.body.isObstacle = false; // kein Stun
+    addWallGraffiti(wall.mesh, PLATFORM_HALF_W * 2, H, 0.4);
 
     const pad = addObstBody(
       new CANNON.Box(new CANNON.Vec3(PLATFORM_HALF_W, 0.09, 0.8)),
