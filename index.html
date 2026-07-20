@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>RUN OR DIE — Ragdoll Splitscreen</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0d1117; font-family: "Avenir Next", "Segoe UI", sans-serif; }
+  canvas { display: block; }
+  #divider {
+    position: fixed; left: 50%; top: 0; width: 4px; height: 100%;
+    background: #0d1117; transform: translateX(-2px); z-index: 5; pointer-events: none;
+  }
+  .hud { position: fixed; z-index: 10; color: #e6edf3; pointer-events: none; user-select: none; }
+  #score {
+    top: 12px; left: 50%; transform: translateX(-50%);
+    font-size: 30px; font-weight: 800; letter-spacing: 2px;
+    background: rgba(13,17,23,.75); padding: 6px 22px; border-radius: 12px;
+    border: 1px solid #30363d;
+  }
+  #score .p1 { color: #4dd2ff; } #score .p2 { color: #ff9f43; }
+  .plabel { bottom: 10px; font-size: 14px; opacity: .8; background: rgba(13,17,23,.6); padding: 4px 10px; border-radius: 8px; }
+  #l1 { left: 12px; color: #4dd2ff; }
+  #l2 { right: 12px; color: #ff9f43; text-align: right; }
+  #msg {
+    top: 38%; left: 50%; transform: translate(-50%,-50%); text-align: center;
+    font-size: 44px; font-weight: 800; text-shadow: 0 4px 24px #000;
+  }
+  #msg small { display: block; font-size: 17px; font-weight: 400; margin-top: 14px; opacity: .85; line-height: 1.6; }
+  #speed { top: 60px; left: 50%; transform: translateX(-50%); font-size: 13px; opacity: .55; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="divider"></div>
+<div class="hud" id="score"><span class="p1">SPIELER 1</span>&nbsp; <span id="s1">0</span> : <span id="s2">0</span> &nbsp;<span class="p2">SPIELER 2</span></div>
+<div class="hud" id="speed"></div>
+<div class="hud plabel" id="l1">Spieler 1 — W A S D bewegen · LEERTASTE springen (2× = Doppelsprung)</div>
+<div class="hud plabel" id="l2">Spieler 2 — Pfeiltasten bewegen · ENTER springen (2× = Doppelsprung)</div>
+<div class="hud" id="msg">RUN OR DIE<small>
+  Ragdoll-Splitscreen für 2 Spieler an einer Tastatur.<br>
+  Hindernisse rollen auf euch zu und schieben euch von der Plattform — wer fällt, stirbt!<br>
+  Weiche aus, spring drüber, nutze den Doppelsprung.<br><br>
+  <b>Beliebige Taste drücken zum Starten</b></small></div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import * as CANNON from 'cannon-es';
+
+// ---------- Konstanten ----------
+const PLATFORM_HALF_W = 7;
+const PLATFORM_Z_MIN = -46, PLATFORM_Z_MAX = 9;
+const SPAWN_Z = -44, DESPAWN_Z = 13;
+const GRAVITY = -25;
+const RUN_SPEED = 8;
+const JUMP_V = 9.5;
+const RIDE_HEIGHT = 1.08;
+const DEATH_Y = -9;
+
+const GROUP = { GROUND: 1, OBST: 2, P1: 4, P2: 8 };
+
+// ---------- Three.js ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d1117);
+scene.fog = new THREE.Fog(0x0d1117, 25, 70);
+
+scene.add(new THREE.HemisphereLight(0xbcd6ff, 0x30241a, 0.9));
+const sun = new THREE.DirectionalLight(0xfff2d9, 1.6);
+sun.position.set(14, 26, -6);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -20; sun.shadow.camera.right = 20;
+sun.shadow.camera.top = 30; sun.shadow.camera.bottom = -55;
+sun.shadow.camera.near = 1; sun.shadow.camera.far = 80;
+scene.add(sun, sun.target);
+sun.target.position.set(0, 0, -18);
+
+// ---------- Physik ----------
+const world = new CANNON.World({ gravity: new CANNON.Vec3(0, GRAVITY, 0) });
+world.solver.iterations = 12;
+world.defaultContactMaterial.friction = 0.15;
+world.defaultContactMaterial.restitution = 0;
+
+// ---------- Plattform ----------
+const platW = PLATFORM_HALF_W * 2, platL = PLATFORM_Z_MAX - PLATFORM_Z_MIN;
+const platBody = new CANNON.Body({
+  mass: 0, shape: new CANNON.Box(new CANNON.Vec3(PLATFORM_HALF_W, 0.5, platL / 2)),
+  position: new CANNON.Vec3(0, -0.5, (PLATFORM_Z_MIN + PLATFORM_Z_MAX) / 2),
+  collisionFilterGroup: GROUP.GROUND,
+});
+world.addBody(platBody);
+
+const platMesh = new THREE.Mesh(
+  new THREE.BoxGeometry(platW, 1, platL),
+  new THREE.MeshStandardMaterial({ color: 0x2a3140, roughness: 0.9 })
+);
+platMesh.position.copy(platBody.position);
+platMesh.receiveShadow = true;
+scene.add(platMesh);
+
+// Fahrbahn-Streifen für Geschwindigkeitsgefühl
+const stripeMat = new THREE.MeshStandardMaterial({ color: 0x3d4a63, roughness: 0.8 });
+const stripes = [];
+for (let z = PLATFORM_Z_MIN; z < PLATFORM_Z_MAX; z += 4) {
+  const s = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.02, 2), stripeMat);
+  s.position.set(0, 0.02, z);
+  s.receiveShadow = true;
+  scene.add(s); stripes.push(s);
+}
+// Randmarkierung
+for (const sx of [-1, 1]) {
+  const edge = new THREE.Mesh(
+    new THREE.BoxGeometry(0.25, 0.06, platL),
+    new THREE.MeshStandardMaterial({ color: 0xd8433b, roughness: 0.6 })
+  );
+  edge.position.set(sx * (PLATFORM_HALF_W - 0.15), 0.03, (PLATFORM_Z_MIN + PLATFORM_Z_MAX) / 2);
+  scene.add(edge);
+}
+
+// ---------- Ragdoll-Spieler ----------
+function makePart(player, halfExtents, mass, offset, color, isSphere = false) {
+  const shape = isSphere ? new CANNON.Sphere(halfExtents.x) :
+    new CANNON.Box(new CANNON.Vec3(halfExtents.x, halfExtents.y, halfExtents.z));
+  const body = new CANNON.Body({
+    mass, shape,
+    position: new CANNON.Vec3(player.spawn.x + offset.x, player.spawn.y + offset.y, player.spawn.z + offset.z),
+    linearDamping: 0.12, angularDamping: 0.7,
+    collisionFilterGroup: player.group,
+    collisionFilterMask: GROUP.GROUND | GROUP.OBST | player.otherGroup,
+  });
+  body.initOffset = offset.clone();
+  world.addBody(body);
+
+  const geo = isSphere ? new THREE.SphereGeometry(halfExtents.x, 20, 16) :
+    new THREE.BoxGeometry(halfExtents.x * 2, halfExtents.y * 2, halfExtents.z * 2);
+  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color, roughness: 0.55 }));
+  mesh.castShadow = true;
+  scene.add(mesh);
+
+  player.parts.push({ body, mesh });
+  return body;
+}
+
+function joint(a, b, pivA, pivB) {
+  const c = new CANNON.ConeTwistConstraint(a, b, {
+    pivotA: pivA, pivotB: pivB,
+    axisA: CANNON.Vec3.UNIT_Y, axisB: CANNON.Vec3.UNIT_Y,
+    angle: Math.PI / 3, twistAngle: Math.PI / 6,
+  });
+  world.addConstraint(c);
+  return c;
+}
+
+function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
+  const p = {
+    id, color, spawn: new CANNON.Vec3(spawnX, RIDE_HEIGHT + 0.1, 4),
+    group, otherGroup, parts: [], score: 0,
+    alive: true, ragdoll: false, jumps: 0, grounded: false,
+    jumpLock: 0, stunUntil: -1, hitCooldown: 0,
+    keys: { f: false, b: false, l: false, r: false },
+  };
+
+  const v = (x, y, z) => new CANNON.Vec3(x, y, z);
+
+  const torso = makePart(p, v(0.28, 0.40, 0.16), 6, v(0, 0, 0), color);
+  torso.fixedRotation = true; torso.updateMassProperties();
+  torso.linearDamping = 0.02;
+  p.torso = torso;
+
+  const head = makePart(p, v(0.21, 0, 0), 0.8, v(0, 0.72, 0), color, true);
+  joint(torso, head, v(0, 0.44, 0), v(0, -0.28, 0));
+  // Augen
+  const headMesh = p.parts[p.parts.length - 1].mesh;
+  for (const ex of [-0.08, 0.08]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 8),
+      new THREE.MeshStandardMaterial({ color: 0xffffff }));
+    eye.position.set(ex, 0.03, -0.17);
+    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.024, 8, 8),
+      new THREE.MeshStandardMaterial({ color: 0x111111 }));
+    pupil.position.set(0, 0, -0.032);
+    eye.add(pupil); headMesh.add(eye);
+  }
+
+  for (const s of [-1, 1]) {
+    const uArm = makePart(p, v(0.07, 0.19, 0.07), 0.35, v(s * 0.43, 0.11, 0), darkColor);
+    joint(torso, uArm, v(s * 0.36, 0.30, 0), v(0, 0.19, 0));
+    const lArm = makePart(p, v(0.06, 0.17, 0.06), 0.25, v(s * 0.43, -0.27, 0), color);
+    joint(uArm, lArm, v(0, -0.19, 0), v(0, 0.17, 0));
+
+    const uLeg = makePart(p, v(0.09, 0.21, 0.09), 0.6, v(s * 0.14, -0.63, 0), darkColor);
+    joint(torso, uLeg, v(s * 0.14, -0.42, 0), v(0, 0.21, 0));
+    const lLeg = makePart(p, v(0.08, 0.20, 0.08), 0.45, v(s * 0.14, -1.04, 0), darkColor);
+    joint(uLeg, lLeg, v(0, -0.21, 0), v(0, 0.20, 0));
+  }
+
+  // Treffer durch Hindernisse -> kurzer Ragdoll-Stun
+  torso.addEventListener('collide', (e) => {
+    if (!p.alive || state !== 'playing') return;
+    if (e.body.isObstacle && perfNow() > p.hitCooldown) {
+      const impact = Math.abs(e.contact.getImpactVelocityAlongNormal());
+      if (impact > 4) {
+        p.hitCooldown = perfNow() + 1.2;
+        enterRagdoll(p, 0.9);
+        torso.velocity.x += e.body.velocity.x * 0.9;
+        torso.velocity.z += e.body.velocity.z * 0.9;
+        torso.velocity.y += 3;
+      }
+    }
+  });
+
+  return p;
+}
+
+function enterRagdoll(p, duration) {
+  p.ragdoll = true;
+  p.stunUntil = duration > 0 ? perfNow() + duration : Infinity;
+  p.torso.fixedRotation = false;
+  p.torso.updateMassProperties();
+}
+
+function exitRagdoll(p) {
+  p.ragdoll = false;
+  p.torso.fixedRotation = true;
+  p.torso.quaternion.set(0, 0, 0, 1);
+  p.torso.angularVelocity.set(0, 0, 0);
+  p.torso.updateMassProperties();
+}
+
+function resetPlayer(p) {
+  p.alive = true; p.jumps = 0; p.jumpLock = 0; p.hitCooldown = 0;
+  exitRagdoll(p);
+  for (const { body, mesh } of p.parts) {
+    body.position.set(p.spawn.x + body.initOffset.x, p.spawn.y + body.initOffset.y, p.spawn.z + body.initOffset.z);
+    body.velocity.setZero(); body.angularVelocity.setZero();
+    body.quaternion.set(0, 0, 0, 1);
+    mesh.material.opacity = 1; mesh.material.transparent = false;
+  }
+}
+
+const player1 = createPlayer(1, 0x4dd2ff, 0x2286b3, -2.5, GROUP.P1, GROUP.P2);
+const player2 = createPlayer(2, 0xff9f43, 0xc46a1a, 2.5, GROUP.P2, GROUP.P1);
+const players = [player1, player2];
+
+// ---------- Hindernisse ----------
+const obstacles = [];
+const obstMats = {
+  bar: new THREE.MeshStandardMaterial({ color: 0xe74c3c, roughness: 0.5 }),
+  wall: new THREE.MeshStandardMaterial({ color: 0x9b59b6, roughness: 0.5 }),
+  sweeper: new THREE.MeshStandardMaterial({ color: 0xf1c40f, roughness: 0.4 }),
+  roller: new THREE.MeshStandardMaterial({ color: 0x1abc9c, roughness: 0.35 }),
+};
+
+function addObstBody(shape, pos, mat, geo) {
+  const body = new CANNON.Body({
+    mass: 0, type: CANNON.Body.KINEMATIC, shape,
+    position: pos,
+    collisionFilterGroup: GROUP.OBST,
+    collisionFilterMask: GROUP.P1 | GROUP.P2 | GROUP.GROUND,
+  });
+  body.isObstacle = true;
+  world.addBody(body);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.castShadow = true; mesh.receiveShadow = true;
+  scene.add(mesh);
+  const o = { body, mesh, sweep: null };
+  obstacles.push(o);
+  return o;
+}
+
+function spawnObstacle(speed) {
+  const type = ['bar', 'bar', 'wall', 'sweeper', 'roller'][Math.floor(Math.random() * 5)];
+
+  if (type === 'bar') {
+    // Niedrige Latte über die volle Breite -> drüberspringen
+    const h = Math.random() < 0.4 ? 0.55 : 0.32;
+    const o = addObstBody(
+      new CANNON.Box(new CANNON.Vec3(PLATFORM_HALF_W, h, 0.28)),
+      new CANNON.Vec3(0, h, SPAWN_Z),
+      obstMats.bar,
+      new THREE.BoxGeometry(PLATFORM_HALF_W * 2, h * 2, 0.56)
+    );
+    o.body.velocity.set(0, 0, speed);
+  } else if (type === 'wall') {
+    // Hohe Wand mit Lücke -> durchlaufen
+    const gapW = 2.6, gapX = (Math.random() * 2 - 1) * (PLATFORM_HALF_W - gapW / 2 - 0.6);
+    const H = 1.5;
+    const leftW = (gapX - gapW / 2) + PLATFORM_HALF_W;
+    const rightW = PLATFORM_HALF_W - (gapX + gapW / 2);
+    for (const [w, cx] of [[leftW, -PLATFORM_HALF_W + leftW / 2], [rightW, PLATFORM_HALF_W - rightW / 2]]) {
+      if (w < 0.3) continue;
+      const o = addObstBody(
+        new CANNON.Box(new CANNON.Vec3(w / 2, H, 0.35)),
+        new CANNON.Vec3(cx, H, SPAWN_Z),
+        obstMats.wall,
+        new THREE.BoxGeometry(w, H * 2, 0.7)
+      );
+      o.body.velocity.set(0, 0, speed);
+    }
+  } else if (type === 'sweeper') {
+    // Seitlich pendelnder Schieber -> drückt Spieler Richtung Kante
+    const o = addObstBody(
+      new CANNON.Box(new CANNON.Vec3(1.5, 0.85, 0.55)),
+      new CANNON.Vec3(0, 0.85, SPAWN_Z),
+      obstMats.sweeper,
+      new THREE.BoxGeometry(3, 1.7, 1.1)
+    );
+    o.sweep = { amp: PLATFORM_HALF_W - 2.2, omega: 1.1 + Math.random() * 0.7, phase: Math.random() * Math.PI * 2 };
+    o.body.velocity.set(0, 0, speed);
+  } else {
+    // Rollende Walze über die volle Breite
+    const r = 0.72;
+    const shape = new CANNON.Cylinder(r, r, PLATFORM_HALF_W * 2, 16);
+    const q = new CANNON.Quaternion().setFromAxisAngle(new CANNON.Vec3(0, 0, 1), Math.PI / 2);
+    const body = new CANNON.Body({
+      mass: 0, type: CANNON.Body.KINEMATIC,
+      position: new CANNON.Vec3(0, r, SPAWN_Z),
+      collisionFilterGroup: GROUP.OBST,
+      collisionFilterMask: GROUP.P1 | GROUP.P2 | GROUP.GROUND,
+    });
+    body.addShape(shape, new CANNON.Vec3(), q);
+    body.isObstacle = true;
+    world.addBody(body);
+    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r, r, PLATFORM_HALF_W * 2, 20), obstMats.roller);
+    mesh.rotation.z = Math.PI / 2;
+    mesh.castShadow = true;
+    const grp = new THREE.Group(); grp.add(mesh); scene.add(grp);
+    const o = { body, mesh: grp, sweep: null, spin: speed / r };
+    obstacles.push(o);
+    body.velocity.set(0, 0, speed * 1.25);
+  }
+}
+
+function clearObstacles() {
+  for (const o of obstacles) { world.removeBody(o.body); scene.remove(o.mesh); }
+  obstacles.length = 0;
+}
+
+// ---------- Kameras (Splitscreen) ----------
+function makeCam() {
+  const cam = new THREE.PerspectiveCamera(62, (innerWidth / 2) / innerHeight, 0.1, 120);
+  cam.position.set(0, 5, 12);
+  return cam;
+}
+const cams = [makeCam(), makeCam()];
+
+function updateCam(cam, p, dt) {
+  const t = p.torso.position;
+  const tx = Math.max(-PLATFORM_HALF_W, Math.min(PLATFORM_HALF_W, t.x));
+  const target = new THREE.Vector3(tx * 0.7, Math.max(t.y, 0) + 4.4, t.z + 7.5);
+  const k = 1 - Math.exp(-6 * dt);
+  cam.position.lerp(target, k);
+  cam.lookAt(tx * 0.7, Math.max(t.y, -2) + 0.8, t.z - 6);
+}
+
+// ---------- Eingabe ----------
+const KEYMAP = {
+  KeyW: [player1, 'f'], KeyS: [player1, 'b'], KeyA: [player1, 'l'], KeyD: [player1, 'r'],
+  ArrowUp: [player2, 'f'], ArrowDown: [player2, 'b'], ArrowLeft: [player2, 'l'], ArrowRight: [player2, 'r'],
+};
+const JUMPKEY = { Space: player1, Enter: player2 };
+
+addEventListener('keydown', (e) => {
+  if (['Space', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+  if (state === 'menu') { startGame(); return; }
+  const m = KEYMAP[e.code];
+  if (m) m[0].keys[m[1]] = true;
+  const jp = JUMPKEY[e.code];
+  if (jp && !e.repeat) tryJump(jp);
+});
+addEventListener('keyup', (e) => {
+  const m = KEYMAP[e.code];
+  if (m) m[0].keys[m[1]] = false;
+});
+
+function tryJump(p) {
+  if (!p.alive || p.ragdoll || state !== 'playing') return;
+  // Impuls auf ALLE Körperteile, sonst bremsen die baumelnden Gliedmaßen den Sprung aus
+  if (p.grounded) {
+    for (const { body } of p.parts) body.velocity.y = JUMP_V;
+    p.jumps = 1; p.jumpLock = perfNow() + 0.25;
+  } else if (p.jumps < 2) {
+    for (const { body } of p.parts) body.velocity.y = JUMP_V * 0.95;
+    p.jumps = 2;
+  }
+}
+
+// ---------- Spiel-Logik ----------
+let state = 'menu'; // menu | playing | roundEnd
+let elapsed = 0, spawnTimer = 0, roundEndAt = 0, firstDeathAt = 0;
+const clock = new THREE.Clock();
+const perfNow = () => performance.now() / 1000;
+
+const $ = (id) => document.getElementById(id);
+
+function startGame() {
+  state = 'playing';
+  $('msg').classList.add('hidden');
+  resetRound();
+}
+
+function resetRound() {
+  clearObstacles();
+  elapsed = 0; spawnTimer = 1.2; firstDeathAt = 0;
+  resetPlayer(player1); resetPlayer(player2);
+  state = 'playing';
+  $('msg').classList.add('hidden');
+}
+
+function baseSpeed() { return Math.min(16, 7 + elapsed * 0.22); }
+
+function killPlayer(p) {
+  if (!p.alive) return;
+  p.alive = false;
+  if (!p.ragdoll) enterRagdoll(p, -1);
+  if (!firstDeathAt) firstDeathAt = perfNow();
+}
+
+function endRound() {
+  state = 'roundEnd';
+  let text;
+  if (!player1.alive && !player2.alive) text = 'UNENTSCHIEDEN!';
+  else {
+    const w = player1.alive ? player1 : player2;
+    w.score++;
+    text = `SPIELER ${w.id} GEWINNT DIE RUNDE!`;
+    $('s1').textContent = player1.score; $('s2').textContent = player2.score;
+  }
+  const m = $('msg');
+  m.innerHTML = `${text}<small>Nächste Runde in 3 Sekunden …</small>`;
+  m.style.color = (!player1.alive && !player2.alive) ? '#e6edf3' : (player1.alive ? '#4dd2ff' : '#ff9f43');
+  m.classList.remove('hidden');
+  roundEndAt = perfNow() + 3;
+}
+
+function updatePlayer(p, dt) {
+  const t = p.torso;
+
+  if (p.alive && state === 'playing') {
+    // Bodenkontakt per Raycast
+    const from = new CANNON.Vec3(t.position.x, t.position.y, t.position.z);
+    const to = new CANNON.Vec3(t.position.x, t.position.y - 1.45, t.position.z);
+    const res = new CANNON.RaycastResult();
+    world.raycastClosest(from, to, { collisionFilterMask: GROUP.GROUND | GROUP.OBST, skipBackfaces: true }, res);
+    p.grounded = res.hasHit;
+    if (p.grounded && t.velocity.y <= 0.5) p.jumps = 0;
+
+    // Stun abgelaufen -> wieder aufrichten
+    if (p.ragdoll && perfNow() > p.stunUntil && t.position.y > 0) exitRagdoll(p);
+
+    if (!p.ragdoll) {
+      // Bewegung
+      const dx = (p.keys.r ? 1 : 0) - (p.keys.l ? 1 : 0);
+      const dz = (p.keys.b ? 1 : 0) - (p.keys.f ? 1 : 0);
+      const len = Math.hypot(dx, dz) || 1;
+      const k = p.grounded ? 0.28 : 0.07;
+      t.velocity.x += (dx / len * RUN_SPEED - t.velocity.x) * k;
+      t.velocity.z += (dz / len * RUN_SPEED - t.velocity.z) * k;
+
+      // Schwebe-Feder hält den Torso auf Laufhöhe
+      if (p.grounded && perfNow() > p.jumpLock) {
+        const d = res.distance;
+        t.velocity.y = Math.max(-6, Math.min(6, (RIDE_HEIGHT - d) * 14));
+      }
+
+      // Von der Kante gefallen -> voller Ragdoll
+      if (t.position.y < -0.4) enterRagdoll(p, -1);
+    }
+
+    if (t.position.y < DEATH_Y) killPlayer(p);
+  }
+}
+
+function syncMeshes() {
+  for (const p of players)
+    for (const { body, mesh } of p.parts) {
+      mesh.position.copy(body.position);
+      mesh.quaternion.copy(body.quaternion);
+    }
+  for (const o of obstacles) {
+    o.mesh.position.copy(o.body.position);
+    if (o.spin) o.mesh.children[0].rotation.x += o.spin * 0.016;
+    else o.mesh.quaternion.copy(o.body.quaternion);
+  }
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+
+  if (state === 'playing') {
+    elapsed += dt;
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      spawnObstacle(baseSpeed());
+      spawnTimer = Math.max(0.8, 2.2 - elapsed * 0.035);
+    }
+    $('speed').textContent = `Tempo ${baseSpeed().toFixed(1)} m/s · ${elapsed.toFixed(0)} s`;
+  }
+
+  // Sweeper seitlich bewegen (über Geschwindigkeit, damit Physik korrekt schiebt)
+  for (const o of obstacles) {
+    if (o.sweep) {
+      const s = o.sweep;
+      o.body.velocity.x = s.amp * s.omega * Math.cos(s.omega * elapsed + s.phase);
+      const lim = PLATFORM_HALF_W - 1.6;
+      if (o.body.position.x > lim) o.body.position.x = lim;
+      if (o.body.position.x < -lim) o.body.position.x = -lim;
+    }
+  }
+
+  if (state !== 'menu') world.step(1 / 60, dt, 3);
+
+  // Abgefahrene Hindernisse entfernen
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    if (obstacles[i].body.position.z > DESPAWN_Z) {
+      world.removeBody(obstacles[i].body);
+      scene.remove(obstacles[i].mesh);
+      obstacles.splice(i, 1);
+    }
+  }
+
+  for (const p of players) updatePlayer(p, dt);
+
+  if (state === 'playing' && firstDeathAt && perfNow() > firstDeathAt + 0.7) endRound();
+  if (state === 'roundEnd' && perfNow() > roundEndAt) resetRound();
+
+  syncMeshes();
+  updateCam(cams[0], player1, dt);
+  updateCam(cams[1], player2, dt);
+
+  // Splitscreen-Rendering
+  const w = innerWidth, h = innerHeight, hw = Math.floor(w / 2);
+  renderer.setScissorTest(true);
+  renderer.setViewport(0, 0, hw, h); renderer.setScissor(0, 0, hw, h);
+  renderer.render(scene, cams[0]);
+  renderer.setViewport(hw, 0, w - hw, h); renderer.setScissor(hw, 0, w - hw, h);
+  renderer.render(scene, cams[1]);
+  renderer.setScissorTest(false);
+}
+
+addEventListener('resize', () => {
+  renderer.setSize(innerWidth, innerHeight);
+  for (const c of cams) { c.aspect = (innerWidth / 2) / innerHeight; c.updateProjectionMatrix(); }
+});
+
+animate();
+
+// Debug-Hook für automatisierte Tests
+window.__game = { players, obstacles, world, get state() { return state; } };
+</script>
+</body>
+</html>
