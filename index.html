@@ -35,12 +35,13 @@
 <div id="divider"></div>
 <div class="hud" id="score"><span class="p1">SPIELER 1</span>&nbsp; <span id="s1">0</span> : <span id="s2">0</span> &nbsp;<span class="p2">SPIELER 2</span></div>
 <div class="hud" id="speed"></div>
-<div class="hud plabel" id="l1">Spieler 1 — W A S D bewegen · LEERTASTE springen (2× = Doppelsprung)</div>
-<div class="hud plabel" id="l2">Spieler 2 — Pfeiltasten bewegen · ENTER springen (2× = Doppelsprung)</div>
+<div class="hud plabel" id="l1">Spieler 1 — W A S D + LEERTASTE &nbsp;·&nbsp; Controller 1: Stick + A &nbsp;·&nbsp; 2× = Doppelsprung</div>
+<div class="hud plabel" id="l2">Spieler 2 — Pfeiltasten + ENTER &nbsp;·&nbsp; Controller 2: Stick + A &nbsp;·&nbsp; 2× = Doppelsprung</div>
 <div class="hud" id="msg">RUN OR DIE<small>
   Ragdoll-Splitscreen für 2 Spieler an einer Tastatur.<br>
   Hindernisse rollen auf euch zu und schieben euch von der Plattform — wer fällt, stirbt!<br>
-  Weiche aus, spring drüber, nutze den Doppelsprung.<br><br>
+  Weiche aus, spring drüber, nutze den Doppelsprung.<br>
+  Auch mit Xbox-Controllern spielbar: linker Stick/D-Pad bewegen, A springen.<br><br>
   <b>Beliebige Taste drücken zum Starten</b></small></div>
 
 <script type="importmap">
@@ -171,6 +172,7 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
     alive: true, ragdoll: false, jumps: 0, grounded: false,
     jumpLock: 0, stunUntil: -1, hitCooldown: 0,
     keys: { f: false, b: false, l: false, r: false },
+    padX: 0, padZ: 0,
   };
 
   const v = (x, y, z) => new CANNON.Vec3(x, y, z);
@@ -385,6 +387,34 @@ addEventListener('keyup', (e) => {
   if (m) m[0].keys[m[1]] = false;
 });
 
+// ---------- Gamepads (Xbox): Controller 1 -> Spieler 1, Controller 2 -> Spieler 2 ----------
+const padState = [{ jump: false }, { jump: false }];
+function pollGamepads() {
+  const pads = (navigator.getGamepads ? Array.from(navigator.getGamepads()) : [])
+    .filter((g) => g && g.connected);
+  for (let i = 0; i < 2; i++) {
+    const p = players[i], gp = pads[i], st = padState[i];
+    if (!gp) { p.padX = 0; p.padZ = 0; st.jump = false; continue; }
+
+    // Linker Stick (analog) + D-Pad
+    const DEAD = 0.25;
+    const ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
+    p.padX = Math.abs(ax) > DEAD ? ax : 0;
+    p.padZ = Math.abs(ay) > DEAD ? ay : 0;
+    if (gp.buttons[14]?.pressed) p.padX = -1;
+    if (gp.buttons[15]?.pressed) p.padX = 1;
+    if (gp.buttons[12]?.pressed) p.padZ = -1;
+    if (gp.buttons[13]?.pressed) p.padZ = 1;
+
+    // A oder B springen (Flankenerkennung für sauberen Doppelsprung)
+    const jumpNow = !!(gp.buttons[0]?.pressed || gp.buttons[1]?.pressed);
+    if (jumpNow && !st.jump) tryJump(p);
+    st.jump = jumpNow;
+
+    if (state === 'menu' && gp.buttons.some((b) => b.pressed)) startGame();
+  }
+}
+
 function tryJump(p) {
   if (!p.alive || p.ragdoll || state !== 'playing') return;
   // Impuls auf ALLE Körperteile, sonst bremsen die baumelnden Gliedmaßen den Sprung aus
@@ -461,13 +491,14 @@ function updatePlayer(p, dt) {
     if (p.ragdoll && perfNow() > p.stunUntil && t.position.y > 0) exitRagdoll(p);
 
     if (!p.ragdoll) {
-      // Bewegung
-      const dx = (p.keys.r ? 1 : 0) - (p.keys.l ? 1 : 0);
-      const dz = (p.keys.b ? 1 : 0) - (p.keys.f ? 1 : 0);
-      const len = Math.hypot(dx, dz) || 1;
+      // Bewegung (Tastatur + Gamepad, analog bleibt analog)
+      let dx = (p.keys.r ? 1 : 0) - (p.keys.l ? 1 : 0) + p.padX;
+      let dz = (p.keys.b ? 1 : 0) - (p.keys.f ? 1 : 0) + p.padZ;
+      const len = Math.hypot(dx, dz);
+      if (len > 1) { dx /= len; dz /= len; }
       const k = p.grounded ? 0.28 : 0.07;
-      t.velocity.x += (dx / len * RUN_SPEED - t.velocity.x) * k;
-      t.velocity.z += (dz / len * RUN_SPEED - t.velocity.z) * k;
+      t.velocity.x += (dx * RUN_SPEED - t.velocity.x) * k;
+      t.velocity.z += (dz * RUN_SPEED - t.velocity.z) * k;
 
       // Schwebe-Feder hält den Torso auf Laufhöhe
       if (p.grounded && perfNow() > p.jumpLock) {
@@ -499,6 +530,8 @@ function syncMeshes() {
 function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
+
+  pollGamepads();
 
   if (state === 'playing') {
     elapsed += dt;

@@ -21,6 +21,12 @@ python3 -m http.server 8931
 | Springen | Leertaste | Enter |
 | Doppelsprung | 2× Leertaste | 2× Enter |
 
+**Xbox-Controller** (Gamepad API, Standard-Mapping): Controller 1 steuert
+Spieler 1, Controller 2 steuert Spieler 2. Linker Stick (analog) oder D-Pad
+bewegen, **A**/**B** springen (2× = Doppelsprung). Tastatur bleibt parallel
+aktiv. Hinweis: Der Browser meldet einen Controller erst nach dem ersten
+Tastendruck auf dem Pad.
+
 ## Hindernisse
 
 - **Latte** (rot): niedrige Querstange — drüberspringen
