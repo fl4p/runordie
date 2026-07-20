@@ -48,7 +48,7 @@
 <div id="divider"></div>
 <div class="hud" id="score"><span class="p1">SPIELER 1</span>&nbsp; <span id="s1">0</span> : <span id="s2">0</span> &nbsp;<span class="p2">SPIELER 2</span></div>
 <div class="hud" id="speed"></div>
-<div class="hud plabel" id="l1">Spieler 1 — W A S D + LEERTASTE (2× = Doppelsprung) · E = Boxen</div>
+<div class="hud plabel" id="l1">Spieler 1 — W A S D + LEERTASTE (2× = Doppelsprung) · E/Maus = Boxen</div>
 <div class="hud plabel" id="l2">Spieler 2 — Pfeiltasten + ENTER (2× = Doppelsprung) · − = Boxen</div>
 <div class="hud hidden" id="padassign"></div>
 <div class="hud hidden" id="padflash"></div>
@@ -60,7 +60,7 @@
   Weiche aus, spring drüber, nutze den Doppelsprung.<br>
   Xbox-Controller: beliebigen Knopf drücken, dann mit Stick ◀ / ▶ die Seite wählen — A springt.<br>
   Power-ups einsammeln: ⭐ = Extra-Luftsprung (stapelbar) · 🛡 = blockt einen Treffer.<br>
-  Boxen (Gegner wegschubsen): Spieler 1 = E · Spieler 2 = − · Controller = X.<br>
+  Boxen (Gegner wegschubsen): Spieler 1 = E oder linke Maustaste · Spieler 2 = − · Controller = X.<br>
   <b>R</b> = Dreh-Modus (opt-in): Maus (Spieler 1) bzw. rechter Stick drehen Figur, Kamera und Box-Richtung.<br><br>
   <b>Beliebige Taste drücken zum Starten</b></small></div>
 
@@ -850,8 +850,9 @@ function updateCam(cam, p, dt) {
     }
     let d = p.yaw - ud.yaw; // kürzester Drehweg
     d = ((d + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-    ud.yaw += d * (1 - Math.exp(-9 * dt));
-    ud.anchor.lerp(new THREE.Vector3(t.x, Math.max(t.y, 0), t.z), 1 - Math.exp(-8 * dt));
+    // Maus (Spieler 1) sehr direkt, Pad-Kamera etwas weicher, aber flott
+    ud.yaw += d * (1 - Math.exp(-(p === player1 ? 25 : 14) * dt));
+    ud.anchor.lerp(new THREE.Vector3(t.x, Math.max(t.y, 0), t.z), 1 - Math.exp(-10 * dt));
     const fx = -Math.sin(ud.yaw), fz = -Math.cos(ud.yaw);
     cam.position.set(ud.anchor.x - fx * 7.5, ud.anchor.y + 4.4, ud.anchor.z - fz * 7.5);
     cam.lookAt(ud.anchor.x + fx * 6, ud.anchor.y + 0.8, ud.anchor.z + fz * 6);
@@ -927,7 +928,7 @@ function updatePadHud(pads) {
 
   const has = [false, false];
   for (const k in padAssign) has[padAssign[k]] = true;
-  $('l1').textContent = `Spieler 1 — W A S D + LEERTASTE (2× = Doppelsprung) · E = Boxen${has[0] ? ' · 🎮 verbunden' : ''}`;
+  $('l1').textContent = `Spieler 1 — W A S D + LEERTASTE (2× = Doppelsprung) · E/Maus = Boxen${has[0] ? ' · 🎮 verbunden' : ''}`;
   $('l2').textContent = `Spieler 2 — Pfeiltasten + ENTER (2× = Doppelsprung) · − = Boxen${has[1] ? ' · 🎮 verbunden' : ''}`;
 }
 
@@ -1058,6 +1059,11 @@ addEventListener('mousemove', (e) => {
 renderer.domElement.addEventListener('click', () => {
   ensureAudio();
   if (rotMode) renderer.domElement.requestPointerLock?.();
+});
+// Linke Maustaste boxt für Spieler 1
+addEventListener('mousedown', (e) => {
+  ensureAudio();
+  if (e.button === 0) tryPunch(player1);
 });
 
 // ---------- Boxen ----------
@@ -1216,7 +1222,7 @@ function updatePlayer(p, dt) {
     if (!p.ragdoll) {
       // Dreh-Modus: Blickwinkel per rechtem Stick drehen und Torso ausrichten
       if (rotMode) {
-        if (p.padYawRate) p.yaw -= p.padYawRate * 2.6 * dt;
+        if (p.padYawRate) p.yaw -= p.padYawRate * 4.0 * dt;
         p.torso.quaternion.setFromAxisAngle(CANNON.Vec3.UNIT_Y, p.yaw);
       }
 
