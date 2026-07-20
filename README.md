@@ -121,6 +121,9 @@ einfach durchlaufen zum Einsammeln:
   🐌 in dessen HUD
 - **🧲 Magnet** (rotes Hufeisen): zieht 6 Sekunden lang alle Power-ups auf der
   Bahn zum Besitzer (Reichweite 14 m)
+- **⭐ Unverwundbarkeit** (goldener Knoten): 5 Sekunden immun gegen
+  Hindernis-Stuns, Laser, Explosionen und gegnerische Schläge/Grätschen
+  (Herunterfallen bleibt tödlich!) — sichtbar als pulsierende Gold-Aura
 - **🛡 Schild** (blauer Ring): gibt **3 Schild-Blocks** — jeder schluckt einen
   Hindernis-/Laser-/Box-Treffer (kein Ragdoll-Stun, nur ein abgeschwächter
   Schubs); sichtbar als Blase, das HUD zeigt die verbleibenden Blocks
