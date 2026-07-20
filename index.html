@@ -61,7 +61,7 @@
   Später wandern rote Laser über die Bahn (drüberspringen!) — mit der Zeit werden es mehr.<br>
   Weiche aus, spring drüber, nutze den Doppelsprung.<br>
   Xbox-Controller: beliebigen Knopf drücken, dann mit Stick ◀ / ▶ die Seite wählen — A springt.<br>
-  Power-ups einsammeln: 💎 grün = 3 Hechtsprünge · 🥊 rot = 3 harte Schläge · 🐌 violett = 4 s Zeitlupe für den GEGNER · 🛡 = blockt einen Treffer.<br>
+  Power-ups einsammeln: 💎 grün = 3 Hechtsprünge · 🥊 rot = 3 harte Schläge · 🐌 violett = 4 s Zeitlupe für den GEGNER · 🧲 = zieht 6 s lang Power-ups an · 🛡 = blockt einen Treffer.<br>
   Boxen (Gegner wegschubsen): Spieler 1 = E oder linke Maustaste · Spieler 2 = − · Controller = X.<br>
   <b>Hechtsprung</b> (3. Sprung in der Luft, braucht 💎): Vorwärts-Dive — wer dabei boxt, schleudert härter.<br>
   <b>R</b> = Dreh-Modus (opt-in): Maus (Spieler 1) bzw. rechter Stick drehen Figur, Kamera und Box-Richtung.<br>
@@ -593,6 +593,19 @@ function playZap() { // Laser-Treffer: schnarrender Abwärts-Zap
   o.start(t); o.stop(t + 0.28);
 }
 
+function playMagnet() { // 🧲: aufsteigendes Summen
+  if (!audioCtx || audioCtx.state !== 'running') return;
+  const t = audioCtx.currentTime;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = 'triangle';
+  o.frequency.setValueAtTime(140, t);
+  o.frequency.exponentialRampToValueAtTime(640, t + 0.35);
+  g.gain.setValueAtTime(0.16, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+  o.connect(g).connect(audioCtx.destination);
+  o.start(t); o.stop(t + 0.42);
+}
+
 function playSlowmo() { // 🐌: absinkendes Wabern
   if (!audioCtx || audioCtx.state !== 'running') return;
   const t = audioCtx.currentTime;
@@ -664,6 +677,7 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
     keys: { f: false, b: false, l: false, r: false },
     padX: 0, padZ: 0,
     airCharges: 0, shield: 0, punchPower: 0, slowUntil: 0, wasSlowed: false,
+    magnetUntil: 0, wasMagnet: false,
     punchCooldown: 0, arms: [],
     yaw: 0, padYawRate: 0, diving: false,
   };
@@ -770,7 +784,7 @@ function exitRagdoll(p) {
 function resetPlayer(p) {
   p.alive = true; p.jumps = 0; p.jumpLock = 0; p.hitCooldown = 0;
   p.airCharges = 0; p.shield = 0; p.punchPower = 0; p.punchCooldown = 0; p.yaw = 0; p.diving = false;
-  p.slowUntil = 0; p.wasSlowed = false;
+  p.slowUntil = 0; p.wasSlowed = false; p.magnetUntil = 0; p.wasMagnet = false;
   exitRagdoll(p);
   for (const { body, mesh } of p.parts) {
     body.position.set(p.spawn.x + body.initOffset.x, p.spawn.y + body.initOffset.y, p.spawn.z + body.initOffset.z);
@@ -1206,7 +1220,21 @@ const puMats = {
   shield: new THREE.MeshStandardMaterial({ color: 0x66e0ff, emissive: 0x1a7fae, roughness: 0.3 }),
   punch: new THREE.MeshStandardMaterial({ color: 0xff6b4a, emissive: 0xb32c12, roughness: 0.3 }),
   slow: new THREE.MeshStandardMaterial({ color: 0xc86bff, emissive: 0x6a1fa8, roughness: 0.3 }),
+  magnet: new THREE.MeshStandardMaterial({ color: 0xe84d4d, emissive: 0x8c1a1a, roughness: 0.35 }),
+  magnetTip: new THREE.MeshStandardMaterial({ color: 0xd8dde6, emissive: 0x5a6070, roughness: 0.25, metalness: 0.7 }),
 };
+
+function makeMagnetMesh() { // Hufeisen: roter Bogen + silberne Pole
+  const grp = new THREE.Group();
+  const arc = new THREE.Mesh(new THREE.TorusGeometry(0.26, 0.1, 10, 18, Math.PI), puMats.magnet);
+  grp.add(arc);
+  for (const sx of [-1, 1]) {
+    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.18, 0.2), puMats.magnetTip);
+    tip.position.set(sx * 0.26, -0.08, 0);
+    grp.add(tip);
+  }
+  return grp;
+}
 
 function spawnPowerup(type, x, z) {
   const mesh = type === 'jump'
@@ -1215,7 +1243,9 @@ function spawnPowerup(type, x, z) {
       ? new THREE.Mesh(new THREE.IcosahedronGeometry(0.36), puMats.punch)
       : type === 'slow'
         ? new THREE.Mesh(new THREE.DodecahedronGeometry(0.36), puMats.slow)
-        : new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.11, 10, 22), puMats.shield);
+        : type === 'magnet'
+          ? makeMagnetMesh()
+          : new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.11, 10, 22), puMats.shield);
   mesh.castShadow = true;
   mesh.position.set(x, 1.15, z);
   scene.add(mesh);
@@ -1224,7 +1254,7 @@ function spawnPowerup(type, x, z) {
 
 function spawnRandomPowerup() {
   const r = Math.random();
-  const type = r < 0.4 ? 'jump' : r < 0.62 ? 'punch' : r < 0.8 ? 'slow' : 'shield';
+  const type = r < 0.34 ? 'jump' : r < 0.54 ? 'punch' : r < 0.7 ? 'slow' : r < 0.84 ? 'magnet' : 'shield';
   const x = (Math.random() * 2 - 1) * (PLATFORM_HALF_W - 1.5);
   spawnPowerup(type, x, SPAWN_Z);
 }
@@ -1238,7 +1268,8 @@ function updatePowerupHud() {
   for (const [p, el] of [[player1, 'pu1'], [player2, 'pu2']]) {
     const slowed = perfNow() < p.slowUntil;
     $(el).textContent = '💎'.repeat(p.airCharges) + '🥊'.repeat(p.punchPower)
-      + (p.shield > 0 ? ' 🛡' : '') + (slowed ? ' 🐌' : '');
+      + (p.shield > 0 ? ' 🛡' : '') + (slowed ? ' 🐌' : '')
+      + (perfNow() < p.magnetUntil ? ' 🧲' : '');
     p.bubble.visible = p.shield > 0;
     p.slowBubble.visible = slowed;
   }
@@ -1248,6 +1279,19 @@ function updatePowerups(dt) {
   for (let i = powerups.length - 1; i >= 0; i--) {
     const pu = powerups[i];
     pu.mesh.position.z += pu.speed * dt;
+
+    // 🧲 aktive Magneten ziehen Items zu ihrem Besitzer
+    for (const p of players) {
+      if (!p.alive || perfNow() >= p.magnetUntil) continue;
+      const dx = p.torso.position.x - pu.mesh.position.x;
+      const dz = p.torso.position.z - pu.mesh.position.z;
+      const d = Math.hypot(dx, dz);
+      if (d > 0.01 && d < 14) {
+        const pull = 9 * dt;
+        pu.mesh.position.x += (dx / d) * pull;
+        pu.mesh.position.z += (dz / d) * pull;
+      }
+    }
     pu.mesh.position.y = 1.15 + Math.sin(elapsed * 3 + i) * 0.15;
     pu.mesh.rotation.y += 2.5 * dt;
     pu.mesh.rotation.x = pu.type === 'shield' ? Math.PI / 2 : 0.4;
@@ -1265,6 +1309,10 @@ function updatePowerups(dt) {
           const foe = p === player1 ? player2 : player1;
           foe.slowUntil = perfNow() + 4;
           playSlowmo();
+        }
+        else if (pu.type === 'magnet') {
+          p.magnetUntil = perfNow() + 6; // zieht 6 s lang Power-ups an
+          playMagnet();
         }
         else p.shield = Math.min(1, p.shield + 1);
         updatePowerupHud();
@@ -1771,6 +1819,8 @@ function updatePlayer(p, dt) {
       // 🐌-Zeitlupe: Gegner hat sie gezündet -> nur 45 % Lauftempo
       const slowed = perfNow() < p.slowUntil;
       if (slowed !== p.wasSlowed) { p.wasSlowed = slowed; updatePowerupHud(); }
+      const magnet = perfNow() < p.magnetUntil;
+      if (magnet !== p.wasMagnet) { p.wasMagnet = magnet; updatePowerupHud(); }
       const spd = RUN_SPEED * (slowed ? 0.45 : 1);
       const k = p.grounded ? 0.28 : 0.07;
       t.velocity.x += (dx * spd - t.velocity.x) * k;

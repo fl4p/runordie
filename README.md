@@ -84,6 +84,8 @@ einfach durchlaufen zum Einsammeln:
 - **🐌 Zeitlupe** (violetter Kristall): verpasst dem **Gegner** 4 Sekunden
   Zeitlupe — nur noch 45 % Lauftempo, markiert durch eine violette Blase und
   🐌 in dessen HUD
+- **🧲 Magnet** (rotes Hufeisen): zieht 6 Sekunden lang alle Power-ups auf der
+  Bahn zum Besitzer (Reichweite 14 m)
 - **🛡 Schild** (blauer Ring): blockt den nächsten Hindernis-Treffer
   (kein Ragdoll-Stun, nur ein abgeschwächter Schubs); sichtbar als Blase
 
