@@ -606,9 +606,10 @@ function spawnObstacle(speed) {
     );
     o.body.velocity.set(0, 0, speed);
   } else if (type === 'wall') {
-    // Hohe Wand mit Lücke -> durchlaufen
+    // Wand mit Lücke -> durchlaufen. 30 % sind "3 Sprünge hoch" (4,2 m):
+    // nur per Dreifachsprung (⭐) übersteigbar, sonst muss man durch die Lücke.
     const gapW = 2.6, gapX = (Math.random() * 2 - 1) * (PLATFORM_HALF_W - gapW / 2 - 0.6);
-    const H = 1.5;
+    const H = Math.random() < 0.3 ? 2.1 : 1.5;
     const leftW = (gapX - gapW / 2) + PLATFORM_HALF_W;
     const rightW = PLATFORM_HALF_W - (gapX + gapW / 2);
     for (const [w, cx] of [[leftW, -PLATFORM_HALF_W + leftW / 2], [rightW, PLATFORM_HALF_W - rightW / 2]]) {

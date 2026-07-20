@@ -41,7 +41,9 @@ erst nach dem ersten Tastendruck auf dem Pad.
 ## Hindernisse
 
 - **Latte** (rot): niedrige Querstange — drüberspringen
-- **Wand** (lila): hohe Wand mit Lücke — durchlaufen
+- **Wand** (lila Ziegel): Wand mit Lücke — durchlaufen. Manche Wände sind
+  **3 Sprünge hoch** (4,2 m): nur mit Dreifachsprung (⭐-Power-up) übersteigbar,
+  sonst hilft nur die Lücke
 - **Schieber** (gelb): pendelt seitlich und drückt euch Richtung Kante
 - **Walze** (türkis): schnelle Rolle über die volle Breite — Doppelsprung!
 
