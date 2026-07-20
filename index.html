@@ -57,6 +57,7 @@
 <div class="hud" id="msg">RUN OR DIE<small>
   Ragdoll-Splitscreen für 2 Spieler an einer Tastatur.<br>
   Hindernisse rollen auf euch zu und schieben euch von der Plattform — wer fällt, stirbt!<br>
+  Vorsicht vor 💥-Blöcken: Berührung zündet sie — die Explosion schleudert dich weg (Kettenreaktion!).<br>
   Weiche aus, spring drüber, nutze den Doppelsprung.<br>
   Xbox-Controller: beliebigen Knopf drücken, dann mit Stick ◀ / ▶ die Seite wählen — A springt.<br>
   Power-ups einsammeln: 💎 grüner Kristall = 3 Hechtsprünge · 🥊 roter Kristall = 3 harte Schläge · 🛡 = blockt einen Treffer.<br>
@@ -554,6 +555,30 @@ function playLaunch() { // Sprung-Pad: aufsteigender Zap
   o.start(t); o.stop(t + 0.34);
 }
 
+function playBoom() { // Explosion: Rausch-Knall + tiefer Sub-Drop
+  if (!audioCtx || audioCtx.state !== 'running') return;
+  const t = audioCtx.currentTime;
+  const len = (audioCtx.sampleRate * 0.3) | 0;
+  const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len) ** 1.6;
+  const src = audioCtx.createBufferSource(); src.buffer = buf;
+  const f = audioCtx.createBiquadFilter(); f.type = 'lowpass';
+  f.frequency.setValueAtTime(1200, t);
+  f.frequency.exponentialRampToValueAtTime(180, t + 0.3);
+  const ng = audioCtx.createGain(); ng.gain.value = 0.55;
+  src.connect(f).connect(ng).connect(audioCtx.destination);
+  src.start(t);
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(95, t);
+  o.frequency.exponentialRampToValueAtTime(28, t + 0.4);
+  g.gain.setValueAtTime(0.6, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+  o.connect(g).connect(audioCtx.destination);
+  o.start(t); o.stop(t + 0.47);
+}
+
 function playDeflect() { // Schild-Block: heller metallischer Pling
   if (!audioCtx || audioCtx.state !== 'running') return;
   const t = audioCtx.currentTime;
@@ -910,6 +935,61 @@ function clearObstacles() {
   obstacles.length = 0;
 }
 
+// ---------- Explodierende Blöcke ----------
+const texBoom = canvasTex(128, 128, (g, w, h) => {
+  g.fillStyle = '#e8452c'; g.fillRect(0, 0, w, h);
+  g.strokeStyle = '#7a1608'; g.lineWidth = 10; g.strokeRect(5, 5, w - 10, h - 10);
+  g.fillStyle = '#ffd23d';
+  g.beginPath(); g.moveTo(64, 22); g.lineTo(106, 98); g.lineTo(22, 98); g.closePath(); g.fill();
+  g.fillStyle = '#151515';
+  g.font = 'bold 52px sans-serif'; g.textAlign = 'center';
+  g.fillText('!', 64, 92);
+});
+const boomBaseMat = new THREE.MeshStandardMaterial({
+  map: texBoom, emissive: 0xff3300, emissiveIntensity: 0.12, roughness: 0.55,
+});
+
+function explodeBlock(o) {
+  const pos = o.body.position;
+  spawnShockwave({ x: pos.x, y: pos.y + 0.2, z: pos.z }, { x: 0, y: 1, z: 0 }, true);
+  const fireball = new THREE.Mesh(
+    new THREE.SphereGeometry(0.6, 18, 14),
+    new THREE.MeshBasicMaterial({ color: 0xff8c3a, transparent: true, opacity: 0.9, depthWrite: false })
+  );
+  fireball.position.set(pos.x, pos.y + 0.2, pos.z);
+  scene.add(fireball);
+  fxRings.push({ mesh: fireball, t: 0, life: 0.4, grow: 5 });
+  playBoom();
+
+  // Spieler im Radius wegschleudern
+  const R = 3.6;
+  for (const p of players) {
+    if (!p.alive) continue;
+    const d = p.torso.position.vsub(pos);
+    const dist = d.length();
+    if (dist > R) continue;
+    const fall = 1 - dist / R;
+    d.y = 0;
+    if (d.length() > 0.01) d.normalize(); else d.set(0, 0, -1);
+    enterRagdoll(p, 0.7);
+    for (const { body } of p.parts) {
+      body.velocity.x += d.x * 15 * fall;
+      body.velocity.z += d.z * 15 * fall;
+      body.velocity.y += 8 * fall + 2;
+    }
+  }
+  // Kettenreaktion: Nachbarblöcke zünden verzögert
+  for (const other of obstacles) {
+    if (other !== o && other.boom && !other.boom.armed &&
+        other.body.position.vsub(pos).length() < 3) {
+      other.boom.armed = true;
+      other.boom.fuseAt = perfNow() + 0.15 + Math.random() * 0.12;
+    }
+  }
+  const i = obstacles.indexOf(o);
+  if (i >= 0) { removeObstacle(o); obstacles.splice(i, 1); }
+}
+
 // ---------- Wellen: Sprung-Pad + Mega-Wand oder Tunnel ----------
 const LAUNCH_V = 18;
 const texPad = canvasTex(128, 64, (g, w, h) => { // grüne Chevrons
@@ -928,7 +1008,31 @@ const padMat = new THREE.MeshStandardMaterial({
 });
 
 function spawnWave(speed) {
-  if (Math.random() < 0.5) {
+  const roll = Math.random();
+  if (roll < 0.3) {
+    // Feld aus explodierenden Blöcken: Berührung zündet, Explosion schleudert weg
+    const n = 6 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < n; i++) {
+      const o = addObstBody(
+        new CANNON.Box(new CANNON.Vec3(0.45, 0.45, 0.45)),
+        new CANNON.Vec3((Math.random() * 2 - 1) * (PLATFORM_HALF_W - 1), 0.45, SPAWN_Z + (Math.random() * 2 - 1) * 4),
+        (() => { const m = boomBaseMat.clone(); m.userData.ownedMat = true; return m; })(),
+        new THREE.BoxGeometry(0.9, 0.9, 0.9)
+      );
+      o.body.velocity.set(0, 0, speed);
+      o.body.isObstacle = false; // kein normaler Stun — die Explosion erledigt das
+      o.boom = { armed: false, fuseAt: 0 };
+      o.body.addEventListener('collide', (e) => {
+        if (o.boom.armed) return;
+        if (e.body.collisionFilterGroup & (GROUP.P1 | GROUP.P2)) {
+          o.boom.armed = true;
+          o.boom.fuseAt = perfNow() + 0.3;
+        }
+      });
+    }
+    return;
+  }
+  if (roll < 0.65) {
     // Mega-Wand über die volle Breite (5,2 m — ohne Pad unmöglich),
     // 9 m davor läuft ein Katapult-Pad. Rote Ziegel, und sie stunnt NICHT:
     // wer das Pad verpasst, wird nur geschoben und behält die Kontrolle.
@@ -1567,6 +1671,7 @@ function syncMeshes() {
     if (o.spin) o.mesh.children[0].rotation.x += o.spin * 0.016;
     else o.mesh.quaternion.copy(o.body.quaternion);
     if (o.pulse) o.mesh.material.emissiveIntensity = 0.75 + 0.45 * Math.sin(elapsed * 6);
+    if (o.boom?.armed) o.mesh.material.emissiveIntensity = 0.7 + 0.6 * Math.sin(perfNow() * 45);
   }
 }
 
@@ -1607,6 +1712,12 @@ function animate() {
       if (o.body.position.x > lim) o.body.position.x = lim;
       if (o.body.position.x < -lim) o.body.position.x = -lim;
     }
+  }
+
+  // Gezündete Blöcke explodieren nach kurzer Lunte
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    const o = obstacles[i];
+    if (o.boom?.armed && perfNow() > o.boom.fuseAt) explodeBlock(o);
   }
 
   if (state !== 'menu') world.step(1 / 60, dt, 3);

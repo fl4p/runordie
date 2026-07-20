@@ -99,6 +99,10 @@ Jede 5. Spawn-Welle ist eine Formation:
 - **Tunnel:** Betonröhre mit zwei Durchgängen unten — durchlaufen, oder per
   Doppelsprung aufs Dach und oben drüber. Landungen auf Oberseiten zählen nicht
   als Treffer.
+- **💥 Explodierende Blöcke:** Ein verstreutes Feld aus TNT-Kisten. Berührung
+  zündet (0,3 s blinkende Lunte), dann schleudert die Explosion alle Spieler im
+  Umkreis als Ragdoll weg — und zündet Nachbarblöcke als **Kettenreaktion**.
+  Drüberspringen oder durchschlängeln!
 
 Das Tempo steigt mit der Zeit. Treffer werfen die Figur kurz in den vollen
 Ragdoll-Modus (keine Kontrolle) — fällt sie dabei von der Plattform, war's das.
