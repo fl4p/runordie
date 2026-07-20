@@ -62,7 +62,8 @@
   Power-ups einsammeln: ⭐ = Extra-Luftsprung (stapelbar) · 🛡 = blockt einen Treffer.<br>
   Boxen (Gegner wegschubsen): Spieler 1 = E oder linke Maustaste · Spieler 2 = − · Controller = X.<br>
   Der 2. Sprung ist ein <b>Hechtsprung</b> mit Vorwärts-Boost — wer dabei boxt, schleudert härter.<br>
-  <b>R</b> = Dreh-Modus (opt-in): Maus (Spieler 1) bzw. rechter Stick drehen Figur, Kamera und Box-Richtung.<br><br>
+  <b>R</b> = Dreh-Modus (opt-in): Maus (Spieler 1) bzw. rechter Stick drehen Figur, Kamera und Box-Richtung.<br>
+  <b>T</b> = Tag/Nacht-Himmel umschalten.<br><br>
   <b>Beliebige Taste drücken zum Starten</b></small></div>
 
 <script type="importmap">
@@ -140,16 +141,82 @@ function makeSkyTexture() {
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
+// Tag-Variante: Dämmerungs-Gradient (Schieferblau -> Graumauve -> warmes Sand)
+// mit tiefstehender Sonne und Schleierwolken
+function makeDaySkyTexture() {
+  const c = document.createElement('canvas');
+  c.width = 2048; c.height = 1024;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, c.height);
+  grad.addColorStop(0.0, '#4e5470');
+  grad.addColorStop(0.35, '#6f6d85');
+  grad.addColorStop(0.55, '#8a8496');
+  grad.addColorStop(0.70, '#a5948a');  // = Nebelfarbe im Tag-Modus
+  grad.addColorStop(0.80, '#b59b82');
+  grad.addColorStop(1.0, '#6e5c4c');   // unter dem Horizont
+  g.fillStyle = grad;
+  g.fillRect(0, 0, c.width, c.height);
+
+  // Tiefstehende Sonne mit warmem Glow
+  const sx = c.width * 0.42, sy = c.height * 0.52, sr = 40;
+  const halo = g.createRadialGradient(sx, sy, sr * 0.3, sx, sy, sr * 4.5);
+  halo.addColorStop(0, 'rgba(255,236,200,0.55)');
+  halo.addColorStop(1, 'rgba(255,236,200,0)');
+  g.fillStyle = halo; g.beginPath(); g.arc(sx, sy, sr * 4.5, 0, 7); g.fill();
+  g.fillStyle = '#fff3dc'; g.beginPath(); g.arc(sx, sy, sr, 0, 7); g.fill();
+
+  // Schleierwolken-Streifen
+  for (let i = 0; i < 12; i++) {
+    const y = c.height * (0.42 + Math.random() * 0.24);
+    const x = Math.random() * c.width;
+    const w = 180 + Math.random() * 420, h = 8 + Math.random() * 18;
+    const cg = g.createRadialGradient(x, y, 0, x, y, w / 2);
+    cg.addColorStop(0, `rgba(205,186,172,${0.10 + Math.random() * 0.14})`);
+    cg.addColorStop(1, 'rgba(205,186,172,0)');
+    g.fillStyle = cg;
+    g.save(); g.translate(x, y); g.scale(1, h / (w / 2));
+    g.beginPath(); g.arc(0, 0, w / 2, 0, 7); g.fill();
+    g.restore();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+const texSkyNight = makeSkyTexture();
+let texSkyDay = null; // lazy
 const sky = new THREE.Mesh(
   new THREE.SphereGeometry(95, 48, 24),
-  new THREE.MeshBasicMaterial({ map: makeSkyTexture(), side: THREE.BackSide, fog: false })
+  new THREE.MeshBasicMaterial({ map: texSkyNight, side: THREE.BackSide, fog: false })
 );
 sky.position.set(0, 0, -18);
-// Mond (bei u=0.5) in Blickrichtung der Spieler (-z) drehen
+// Mond/Sonne (bei u~0.5) in Blickrichtung der Spieler (-z) drehen
 sky.rotation.y = Math.PI / 2;
 scene.add(sky);
 
-scene.add(new THREE.HemisphereLight(0xbcd6ff, 0x30241a, 0.9));
+// Tag/Nacht-Umschaltung (Taste T) inkl. Licht- und Nebelstimmung
+let dayMode = false;
+function toggleDaySky() {
+  dayMode = !dayMode;
+  if (dayMode) {
+    texSkyDay ??= makeDaySkyTexture();
+    sky.material.map = texSkyDay;
+    scene.fog.color.set(0xa5948a);
+    scene.background.set(0xb59b82);
+    hemi.color.set(0xb8b3c8); hemi.groundColor.set(0x6e5c4c); hemi.intensity = 1.05;
+    sun.color.set(0xffe0b8); sun.intensity = 1.9;
+  } else {
+    sky.material.map = texSkyNight;
+    scene.fog.color.set(0x151228);
+    scene.background.set(0x0d1117);
+    hemi.color.set(0xbcd6ff); hemi.groundColor.set(0x30241a); hemi.intensity = 0.9;
+    sun.color.set(0xfff2d9); sun.intensity = 1.6;
+  }
+  sky.material.needsUpdate = true;
+}
+
+const hemi = new THREE.HemisphereLight(0xbcd6ff, 0x30241a, 0.9);
+scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xfff2d9, 1.6);
 sun.position.set(14, 26, -6);
 sun.castShadow = true;
@@ -1032,6 +1099,7 @@ addEventListener('keydown', (e) => {
     if (e.code === 'KeyE') tryPunch(player1);
     if (e.key === '-' || e.code === 'NumpadSubtract') tryPunch(player2);
     if (e.code === 'KeyR') toggleRotMode();
+    if (e.code === 'KeyT') toggleDaySky();
   }
 });
 addEventListener('pointerdown', ensureAudio);
@@ -1575,7 +1643,7 @@ animate();
 // Debug-Hook für automatisierte Tests
 window.__game = { players, obstacles, powerups, world, cams, fxRings, spawnPowerup, spawnWave, toggleRotMode,
   get state() { return state; }, get audio() { return audioCtx && audioCtx.state; },
-  get rotMode() { return rotMode; } };
+  get rotMode() { return rotMode; }, get dayMode() { return dayMode; } };
 </script>
 </body>
 </html>

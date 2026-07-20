@@ -55,6 +55,12 @@ Geboxt wird in Blickrichtung (der Gegner muss grob vor einem stehen), gelaufen
 relativ zur Figur (W = vorwärts in Blickrichtung). Nochmal **R** schaltet zurück;
 die Blickwinkel werden dabei zurückgesetzt.
 
+## Tag/Nacht
+
+**T** schaltet zwischen Nacht-Skybox (Sterne, Mond) und Tag-Skybox um — einem
+Dämmerungshimmel (Schieferblau → Graumauve → warmes Sand) mit tiefstehender
+Sonne und Schleierwolken; Licht und Nebel wechseln die Stimmung mit.
+
 ## Hindernisse
 
 - **Latte** (rot): niedrige Querstange — drüberspringen
