@@ -94,7 +94,57 @@ document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0d1117);
-scene.fog = new THREE.Fog(0x0d1117, 25, 70);
+scene.fog = new THREE.Fog(0x151228, 25, 70);
+
+// ---------- Skybox (prozedural: Sternenhimmel + Mond + Horizontglühen) ----------
+function makeSkyTexture() {
+  const c = document.createElement('canvas');
+  c.width = 2048; c.height = 1024;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, c.height);
+  grad.addColorStop(0.0, '#04050d');   // Zenit
+  grad.addColorStop(0.45, '#0b0d1c');
+  grad.addColorStop(0.62, '#151228');  // = Nebelfarbe, nahtloser Übergang
+  grad.addColorStop(0.72, '#2a2044');  // Horizontglühen
+  grad.addColorStop(0.78, '#151228');
+  grad.addColorStop(1.0, '#080810');   // unter dem Horizont
+  g.fillStyle = grad;
+  g.fillRect(0, 0, c.width, c.height);
+
+  // Sterne: oben dicht, zum Horizont ausdünnend, ein paar größere Funkler
+  for (let i = 0; i < 1600; i++) {
+    const x = Math.random() * c.width;
+    const y = Math.pow(Math.random(), 1.7) * c.height * 0.68;
+    const r = Math.random() < 0.06 ? Math.random() * 1.6 + 1.1 : Math.random() * 0.9 + 0.25;
+    const a = 0.25 + Math.random() * 0.75;
+    g.fillStyle = `rgba(${235 + Math.random() * 20},${235 + Math.random() * 20},255,${a})`;
+    g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+  }
+
+  // Mond mit Halo
+  const mx = c.width * 0.42, my = c.height * 0.42, mr = 34;
+  const halo = g.createRadialGradient(mx, my, mr * 0.4, mx, my, mr * 2.1);
+  halo.addColorStop(0, 'rgba(190,205,255,0.22)');
+  halo.addColorStop(1, 'rgba(190,205,255,0)');
+  g.fillStyle = halo; g.beginPath(); g.arc(mx, my, mr * 2.1, 0, 7); g.fill();
+  g.fillStyle = '#e8edff'; g.beginPath(); g.arc(mx, my, mr, 0, 7); g.fill();
+  g.fillStyle = 'rgba(160,170,205,0.5)'; // Krater
+  for (const [dx, dy, r] of [[-10, -6, 7], [9, 8, 5], [12, -12, 4], [-3, 13, 4], [2, -2, 3]]) {
+    g.beginPath(); g.arc(mx + dx, my + dy, r, 0, 7); g.fill();
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(95, 48, 24),
+  new THREE.MeshBasicMaterial({ map: makeSkyTexture(), side: THREE.BackSide, fog: false })
+);
+sky.position.set(0, 0, -18);
+// Mond (bei u=0.5) in Blickrichtung der Spieler (-z) drehen
+sky.rotation.y = Math.PI / 2;
+scene.add(sky);
 
 scene.add(new THREE.HemisphereLight(0xbcd6ff, 0x30241a, 0.9));
 const sun = new THREE.DirectionalLight(0xfff2d9, 1.6);
@@ -122,16 +172,58 @@ const platBody = new CANNON.Body({
 });
 world.addBody(platBody);
 
+// Asphalt prozedural: Grundrauschen + Splitt-Körnung + feine Risse
+function makeAsphaltTexture() {
+  const S = 512;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const g = c.getContext('2d');
+  g.fillStyle = '#3c3f45'; g.fillRect(0, 0, S, S);
+
+  const img = g.getImageData(0, 0, S, S), d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const n = (Math.random() - 0.5) * 30;
+    d[i] += n; d[i + 1] += n; d[i + 2] += n + (Math.random() - 0.5) * 8;
+  }
+  g.putImageData(img, 0, 0);
+
+  for (let i = 0; i < 1600; i++) { // Splitt: helle Steinchen und dunkle Poren
+    const x = Math.random() * S, y = Math.random() * S, r = Math.random() * 1.7 + 0.4;
+    g.fillStyle = Math.random() < 0.55
+      ? `rgba(${150 + Math.random() * 70},${150 + Math.random() * 70},${155 + Math.random() * 70},${0.10 + Math.random() * 0.22})`
+      : `rgba(8,8,10,${0.15 + Math.random() * 0.3})`;
+    g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+  }
+
+  g.strokeStyle = 'rgba(5,5,6,0.35)'; g.lineWidth = 1; // feine Risse
+  for (let i = 0; i < 7; i++) {
+    let x = Math.random() * S, y = Math.random() * S;
+    g.beginPath(); g.moveTo(x, y);
+    for (let s = 0; s < 12; s++) { x += (Math.random() - 0.5) * 34; y += Math.random() * 20; g.lineTo(x, y); }
+    g.stroke();
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return tex;
+}
+const asphaltTex = makeAsphaltTexture();
+asphaltTex.repeat.set(3.5, 14); // Kachel ~4 m
 const platMesh = new THREE.Mesh(
   new THREE.BoxGeometry(platW, 1, platL),
-  new THREE.MeshStandardMaterial({ color: 0x2a3140, roughness: 0.9 })
+  new THREE.MeshStandardMaterial({
+    map: asphaltTex, roughness: 0.95,
+    bumpMap: asphaltTex, bumpScale: 0.02,
+  })
 );
 platMesh.position.copy(platBody.position);
 platMesh.receiveShadow = true;
 scene.add(platMesh);
 
 // Fahrbahn-Streifen für Geschwindigkeitsgefühl
-const stripeMat = new THREE.MeshStandardMaterial({ color: 0x3d4a63, roughness: 0.8 });
+const stripeMat = new THREE.MeshStandardMaterial({ color: 0xcfcfc2, roughness: 0.85, transparent: true, opacity: 0.75 });
 const stripes = [];
 for (let z = PLATFORM_Z_MIN; z < PLATFORM_Z_MAX; z += 4) {
   const s = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.02, 2), stripeMat);
@@ -453,7 +545,7 @@ function updatePowerups(dt) {
 
 // ---------- Kameras (Splitscreen) ----------
 function makeCam() {
-  const cam = new THREE.PerspectiveCamera(62, (innerWidth / 2) / innerHeight, 0.1, 120);
+  const cam = new THREE.PerspectiveCamera(62, (innerWidth / 2) / innerHeight, 0.1, 250);
   cam.position.set(0, 5, 12);
   return cam;
 }
