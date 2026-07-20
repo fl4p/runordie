@@ -154,6 +154,13 @@ Jede 5. Spawn-Welle ist eine Formation:
   zündet (0,3 s blinkende Lunte), dann schleudert die Explosion alle Spieler im
   Umkreis als Ragdoll weg — und zündet Nachbarblöcke als **Kettenreaktion**.
   Drüberspringen oder durchschlängeln!
+- **🏗 Abrissbirne:** Ein Galgen über der ganzen Bahn, an dem eine Stahlkugel
+  an der Kette quer über die Straße pendelt — Timing oder die Randspuren
+  nutzen. Treffer stunnen wie Hindernisse.
+- **🔨 Stampfer:** Zwei versetzte Pressblöcke schweben über je einer
+  Bahnhälfte (rote Warnmarkierung am Boden pulsiert) und rammen im Takt
+  herunter — wer daruntersteht, wird zerquetscht. Timing: durchlaufen, wenn
+  der Block gerade oben ist.
 - **🧱💥 TNT-Mauer:** Manchmal kommt eine ganze **Mauer aus TNT-Blöcken**
   (volle Breite, 2–3 Reihen hoch). Eine Berührung sprengt per Kettenreaktion
   ein Loch hinein — wer zu nah steht, fliegt mit. Alternativ per Doppelsprung

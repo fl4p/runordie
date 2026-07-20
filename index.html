@@ -1343,6 +1343,97 @@ function updateLasers(dt) {
   }
 }
 
+// ---------- Abrissbirne: Kugel pendelt an der Kette quer über die Bahn ----------
+const wreckMetalMat = new THREE.MeshStandardMaterial({ color: 0x4a4f58, roughness: 0.35, metalness: 0.8 });
+const wreckFrameMat = new THREE.MeshStandardMaterial({ color: 0x8a5a1e, roughness: 0.6, metalness: 0.3 });
+
+function spawnWrecker(speed) {
+  const pivotY = 6.6, L = 5.2;
+  const body = new CANNON.Body({
+    mass: 0, type: CANNON.Body.KINEMATIC,
+    shape: new CANNON.Sphere(1.0),
+    position: new CANNON.Vec3(0, pivotY - L, spawnFrontZ),
+    material: MAT_OBST,
+    collisionFilterGroup: GROUP.OBST,
+    collisionFilterMask: GROUP.P1 | GROUP.P2,
+  });
+  body.isObstacle = true;
+  body.velocity.set(0, 0, speed);
+  world.addBody(body);
+
+  const parent = new THREE.Group();
+  const crossbar = new THREE.Mesh(new THREE.BoxGeometry(PLATFORM_HALF_W * 2 + 2, 0.4, 0.4), wreckFrameMat);
+  crossbar.position.y = pivotY;
+  parent.add(crossbar);
+  for (const sx of [-1, 1]) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.4, pivotY, 0.4), wreckFrameMat);
+    post.position.set(sx * (PLATFORM_HALF_W + 0.8), pivotY / 2, 0);
+    parent.add(post);
+  }
+  const arm = new THREE.Group();
+  arm.position.y = pivotY;
+  const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, L, 6), wreckMetalMat);
+  chain.position.y = -L / 2;
+  arm.add(chain);
+  const ball = new THREE.Mesh(new THREE.SphereGeometry(1.0, 20, 14), wreckMetalMat);
+  ball.position.y = -L;
+  ball.castShadow = true;
+  arm.add(ball);
+  parent.add(arm);
+  scene.add(parent);
+
+  obstacles.push({
+    body, mesh: parent,
+    wreck: { arm, L, pivotY, angle: 0, amp: 0.95 + Math.random() * 0.25, omega: 1.4 + Math.random() * 0.4, phase: Math.random() * Math.PI * 2 },
+  });
+}
+
+// ---------- Stampfer: schwebende Pressblöcke rammen im Takt herunter ----------
+function spawnPiston(speed) {
+  for (const off of [{ x: -PLATFORM_HALF_W / 2, dz: 0 }, { x: PLATFORM_HALF_W / 2, dz: 6 }]) {
+    const body = new CANNON.Body({
+      mass: 0, type: CANNON.Body.KINEMATIC,
+      shape: new CANNON.Box(new CANNON.Vec3(3, 1, 1.1)),
+      position: new CANNON.Vec3(off.x, 4.2, spawnFrontZ + off.dz),
+      material: MAT_OBST,
+      collisionFilterGroup: GROUP.OBST,
+      collisionFilterMask: GROUP.P1 | GROUP.P2,
+    });
+    body.isObstacle = false; // eigener Crush-Effekt beim Rammen
+    body.velocity.set(0, 0, speed);
+    world.addBody(body);
+
+    const parent = new THREE.Group();
+    const block = new THREE.Mesh(new THREE.BoxGeometry(6, 2, 2.2), tiledMat(texHazard, 2.5, 1));
+    block.castShadow = true;
+    block.position.y = 4.2;
+    parent.add(block);
+    const marker = new THREE.Mesh(
+      new THREE.PlaneGeometry(6, 2.4),
+      new THREE.MeshBasicMaterial({ color: 0xff3030, transparent: true, opacity: 0.2, depthWrite: false })
+    );
+    marker.rotation.x = -Math.PI / 2;
+    marker.position.y = 0.055;
+    parent.add(marker);
+    scene.add(parent);
+
+    const o = { body, mesh: parent, piston: { t: Math.random() * 2.75, block, marker } };
+    body.addEventListener('collide', (e) => {
+      if (body.velocity.y > -5) return; // nur beim Rammen
+      const pl = players.find(p => p.parts.some(pt => pt.body === e.body));
+      if (!pl || !pl.alive || state !== 'playing' || perfNow() < pl.invulnUntil) return;
+      if (perfNow() < pl.hitCooldown) return;
+      pl.hitCooldown = perfNow() + 1.2;
+      if (pl.shield > 0) { pl.shield--; updatePowerupHud(); playDeflect(); return; }
+      enterRagdoll(pl, 1.1);
+      for (const { body: b } of pl.parts) b.velocity.y = -5;
+      spawnShockwave(pl.torso.position, { x: 0, y: 1, z: 0 }, true);
+      playPunchHit();
+    });
+    obstacles.push(o);
+  }
+}
+
 // ---------- Haie: springen zufällig von der Seite und zerquetschen ----------
 const sharks = [];
 const sharkBodyMat = new THREE.MeshStandardMaterial({ color: 0x5d6b7a, roughness: 0.4 });
@@ -1485,7 +1576,9 @@ function spawnBoomBlock(x, y, z, speed) {
 
 function spawnWave(speed) {
   const roll = Math.random();
-  if (roll < 0.18) {
+  if (roll < 0.12) { spawnWrecker(speed); return; }
+  if (roll < 0.24) { spawnPiston(speed); return; }
+  if (roll < 0.36) {
     // Feld aus explodierenden Blöcken: Berührung zündet, Explosion schleudert weg
     const n = 6 + Math.floor(Math.random() * 3);
     for (let i = 0; i < n; i++) {
@@ -1498,7 +1591,7 @@ function spawnWave(speed) {
     }
     return;
   }
-  if (roll < 0.32) {
+  if (roll < 0.48) {
     // TNT-MAUER: volle Breite, 2-3 Reihen hoch — eine Berührung sprengt
     // per Kettenreaktion ein Loch (oder gleich die halbe Mauer)
     const rows = 2 + (Math.random() < 0.5 ? 1 : 0);
@@ -1507,7 +1600,7 @@ function spawnWave(speed) {
         spawnBoomBlock(x, 0.45 + r * 0.92, spawnFrontZ, speed);
     return;
   }
-  if (roll < 0.46) {
+  if (roll < 0.6) {
     // TREPPE: kleiner Block -> größerer Block -> hohe Mauer.
     // Route: Stufe für Stufe hochspringen und über die Mauer.
     const steps = [
@@ -1526,7 +1619,7 @@ function spawnWave(speed) {
     }
     return;
   }
-  if (roll < 0.7) {
+  if (roll < 0.8) {
     // Mega-Wand über die volle Breite (5,2 m — ohne Pad unmöglich),
     // 9 m davor läuft ein Katapult-Pad. Rote Ziegel, und sie stunnt NICHT:
     // wer das Pad verpasst, wird nur geschoben und behält die Kontrolle.
@@ -2554,6 +2647,19 @@ function syncMeshes() {
       mesh.quaternion.copy(body.quaternion);
     }
   for (const o of obstacles) {
+    if (o.wreck) {
+      // Gestell steht bei x=0, nur der Arm rotiert
+      o.mesh.position.set(0, 0, o.body.position.z);
+      o.wreck.arm.rotation.z = o.wreck.angle;
+      continue;
+    }
+    if (o.piston) {
+      o.mesh.position.set(o.body.position.x, 0, o.body.position.z);
+      o.piston.block.position.y = o.body.position.y;
+      const hovering = (o.piston.t % 2.75) < 1.2;
+      o.piston.marker.material.opacity = hovering ? 0.22 + 0.16 * Math.sin(elapsed * 12) : 0.06;
+      continue;
+    }
     o.mesh.position.copy(o.body.position);
     if (o.spin) o.mesh.children[0].rotation.x += o.spin * 0.016;
     else o.mesh.quaternion.copy(o.body.quaternion);
@@ -2609,6 +2715,29 @@ function animate() {
       const lim = PLATFORM_HALF_W - 1.6;
       if (o.body.position.x > lim) o.body.position.x = lim;
       if (o.body.position.x < -lim) o.body.position.x = -lim;
+    }
+    if (o.wreck) {
+      // Pendel: Position exakt, Velocity für den Schubs
+      const W = o.wreck;
+      W.angle = W.amp * Math.sin(W.omega * elapsed + W.phase);
+      const thd = W.amp * W.omega * Math.cos(W.omega * elapsed + W.phase);
+      o.body.position.x = Math.sin(W.angle) * W.L;
+      o.body.position.y = W.pivotY - Math.cos(W.angle) * W.L;
+      o.body.velocity.x = Math.cos(W.angle) * W.L * thd;
+      o.body.velocity.y = Math.sin(W.angle) * W.L * thd;
+    }
+    if (o.piston) {
+      // Zyklus: schweben (1,2s) -> rammen (0,15s) -> liegen (0,6s) -> heben (0,8s)
+      const P = o.piston;
+      P.t += dt;
+      const cyc = P.t % 2.75;
+      let y, vy;
+      if (cyc < 1.2) { y = 4.2; vy = 0; }
+      else if (cyc < 1.35) { y = 4.2 - ((cyc - 1.2) / 0.15) * 3.2; vy = -21; }
+      else if (cyc < 1.95) { y = 1.0; vy = 0; }
+      else { y = 1.0 + ((cyc - 1.95) / 0.8) * 3.2; vy = 4; }
+      o.body.position.y = y;
+      o.body.velocity.y = vy;
     }
   }
 
