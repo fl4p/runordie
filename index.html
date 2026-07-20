@@ -924,11 +924,16 @@ function readPad(gp) {
       dl: btn(14), dr: btn(15), du: btn(12), dd: btn(13),
     };
   }
-  // Xbox-artiges HID-Pad ohne Standard-Mapping: Hut-Achse dekodieren
-  // (8 Richtungen von -1=oben im Uhrzeigersinn bis 1; losgelassen liegt außerhalb ±1)
+  // Xbox-artiges HID-Pad ohne Standard-Mapping: Hut-Achse dekodieren.
+  // 8 Rastpunkte: -1=oben, dann im Uhrzeigersinn in 2/7-Schritten bis 1=oben-links.
+  // WICHTIG: losgelassen melden Pads oft 0 oder ~1.29 — beides liegt NICHT auf
+  // einem Rastpunkt und muss als "kein Input" gelten (sonst Dauerlauf rückwärts).
+  let hatDir = -1;
   const hat = gp.axes[9];
-  const hatDir = (typeof hat === 'number' && hat >= -1.001 && hat <= 1.001)
-    ? Math.round((hat + 1) / (2 / 7)) : -1;
+  if (typeof hat === 'number') {
+    const k = (hat + 1) / (2 / 7);
+    if (Math.abs(k - Math.round(k)) < 0.15 && Math.round(k) >= 0 && Math.round(k) <= 7) hatDir = Math.round(k);
+  }
   return {
     ax, ay, any,
     jump: btn(0) || btn(1),        // A/B
