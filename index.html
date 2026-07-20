@@ -58,6 +58,7 @@
   Ragdoll-Splitscreen für 2 Spieler an einer Tastatur.<br>
   Hindernisse rollen auf euch zu und schieben euch von der Plattform — wer fällt, stirbt!<br>
   Vorsicht vor 💥-Blöcken: Berührung zündet sie — die Explosion schleudert dich weg (Kettenreaktion!).<br>
+  Später wandern rote Laser über die Bahn (drüberspringen!) — mit der Zeit werden es mehr.<br>
   Weiche aus, spring drüber, nutze den Doppelsprung.<br>
   Xbox-Controller: beliebigen Knopf drücken, dann mit Stick ◀ / ▶ die Seite wählen — A springt.<br>
   Power-ups einsammeln: 💎 grüner Kristall = 3 Hechtsprünge · 🥊 roter Kristall = 3 harte Schläge · 🛡 = blockt einen Treffer.<br>
@@ -579,6 +580,19 @@ function playBoom() { // Explosion: Rausch-Knall + tiefer Sub-Drop
   o.start(t); o.stop(t + 0.47);
 }
 
+function playZap() { // Laser-Treffer: schnarrender Abwärts-Zap
+  if (!audioCtx || audioCtx.state !== 'running') return;
+  const t = audioCtx.currentTime;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(1500, t);
+  o.frequency.exponentialRampToValueAtTime(160, t + 0.22);
+  g.gain.setValueAtTime(0.22, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.26);
+  o.connect(g).connect(audioCtx.destination);
+  o.start(t); o.stop(t + 0.28);
+}
+
 function playDeflect() { // Schild-Block: heller metallischer Pling
   if (!audioCtx || audioCtx.state !== 'running') return;
   const t = audioCtx.currentTime;
@@ -988,6 +1002,79 @@ function explodeBlock(o) {
   }
   const i = obstacles.indexOf(o);
   if (i >= 0) { removeObstacle(o); obstacles.splice(i, 1); }
+}
+
+// ---------- Laser: wandern langsam über die Straße, werden mit der Zeit mehr ----------
+const lasers = [];
+const laserGlowMat = new THREE.MeshBasicMaterial({ color: 0xff2545, transparent: true, opacity: 0.2, depthWrite: false });
+
+function spawnLaser() {
+  const grp = new THREE.Group();
+  const len = PLATFORM_HALF_W * 2;
+  const beam = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.035, 0.035, len, 8),
+    new THREE.MeshBasicMaterial({ color: 0xff2545 })
+  );
+  beam.rotation.z = Math.PI / 2;
+  const glow = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, len, 8), laserGlowMat);
+  glow.rotation.z = Math.PI / 2;
+  grp.add(beam, glow);
+  const postMat = new THREE.MeshStandardMaterial({ color: 0x39404c, roughness: 0.5, metalness: 0.6 });
+  for (const sx of [-1, 1]) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.34, 0.2), postMat);
+    post.position.set(sx * (PLATFORM_HALF_W - 0.1), 0, 0);
+    grp.add(post);
+  }
+  scene.add(grp);
+  lasers.push({
+    grp, z: SPAWN_Z,
+    y0: 0.7 + Math.random() * 0.7,
+    amp: Math.random() < 0.5 ? 0 : 0.25 + Math.random() * 0.35,
+    phase: Math.random() * Math.PI * 2,
+    speed: 2.0 + Math.random() * 1.2,
+  });
+}
+
+function clearLasers() {
+  for (const L of lasers) scene.remove(L.grp);
+  lasers.length = 0;
+}
+
+function updateLasers(dt) {
+  // Ab ~8 s der erste Laser, danach alle 12 s einer mehr (max. 5)
+  const target = elapsed < 8 ? 0 : Math.min(5, 1 + Math.floor((elapsed - 8) / 12));
+  if (lasers.length < target) spawnLaser();
+
+  laserGlowMat.opacity = 0.14 + 0.09 * Math.sin(elapsed * 9); // Flackern
+
+  for (let i = lasers.length - 1; i >= 0; i--) {
+    const L = lasers[i];
+    L.z += L.speed * dt;
+    if (L.z > DESPAWN_Z) { scene.remove(L.grp); lasers.splice(i, 1); continue; }
+    const y = L.y0 + (L.amp ? Math.sin(elapsed * 0.8 + L.phase) * L.amp : 0);
+    L.grp.position.set(0, y, L.z);
+
+    for (const p of players) {
+      if (!p.alive || perfNow() < p.hitCooldown) continue;
+      const t = p.torso.position;
+      if (Math.abs(t.z - L.z) < 0.3 && Math.abs(t.y - y) < 0.45 && Math.abs(t.x) < PLATFORM_HALF_W) {
+        p.hitCooldown = perfNow() + 1.2;
+        if (p.shield > 0) {
+          p.shield--;
+          updatePowerupHud();
+          playDeflect();
+          continue;
+        }
+        enterRagdoll(p, 0.8);
+        for (const { body } of p.parts) {
+          body.velocity.z += 4;
+          body.velocity.y += 5;
+        }
+        spawnShockwave({ x: t.x, y, z: L.z }, { x: 0, y: 0, z: 1 }, true);
+        playZap();
+      }
+    }
+  }
 }
 
 // ---------- Wellen: Sprung-Pad + Mega-Wand oder Tunnel ----------
@@ -1559,7 +1646,7 @@ function startGame() {
 }
 
 function resetRound() {
-  clearObstacles(); clearPowerups();
+  clearObstacles(); clearPowerups(); clearLasers();
   elapsed = 0; spawnTimer = 1.2; puTimer = 4; firstDeathAt = 0; spawnCount = 0;
   resetPlayer(player1); resetPlayer(player2);
   updatePowerupHud();
@@ -1700,6 +1787,7 @@ function animate() {
       puTimer = 5 + Math.random() * 5;
     }
     updatePowerups(dt);
+    updateLasers(dt);
     $('speed').textContent = `Tempo ${baseSpeed().toFixed(1)} m/s · ${elapsed.toFixed(0)} s`;
   }
 
@@ -1758,7 +1846,7 @@ addEventListener('resize', () => {
 animate();
 
 // Debug-Hook für automatisierte Tests
-window.__game = { players, obstacles, powerups, world, cams, fxRings, spawnPowerup, spawnWave, toggleRotMode,
+window.__game = { players, obstacles, powerups, world, cams, fxRings, lasers, spawnLaser, spawnPowerup, spawnWave, toggleRotMode,
   get state() { return state; }, get audio() { return audioCtx && audioCtx.state; },
   get rotMode() { return rotMode; }, get dayMode() { return dayMode; } };
 </script>

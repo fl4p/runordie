@@ -104,6 +104,13 @@ Jede 5. Spawn-Welle ist eine Formation:
   Umkreis als Ragdoll weg — und zündet Nachbarblöcke als **Kettenreaktion**.
   Drüberspringen oder durchschlängeln!
 
+## Laser
+
+Ab ca. 8 Sekunden wandern rote **Laserstrahlen** langsam über die Straße —
+volle Breite, in Sprunghöhe, manche pendeln zusätzlich auf und ab. Berührung
+zappt: Ragdoll + Schleuder (ein 🛡 blockt). Alle 12 Sekunden kommt ein
+weiterer Laser dazu (max. 5 gleichzeitig).
+
 Das Tempo steigt mit der Zeit. Treffer werfen die Figur kurz in den vollen
 Ragdoll-Modus (keine Kontrolle) — fällt sie dabei von der Plattform, war's das.
 
