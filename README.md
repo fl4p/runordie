@@ -87,6 +87,12 @@ Sonne und Schleierwolken; Licht und Nebel wechseln die Stimmung mit.
   Hindernis-Treffern und Lasern ab — sie schieben dann nur noch physisch.
   **TNT-Explosionen schleudern immer**, und Boxen/Grätsche zwischen Spielern
   bleiben aktiv.
+- **⚔️/🏃 Modus-Knopf:** **Duell** (Standard) spielt auf der festen Bahn.
+  **Rush** erlaubt das Vorstürmen: Läuft ein Spieler nach vorn, baut sich die
+  Straße automatisch segmentweise weiter aus (inkl. Spurlinien, Graffiti,
+  Gullis), die Hindernis-/Laser-Spawnlinie wandert mit dem Führenden mit, und
+  abgehängte Segmente hinter allen Spielern werden abgebaut. Himmel und Sonne
+  reisen mit.
 - Alle Optionen sowie Tag/Nacht (T) und Dreh-Modus (R) werden im Browser
   gespeichert.
 
