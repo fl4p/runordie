@@ -164,6 +164,12 @@ world.solver.iterations = 12;
 world.defaultContactMaterial.friction = 0.15;
 world.defaultContactMaterial.restitution = 0;
 
+// Spieler-gegen-Hindernis reibungsfrei: sonst hält die Reibung der bewegten
+// (kinematischen) Wände die Spieler fest, statt sie abrutschen zu lassen
+const MAT_PLAYER = new CANNON.Material('player');
+const MAT_OBST = new CANNON.Material('obstacle');
+world.addContactMaterial(new CANNON.ContactMaterial(MAT_PLAYER, MAT_OBST, { friction: 0, restitution: 0 }));
+
 // ---------- Plattform ----------
 const platW = PLATFORM_HALF_W * 2, platL = PLATFORM_Z_MAX - PLATFORM_Z_MIN;
 const platBody = new CANNON.Body({
@@ -361,6 +367,7 @@ function makePart(player, halfExtents, mass, offset, color, isSphere = false) {
     mass, shape,
     position: new CANNON.Vec3(player.spawn.x + offset.x, player.spawn.y + offset.y, player.spawn.z + offset.z),
     linearDamping: 0.12, angularDamping: 0.7,
+    material: MAT_PLAYER,
     collisionFilterGroup: player.group,
     collisionFilterMask: GROUP.GROUND | GROUP.OBST | player.otherGroup,
   });
@@ -596,6 +603,7 @@ function addObstBody(shape, pos, mat, geo) {
   const body = new CANNON.Body({
     mass: 0, type: CANNON.Body.KINEMATIC, shape,
     position: pos,
+    material: MAT_OBST,
     collisionFilterGroup: GROUP.OBST,
     collisionFilterMask: GROUP.P1 | GROUP.P2 | GROUP.GROUND,
   });
@@ -657,6 +665,7 @@ function spawnObstacle(speed) {
     const body = new CANNON.Body({
       mass: 0, type: CANNON.Body.KINEMATIC,
       position: new CANNON.Vec3(0, r, SPAWN_Z),
+      material: MAT_OBST,
       collisionFilterGroup: GROUP.OBST,
       collisionFilterMask: GROUP.P1 | GROUP.P2 | GROUP.GROUND,
     });
