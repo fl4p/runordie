@@ -80,7 +80,7 @@
   <b>T</b> = Tag/Nacht-Himmel umschalten.<br><br>
   <b>Taste 1 = Einzelspieler (Überlebenszeit) · beliebige andere Taste = 2 Spieler</b><br>
   <span style="opacity:.6">ESC = zurück ins Menü</span><br>
-  <button id="divebtn"></button></small></div>
+  <button id="divebtn"></button> <button id="stunbtn"></button></small></div>
 
 <script type="importmap">
 { "imports": {
@@ -758,7 +758,7 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
   // Treffer durch Hindernisse -> Schild oder kurzer Ragdoll-Stun.
   // An ALLEN Körperteilen, sonst zählen Bein-/Kopftreffer (niedrige Latten!) nicht.
   const onHit = (e) => {
-    if (!p.alive || state !== 'playing') return;
+    if (!p.alive || state !== 'playing' || noStun) return;
     if (e.body.isObstacle && perfNow() > p.hitCooldown) {
       // Landung auf einer Oberseite (Kontaktnormale ~vertikal) ist kein Treffer —
       // sonst wäre z.B. das Tunneldach nicht bespielbar
@@ -1042,10 +1042,10 @@ function explodeBlock(o) {
   fxRings.push({ mesh: fireball, t: 0, life: 0.4, grow: 5 });
   playBoom();
 
-  // Spieler im Radius wegschleudern
+  // Spieler im Radius wegschleudern (außer im No-Stun-Modus)
   const R = 3.6;
   for (const p of players) {
-    if (!p.alive) continue;
+    if (!p.alive || noStun) continue;
     const d = p.torso.position.vsub(pos);
     const dist = d.length();
     if (dist > R) continue;
@@ -1211,7 +1211,7 @@ function updateLasers(dt) {
     }
 
     for (const p of players) {
-      if (!p.alive || perfNow() < p.hitCooldown) continue;
+      if (!p.alive || noStun || perfNow() < p.hitCooldown) continue;
       const t = p.torso.position;
       if (Math.abs(t.z - L.z) < 0.3 && hitTest(t)) {
         p.hitCooldown = perfNow() + 1.2;
@@ -1983,6 +1983,7 @@ let state = 'menu'; // menu | playing | roundEnd
 let elapsed = 0, spawnTimer = 0, puTimer = 0, roundEndAt = 0, firstDeathAt = 0, spawnCount = 0;
 let soloMode = false;
 let diveAlways = localStorage.getItem('runordie_diveAlways') === '1';
+let noStun = localStorage.getItem('runordie_noStun') === '1';
 
 // ---------- Solo-Highscores (Top 8, mit Namen) ----------
 let soloScores = [];
@@ -2069,6 +2070,10 @@ function updateDiveBtn() {
   if (b) b.textContent = diveAlways
     ? '🤸 Hechtsprung: IMMER (klassisch) — 💎 gibt +1 Extra-Hechtsprung'
     : '🤸 Hechtsprung: nur mit 💎 (3 pro Kristall)';
+  const s = $('stunbtn');
+  if (s) s.textContent = noStun
+    ? '💫 Hindernis-Stun: AUS (nur Schieben)'
+    : '💫 Hindernis-Stun: AN';
 }
 
 // Klick-Delegation: überlebt das Neuaufbauen des Menü-HTML
@@ -2076,6 +2081,11 @@ document.addEventListener('click', (e) => {
   if (e.target?.id === 'divebtn') {
     diveAlways = !diveAlways;
     localStorage.setItem('runordie_diveAlways', diveAlways ? '1' : '0');
+    updateDiveBtn();
+  }
+  if (e.target?.id === 'stunbtn') {
+    noStun = !noStun;
+    localStorage.setItem('runordie_noStun', noStun ? '1' : '0');
     updateDiveBtn();
   }
   if (e.target?.id === 'scoreok') submitSoloScore();

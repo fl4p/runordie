@@ -79,6 +79,16 @@ die Blickwinkel werden dabei zurückgesetzt.
 Dämmerungshimmel (Schieferblau → Graumauve → warmes Sand) mit tiefstehender
 Sonne und Schleierwolken; Licht und Nebel wechseln die Stimmung mit.
 
+## Menü-Optionen
+
+- **🤸 Hechtsprung-Knopf:** klassisches Verhalten (Dive immer als Doppelsprung)
+  oder Kristall-Modus (Standard)
+- **💫 Hindernis-Stun-Knopf:** schaltet Knockback/Ragdoll-Stun **aller
+  Umwelt-Gefahren** (Hindernisse, Laser, Explosionen) ab — sie schieben dann
+  nur noch physisch. Boxen und Grätsche zwischen Spielern bleiben aktiv.
+- Alle Optionen sowie Tag/Nacht (T) und Dreh-Modus (R) werden im Browser
+  gespeichert.
+
 ## Hindernisse
 
 - **Latte** (rot): niedrige Querstange — drüberspringen
