@@ -38,6 +38,18 @@ und ein getrenntes Pad gibt seine Seite automatisch frei.
 Tastatur bleibt parallel aktiv. Hinweis: Der Browser meldet einen Controller
 erst nach dem ersten Tastendruck auf dem Pad.
 
+## Dreh-Modus (opt-in)
+
+Mit **R** umschaltbar. Die Figuren lassen sich dann frei drehen — Kamera,
+Laufrichtung und Box-Richtung folgen dem Blickwinkel:
+
+- **Spieler 1 (WASD):** Maus dreht (Klick ins Spiel aktiviert Pointer-Lock)
+- **Controller:** rechter Stick dreht
+
+Geboxt wird in Blickrichtung (der Gegner muss grob vor einem stehen), gelaufen
+relativ zur Figur (W = vorwärts in Blickrichtung). Nochmal **R** schaltet zurück;
+die Blickwinkel werden dabei zurückgesetzt.
+
 ## Hindernisse
 
 - **Latte** (rot): niedrige Querstange — drüberspringen

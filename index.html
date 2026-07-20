@@ -60,7 +60,8 @@
   Weiche aus, spring drüber, nutze den Doppelsprung.<br>
   Xbox-Controller: beliebigen Knopf drücken, dann mit Stick ◀ / ▶ die Seite wählen — A springt.<br>
   Power-ups einsammeln: ⭐ = Extra-Luftsprung (stapelbar) · 🛡 = blockt einen Treffer.<br>
-  Boxen (Gegner wegschubsen): Spieler 1 = E · Spieler 2 = − · Controller = X.<br><br>
+  Boxen (Gegner wegschubsen): Spieler 1 = E · Spieler 2 = − · Controller = X.<br>
+  <b>R</b> = Dreh-Modus (opt-in): Maus (Spieler 1) bzw. rechter Stick drehen Figur, Kamera und Box-Richtung.<br><br>
   <b>Beliebige Taste drücken zum Starten</b></small></div>
 
 <script type="importmap">
@@ -404,6 +405,7 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
     padX: 0, padZ: 0,
     airCharges: 0, shield: 0,
     punchCooldown: 0, arms: [],
+    yaw: 0, padYawRate: 0,
   };
 
   const v = (x, y, z) => new CANNON.Vec3(x, y, z);
@@ -491,14 +493,14 @@ function enterRagdoll(p, duration) {
 function exitRagdoll(p) {
   p.ragdoll = false;
   p.torso.fixedRotation = true;
-  p.torso.quaternion.set(0, 0, 0, 1);
+  p.torso.quaternion.setFromAxisAngle(CANNON.Vec3.UNIT_Y, p.yaw);
   p.torso.angularVelocity.set(0, 0, 0);
   p.torso.updateMassProperties();
 }
 
 function resetPlayer(p) {
   p.alive = true; p.jumps = 0; p.jumpLock = 0; p.hitCooldown = 0;
-  p.airCharges = 0; p.shield = 0; p.punchCooldown = 0;
+  p.airCharges = 0; p.shield = 0; p.punchCooldown = 0; p.yaw = 0;
   exitRagdoll(p);
   for (const { body, mesh } of p.parts) {
     body.position.set(p.spawn.x + body.initOffset.x, p.spawn.y + body.initOffset.y, p.spawn.z + body.initOffset.z);
@@ -837,10 +839,16 @@ const cams = [makeCam(), makeCam()];
 
 function updateCam(cam, p, dt) {
   const t = p.torso.position;
-  const tx = Math.max(-PLATFORM_HALF_W, Math.min(PLATFORM_HALF_W, t.x));
-  const target = new THREE.Vector3(tx * 0.7, Math.max(t.y, 0) + 4.4, t.z + 7.5);
   const k = 1 - Math.exp(-6 * dt);
-  cam.position.lerp(target, k);
+  if (rotMode) {
+    // Kamera hängt hinter der Blickrichtung der Figur
+    const f = playerForward(p);
+    cam.position.lerp(new THREE.Vector3(t.x - f.x * 7.5, Math.max(t.y, 0) + 4.4, t.z - f.z * 7.5), k);
+    cam.lookAt(t.x + f.x * 6, Math.max(t.y, -2) + 0.8, t.z + f.z * 6);
+    return;
+  }
+  const tx = Math.max(-PLATFORM_HALF_W, Math.min(PLATFORM_HALF_W, t.x));
+  cam.position.lerp(new THREE.Vector3(tx * 0.7, Math.max(t.y, 0) + 4.4, t.z + 7.5), k);
   cam.lookAt(tx * 0.7, Math.max(t.y, -2) + 0.8, t.z - 6);
 }
 
@@ -863,6 +871,7 @@ addEventListener('keydown', (e) => {
   if (!e.repeat) {
     if (e.code === 'KeyE') tryPunch(player1);
     if (e.key === '-' || e.code === 'NumpadSubtract') tryPunch(player2);
+    if (e.code === 'KeyR') toggleRotMode();
   }
 });
 addEventListener('pointerdown', ensureAudio);
@@ -919,7 +928,7 @@ function readPad(gp) {
   const any = gp.buttons.some((b) => b.pressed);
   if (gp.mapping === 'standard') {
     return {
-      ax, ay, any,
+      ax, ay, any, rx: gp.axes[2] || 0,
       jump: btn(0) || btn(1), punch: btn(2), back: btn(8),
       dl: btn(14), dr: btn(15), du: btn(12), dd: btn(13),
     };
@@ -935,7 +944,7 @@ function readPad(gp) {
     if (Math.abs(k - Math.round(k)) < 0.15 && Math.round(k) >= 0 && Math.round(k) <= 7) hatDir = Math.round(k);
   }
   return {
-    ax, ay, any,
+    ax, ay, any, rx: gp.axes[2] || 0, // rechter Stick X
     jump: btn(0) || btn(1),        // A/B
     punch: btn(3) || btn(2),       // X liegt meist auf 3
     back: btn(10),
@@ -954,8 +963,8 @@ function pollGamepads() {
   const present = new Set(pads.map((g) => g.index));
   for (const k of Object.keys(padAssign)) if (!present.has(+k)) { delete padAssign[k]; delete padEdge[k]; }
 
-  player1.padX = player1.padZ = 0;
-  player2.padX = player2.padZ = 0;
+  player1.padX = player1.padZ = player1.padYawRate = 0;
+  player2.padX = player2.padZ = player2.padYawRate = 0;
 
   for (const gp of pads) {
     const st = (padEdge[gp.index] ??= { jump: false, left: false, right: false, back: false, punch: false });
@@ -992,6 +1001,7 @@ function pollGamepads() {
     if (r.dr) p.padX = 1;
     if (r.du) p.padZ = -1;
     if (r.dd) p.padZ = 1;
+    p.padYawRate = Math.abs(r.rx) > DEAD ? r.rx : 0; // rechter Stick dreht (Dreh-Modus)
 
     // A oder B springen (Flankenerkennung für sauberen Doppelsprung)
     if (r.jump && !st.jump) tryJump(p);
@@ -1007,6 +1017,38 @@ function pollGamepads() {
   updatePadHud(pads);
 }
 
+// ---------- Dreh-Modus (opt-in mit Taste R) ----------
+// Figur, Kamera, Lauf- und Boxrichtung folgen dem Blickwinkel (yaw).
+// Spieler 1 dreht mit der Maus (Pointer-Lock per Klick), Pad-Spieler mit dem rechten Stick.
+let rotMode = false;
+
+function playerForward(p) {
+  return { x: -Math.sin(p.yaw), z: -Math.cos(p.yaw) };
+}
+
+function toggleRotMode() {
+  rotMode = !rotMode;
+  if (!rotMode) {
+    document.exitPointerLock?.();
+    for (const p of players) {
+      p.yaw = 0;
+      if (!p.ragdoll) p.torso.quaternion.set(0, 0, 0, 1);
+    }
+  }
+  flashPad(rotMode
+    ? '🔄 Dreh-Modus AN — Maus dreht Spieler 1, rechter Stick dreht Pad-Spieler'
+    : '🔄 Dreh-Modus AUS', '#e6edf3');
+}
+
+addEventListener('mousemove', (e) => {
+  if (!rotMode || state !== 'playing') return;
+  player1.yaw -= (e.movementX || 0) * 0.003;
+});
+renderer.domElement.addEventListener('click', () => {
+  ensureAudio();
+  if (rotMode) renderer.domElement.requestPointerLock?.();
+});
+
 // ---------- Boxen ----------
 const PUNCH_RANGE = 1.9, PUNCH_CD = 0.55;
 
@@ -1016,10 +1058,19 @@ function tryPunch(p) {
   p.punchCooldown = perfNow() + PUNCH_CD;
 
   const foe = p === player1 ? player2 : player1;
-  const dir = foe.torso.position.vsub(p.torso.position);
-  const dist = dir.length();
-  dir.y = 0;
-  if (dir.length() > 0.01) dir.normalize(); else dir.set(0, 0, -1);
+  const toFoe = foe.torso.position.vsub(p.torso.position);
+  const dist = toFoe.length();
+  toFoe.y = 0;
+  if (toFoe.length() > 0.01) toFoe.normalize(); else toFoe.set(0, 0, -1);
+
+  // Im Dreh-Modus wird in Blickrichtung geboxt, klassisch Richtung Gegner
+  let dir;
+  if (rotMode) {
+    const f = playerForward(p);
+    dir = new CANNON.Vec3(f.x, 0, f.z);
+  } else {
+    dir = toFoe;
+  }
 
   // Schlag-Animation: abwechselnd linker/rechter Arm schnellt als Jab nach vorn,
   // die Gelenk-Constraints reißen ihn zurück -> sichtbarer Boxhieb
@@ -1034,7 +1085,9 @@ function tryPunch(p) {
   p.torso.velocity.x += dir.x * 1.8;
   p.torso.velocity.z += dir.z * 1.8;
 
-  if (foe.alive && dist < PUNCH_RANGE) {
+  // Im Dreh-Modus muss der Gegner grob vor einem stehen
+  const inFront = !rotMode || (dir.x * toFoe.x + dir.z * toFoe.z) > 0.35;
+  if (foe.alive && dist < PUNCH_RANGE && inFront) {
     if (foe.shield > 0) {
       // Schild blockt auch Faustschläge
       foe.shield--;
@@ -1150,11 +1203,25 @@ function updatePlayer(p, dt) {
     if (p.ragdoll && perfNow() > p.stunUntil && t.position.y > 0) exitRagdoll(p);
 
     if (!p.ragdoll) {
+      // Dreh-Modus: Blickwinkel per rechtem Stick drehen und Torso ausrichten
+      if (rotMode) {
+        if (p.padYawRate) p.yaw -= p.padYawRate * 2.6 * dt;
+        p.torso.quaternion.setFromAxisAngle(CANNON.Vec3.UNIT_Y, p.yaw);
+      }
+
       // Bewegung (Tastatur + Gamepad, analog bleibt analog)
       let dx = (p.keys.r ? 1 : 0) - (p.keys.l ? 1 : 0) + p.padX;
       let dz = (p.keys.b ? 1 : 0) - (p.keys.f ? 1 : 0) + p.padZ;
       const len = Math.hypot(dx, dz);
       if (len > 1) { dx /= len; dz /= len; }
+
+      // Dreh-Modus: Eingabe vom Figuren- ins Welt-Koordinatensystem drehen
+      if (rotMode && (dx || dz)) {
+        const c = Math.cos(p.yaw), s = Math.sin(p.yaw);
+        const wx = dx * c + dz * s;
+        const wz = -dx * s + dz * c;
+        dx = wx; dz = wz;
+      }
       const k = p.grounded ? 0.28 : 0.07;
       t.velocity.x += (dx * RUN_SPEED - t.velocity.x) * k;
       t.velocity.z += (dz * RUN_SPEED - t.velocity.z) * k;
@@ -1263,8 +1330,9 @@ addEventListener('resize', () => {
 animate();
 
 // Debug-Hook für automatisierte Tests
-window.__game = { players, obstacles, powerups, world, spawnPowerup, spawnWave,
-  get state() { return state; }, get audio() { return audioCtx && audioCtx.state; } };
+window.__game = { players, obstacles, powerups, world, spawnPowerup, spawnWave, toggleRotMode,
+  get state() { return state; }, get audio() { return audioCtx && audioCtx.state; },
+  get rotMode() { return rotMode; } };
 </script>
 </body>
 </html>
