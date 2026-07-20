@@ -1343,6 +1343,109 @@ function updateLasers(dt) {
   }
 }
 
+// ---------- Haie: springen zufällig von der Seite und zerquetschen ----------
+const sharks = [];
+const sharkBodyMat = new THREE.MeshStandardMaterial({ color: 0x5d6b7a, roughness: 0.4 });
+const sharkBellyMat = new THREE.MeshStandardMaterial({ color: 0xdfe6ec, roughness: 0.5 });
+
+function makeSharkMesh() {
+  const grp = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 14), sharkBodyMat);
+  body.scale.set(2.1, 0.75, 0.6);
+  body.castShadow = true;
+  grp.add(body);
+  const belly = new THREE.Mesh(new THREE.SphereGeometry(0.96, 16, 12), sharkBellyMat);
+  belly.scale.set(1.95, 0.68, 0.55);
+  belly.position.y = -0.14;
+  grp.add(belly);
+  const dorsal = new THREE.Mesh(new THREE.ConeGeometry(0.4, 1.0, 4), sharkBodyMat);
+  dorsal.position.set(-0.2, 0.9, 0);
+  dorsal.rotation.z = -0.3;
+  grp.add(dorsal);
+  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1.2, 4), sharkBodyMat);
+  tail.position.set(-2.3, 0.3, 0);
+  tail.rotation.z = Math.PI / 2 + 0.5;
+  grp.add(tail);
+  const eyeMat = new THREE.MeshStandardMaterial({ color: 0x101216 });
+  for (const sz of [-1, 1]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 8), eyeMat);
+    eye.position.set(1.35, 0.18, sz * 0.42);
+    grp.add(eye);
+  }
+  return grp;
+}
+
+function spawnShark() {
+  const targets = players.filter(p => p.alive);
+  if (!targets.length) return;
+  const tp = targets[Math.floor(Math.random() * targets.length)].torso.position;
+  const side = Math.random() < 0.5 ? -1 : 1;
+  const startX = side * (PLATFORM_HALF_W + 7);
+  const body = new CANNON.Body({
+    mass: 0, type: CANNON.Body.KINEMATIC,
+    shape: new CANNON.Box(new CANNON.Vec3(1.6, 0.55, 0.5)),
+    position: new CANNON.Vec3(startX, -3, tp.z + (Math.random() - 0.5) * 4),
+    material: MAT_OBST,
+    collisionFilterGroup: GROUP.OBST,
+    collisionFilterMask: GROUP.P1 | GROUP.P2,
+  });
+  // Hoher Bogen (Apex ~2 m über der Bahn); Abwärtsast zielt auf die Spieler-x
+  const vy = 16 + Math.random() * 2;
+  const tHit = 0.94; // Zeit bis zurück auf Spielerhöhe
+  const vx = Math.max(6, Math.min(18, Math.abs(tp.x - startX) / tHit)) * Math.sign(tp.x - startX || -side);
+  body.velocity.set(vx, vy, 0);
+  world.addBody(body);
+  const mesh = makeSharkMesh();
+  scene.add(mesh);
+
+  body.addEventListener('collide', (e) => {
+    const pl = players.find(p => p.parts.some(pt => pt.body === e.body));
+    if (!pl || !pl.alive || state !== 'playing' || perfNow() < pl.invulnUntil) return;
+    if (perfNow() < pl.hitCooldown) return;
+    pl.hitCooldown = perfNow() + 1.2;
+    if (pl.shield > 0) { pl.shield--; updatePowerupHud(); playDeflect(); return; }
+    // Zerquetscht: schwerer Stun + nach unten gedrückt
+    enterRagdoll(pl, 1.2);
+    for (const { body: b } of pl.parts) {
+      b.velocity.x += body.velocity.x * 0.6;
+      b.velocity.y = -6;
+    }
+    spawnShockwave(pl.torso.position, { x: 0, y: 1, z: 0 }, true);
+    playPunchHit();
+  });
+
+  sharks.push({ body, mesh });
+  playPunchMiss(); // Absprung-Whoosh
+  spawnShockwave({ x: body.position.x, y: 0.3, z: body.position.z }, { x: side, y: 0.4, z: 0 }, false);
+}
+
+function updateSharks(dt) {
+  for (let i = sharks.length - 1; i >= 0; i--) {
+    const S = sharks[i];
+    S.body.velocity.y += GRAVITY * dt; // Ballistik von Hand (kinematisch)
+    S.mesh.position.copy(S.body.position);
+    const v = S.body.velocity;
+    const pitch = Math.atan2(v.y, Math.abs(v.x));
+    S.mesh.rotation.set(0, v.x < 0 ? Math.PI : 0, v.x < 0 ? -pitch : pitch);
+    // Über der Bahn abtauchen (Asphalt = Ozean) oder seitlich in die Tiefe
+    const overRoad = Math.abs(S.body.position.x) < PLATFORM_HALF_W;
+    if ((v.y < 0 && overRoad && S.body.position.y < 0.2) || S.body.position.y < -9) {
+      if (overRoad) {
+        spawnShockwave({ x: S.body.position.x, y: 0.3, z: S.body.position.z }, { x: 0, y: 1, z: 0 }, false);
+        playPunchMiss();
+      }
+      world.removeBody(S.body);
+      scene.remove(S.mesh);
+      sharks.splice(i, 1);
+    }
+  }
+}
+
+function clearSharks() {
+  for (const S of sharks) { world.removeBody(S.body); scene.remove(S.mesh); }
+  sharks.length = 0;
+}
+
 // ---------- Wellen: Sprung-Pad + Mega-Wand oder Tunnel ----------
 const LAUNCH_V = 18;
 const texPad = canvasTex(128, 64, (g, w, h) => { // grüne Chevrons
@@ -2102,7 +2205,7 @@ function doDive(p) {
 
 // ---------- Spiel-Logik ----------
 let state = 'menu'; // menu | playing | roundEnd
-let elapsed = 0, spawnTimer = 0, puTimer = 0, roundEndAt = 0, firstDeathAt = 0, spawnCount = 0;
+let elapsed = 0, spawnTimer = 0, puTimer = 0, sharkTimer = 6, roundEndAt = 0, firstDeathAt = 0, spawnCount = 0;
 let soloMode = false;
 let diveAlways = localStorage.getItem('runordie_diveAlways') === '1';
 let noStun = localStorage.getItem('runordie_noStun') === '1';
@@ -2237,8 +2340,8 @@ function submitSoloScore() {
 }
 
 function resetRound() {
-  clearObstacles(); clearPowerups(); clearLasers(); clearRushTiles();
-  elapsed = 0; spawnTimer = 1.2; puTimer = 4; firstDeathAt = 0; spawnCount = 0;
+  clearObstacles(); clearPowerups(); clearLasers(); clearRushTiles(); clearSharks();
+  elapsed = 0; spawnTimer = 1.2; puTimer = 4; sharkTimer = 6; firstDeathAt = 0; spawnCount = 0;
   resetPlayer(player1); resetPlayer(player2);
   if (soloMode) parkPlayer2(); else unparkPlayer2();
   updatePowerupHud();
@@ -2486,6 +2589,14 @@ function animate() {
     updatePowerups(dt);
     updateLasers(dt);
     updateRush();
+    // Haie: ab 15 s zufällige Sprünge
+    if (elapsed > 15) {
+      sharkTimer -= dt;
+      if (sharkTimer <= 0) {
+        spawnShark();
+        sharkTimer = 9 + Math.random() * 9;
+      }
+    }
     $('speed').textContent = `Tempo ${baseSpeed().toFixed(1)} m/s · ${elapsed.toFixed(0)} s`;
     if (soloMode) { const st = $('solotime'); if (st) st.textContent = Math.floor(elapsed); }
   }
@@ -2506,6 +2617,8 @@ function animate() {
     const o = obstacles[i];
     if (o.boom?.armed && perfNow() > o.boom.fuseAt) explodeBlock(o);
   }
+
+  if (state !== 'menu') updateSharks(dt);
 
   if (state !== 'menu') world.step(1 / 60, dt, 3);
 
@@ -2562,7 +2675,7 @@ if (localStorage.getItem('runordie_rotMode') === '1') toggleRotMode();
 animate();
 
 // Debug-Hook für automatisierte Tests
-window.__game = { players, obstacles, powerups, world, cams, fxRings, lasers, spawnLaser, spawnPowerup, spawnWave, toggleRotMode,
+window.__game = { players, obstacles, powerups, world, cams, fxRings, lasers, sharks, spawnShark, spawnLaser, spawnPowerup, spawnWave, toggleRotMode,
   get state() { return state; }, get audio() { return audioCtx && audioCtx.state; },
   get rotMode() { return rotMode; }, get dayMode() { return dayMode; }, get soloMode() { return soloMode; } };
 </script>

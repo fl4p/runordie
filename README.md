@@ -159,6 +159,14 @@ Jede 5. Spawn-Welle ist eine Formation:
   ein Loch hinein — wer zu nah steht, fliegt mit. Alternativ per Doppelsprung
   oben drüber.
 
+## Haie 🦈
+
+Ab 15 Sekunden springen alle 9–18 Sekunden **Haie** aus dem Asphalt-Ozean
+neben der Bahn: hoher Bogen von der Seite, der Abwärtsast zielt auf einen
+zufälligen Spieler. Wer erwischt wird, wird **zerquetscht** (schwerer Stun,
+nach unten gedrückt — ⭐/🛡 schützen). Danach taucht der Hai mit einem Splash
+wieder in die Straße ab.
+
 ## Laser
 
 Ab ca. 8 Sekunden wandern rote **Laserstrahlen** langsam über die Straße.
