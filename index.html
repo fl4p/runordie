@@ -3799,7 +3799,12 @@ function resetRound() {
   }
 }
 
-function baseSpeed() { return Math.min(16, 7 + elapsed * 0.10); }
+// Sanftere Endgame-Kurve (früher 0.10/s, Kappe 16): ab ~40 s erreichte die
+// Spawn-Dichte ihr Minimum, während das Tempo weiter stieg — Hindernisse kamen
+// im 9-m-Abstand, dem Ausweichen des einen folgte zwangsläufig das nächste.
+// Kaum jemand (Bot wie Mensch) überlebte die 45-s-Marke. Achtung: alte
+// Solo-Highscores sind mit der neuen Kurve nicht mehr direkt vergleichbar.
+function baseSpeed() { return Math.min(15, 7 + elapsed * 0.075); }
 
 function killPlayer(p) {
   if (!p.alive) return;
@@ -4109,10 +4114,10 @@ function animate() {
         // Jede 5. Welle ist eine Formation (Sprung-Pad + Mega-Wand oder Tunnel)
         if (++spawnCount % 5 === 0) {
           netCall('spawnWave', baseSpeed());
-          spawnTimer = Math.max(1.6, 3.2 - elapsed * 0.035); // Formation braucht mehr Abstand
+          spawnTimer = Math.max(1.9, 3.2 - elapsed * 0.035); // Formation braucht mehr Abstand
         } else {
           netCall('spawnObstacle', baseSpeed(), Math.max(0, 1 - elapsed / 30) * 2);
-          spawnTimer = Math.max(0.8, 2.2 - elapsed * 0.035);
+          spawnTimer = Math.max(1.05, 2.2 - elapsed * 0.035);
         }
       }
       puTimer -= dt;
