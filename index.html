@@ -199,7 +199,12 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// PCF (not PCFSoft): the soft-penumbra multi-tap filter costs ~10× more per fragment
+// for a barely-visible quality gain in a fast-scrolling scene. Keeps full 2048² resolution.
+renderer.shadowMap.type = THREE.PCFShadowMap;
+// Shadow map is regenerated only once per frame (see animate()), not per render() —
+// otherwise splitscreen recomputes the identical 2048² depth pass twice every frame.
+renderer.shadowMap.autoUpdate = false;
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -3246,6 +3251,8 @@ function animate() {
   if (!soloMode) updateCam(cams[1], player2, dt);
 
   const w = innerWidth, h = innerHeight, hw = Math.floor(w / 2);
+  // Refresh the shadow map once for this frame; both splitscreen eyes then reuse it.
+  renderer.shadowMap.needsUpdate = true;
   if (soloMode) {
     // Einzelspieler: ein Vollbild-Viewport
     renderer.setScissorTest(false);
