@@ -77,6 +77,15 @@
     background: #1a2029; color: #e6edf3; cursor: pointer;
   }
   #msg button:hover { background: #242d39; }
+  #msg .senslabel {
+    pointer-events: auto; display: inline-flex; align-items: center; gap: 10px;
+    font-size: 15px; padding: 8px 18px; border-radius: 8px;
+    border: 1px solid #30363d; background: #1a2029; color: #e6edf3;
+  }
+  #msg .senslabel input[type=range] {
+    width: 130px; padding: 0; border: none; background: transparent;
+    text-transform: none; accent-color: #4da3ff;
+  }
   #msg input {
     pointer-events: auto; font: inherit; font-size: 16px; width: 180px;
     padding: 7px 12px; border-radius: 8px; border: 1px solid #30363d;
@@ -179,7 +188,7 @@
     <b>R</b> = Dreh-Modus: Maus (Spieler 1) bzw. rechter Stick drehen Figur, Kamera und Box-Richtung.
   </details>
   <span class="menurow settings">
-    <button id="divebtn"></button><button id="stunbtn"></button><button id="punchbtn"></button><button id="rushbtn"></button><button id="snowbtn"></button><button id="botdiffbtn"></button><button id="fpscapbtn"></button><button id="gpuprofbtn">🔬 GPU-Profil erstellen</button>
+    <button id="divebtn"></button><button id="stunbtn"></button><button id="punchbtn"></button><button id="rushbtn"></button><button id="snowbtn"></button><button id="botdiffbtn"></button><button id="fpscapbtn"></button><label class="senslabel" for="sensrange">🎮 Stick-Empfindlichkeit <input type="range" id="sensrange" min="0.5" max="2" step="0.05" value="1"><span id="sensval">1×</span></label><button id="gpuprofbtn">🔬 GPU-Profil erstellen</button>
   </span>
   <span class="mkeys">Tastatur: 1 = Einzelspieler · 2 = Gegen Bot · beliebige Taste = 2 Spieler · ESC = Menü</span></small></div>
 
@@ -2609,13 +2618,13 @@ function pollGamepads() {
     // Linker Stick (analog) + D-Pad — online steuert jedes Pad die eigene Figur
     const p = netRole ? myP() : players[side];
     const DEAD = 0.25;
-    p.padX = Math.abs(r.ax) > DEAD ? r.ax : 0;
-    p.padZ = Math.abs(r.ay) > DEAD ? r.ay : 0;
+    p.padX = Math.abs(r.ax) > DEAD ? Math.max(-1, Math.min(1, r.ax * padSens)) : 0;
+    p.padZ = Math.abs(r.ay) > DEAD ? Math.max(-1, Math.min(1, r.ay * padSens)) : 0;
     if (r.dl) p.padX = -1;
     if (r.dr) p.padX = 1;
     if (r.du) p.padZ = -1;
     if (r.dd) p.padZ = 1;
-    p.padYawRate = Math.abs(r.rx) > DEAD ? r.rx : 0; // rechter Stick dreht (Dreh-Modus)
+    p.padYawRate = Math.abs(r.rx) > DEAD ? Math.max(-1, Math.min(1, r.rx * padSens)) : 0; // rechter Stick dreht (Dreh-Modus)
 
     // A springen (Flankenerkennung für sauberen Doppelsprung)
     if (r.jump && !st.jump) tryJump(p);
@@ -3481,6 +3490,9 @@ let noStun = localStorage.getItem('runordie_noStun') === '1';
 // Stun-Box-Modus: Schläge haben doppelten Cooldown, werfen den Getroffenen
 // dafür deutlich länger um (echter Stun statt kurzem Umkippen)
 let punchStun = localStorage.getItem('runordie_punchStun') === '1';
+// Stick-Empfindlichkeit fürs Gamepad (0.5–2, Regler im Menü): skaliert die
+// Analog-Achsen beider Sticks, D-Pad bleibt digital ±1
+let padSens = Math.min(2, Math.max(0.5, parseFloat(localStorage.getItem('runordie_padSens')) || 1));
 
 // ---------- Solo-Highscores (Top 8, mit Namen) ----------
 let soloScores = [];
@@ -3625,7 +3637,24 @@ function updateDiveBtn() {
   if (bb) bb.textContent = `🤖 Bot-Stärke: ${BOT_LABELS[botDiff]}`;
   const fc = $('fpscapbtn');
   if (fc) fc.textContent = fpsCap ? '🔋 FPS-Limit: 60 (spart Akku)' : '⚡ FPS-Limit: AUS (volle Bildrate)';
+  syncSensUi();
 }
+
+// Regler + Anzeige an padSens angleichen — nach jedem Menü-Restore nötig,
+// der MENU_HTML-Snapshot enthält nur den Startwert
+function syncSensUi() {
+  const sr = $('sensrange'), v = $('sensval');
+  if (sr) sr.value = String(padSens);
+  if (v) v.textContent = `${padSens.toFixed(2).replace(/\.?0+$/, '')}×`;
+}
+// Input-Delegation analog zur Klick-Delegation darunter: überlebt Menü-Restores
+document.addEventListener('input', (e) => {
+  if (e.target?.id !== 'sensrange') return;
+  padSens = parseFloat(e.target.value);
+  localStorage.setItem('runordie_padSens', String(padSens));
+  const v = $('sensval');
+  if (v) v.textContent = `${padSens.toFixed(2).replace(/\.?0+$/, '')}×`;
+});
 
 // Klick-Delegation: überlebt das Neuaufbauen des Menü-HTML.
 // closest('button') statt e.target: Klicks können auf Kind-Spans landen.
