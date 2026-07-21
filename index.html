@@ -141,6 +141,7 @@
   <span class="tagline">Ragdoll-Runner: Hindernisse rollen an — weich aus, spring drüber, überleb!</span>
   <span class="menurow">
     <button id="startsolo" class="bigbtn solo">▶ EINZELSPIELER<span>Vollbild · Überlebenszeit · Highscores</span></button>
+    <button id="startbot" class="bigbtn solo">🤖 GEGEN BOT<span>Vollbild-Duell gegen den Computer</span></button>
     <button id="startduo" class="bigbtn duo">▶▶ 2 SPIELER<span>Splitscreen-Duell an einer Tastatur</span></button>
   </span>
   <span class="menucols">
@@ -168,9 +169,9 @@
     <b>R</b> = Dreh-Modus: Maus (Spieler 1) bzw. rechter Stick drehen Figur, Kamera und Box-Richtung.
   </details>
   <span class="menurow settings">
-    <button id="divebtn"></button><button id="stunbtn"></button><button id="rushbtn"></button><button id="skybtn"></button><button id="snowbtn"></button><button id="gpuprofbtn">🔬 GPU-Profil erstellen</button>
+    <button id="divebtn"></button><button id="stunbtn"></button><button id="rushbtn"></button><button id="skybtn"></button><button id="snowbtn"></button><button id="botdiffbtn"></button><button id="fpscapbtn"></button><button id="gpuprofbtn">🔬 GPU-Profil erstellen</button>
   </span>
-  <span class="mkeys">Tastatur: 1 = Einzelspieler · beliebige Taste = 2 Spieler · ESC = Menü · T = Tag/Nacht</span></small></div>
+  <span class="mkeys">Tastatur: 1 = Einzelspieler · 2 = Gegen Bot · beliebige Taste = 2 Spieler · ESC = Menü · T = Tag/Nacht</span></small></div>
 
 <script type="importmap">
 { "imports": {
@@ -2207,7 +2208,11 @@ addEventListener('keydown', (e) => {
   // Einstellungs-Tasten funktionieren auch im Menü (starten das Spiel nicht)
   if (!e.repeat && e.code === 'KeyR') { toggleRotMode(); return; }
   if (!e.repeat && e.code === 'KeyT') { toggleDaySky(); return; }
-  if (state === 'menu') { startGame(e.code === 'Digit1' || e.code === 'Numpad1'); return; }
+  if (state === 'menu') {
+    if (e.code === 'Digit2' || e.code === 'Numpad2') startGame(false, true);
+    else startGame(e.code === 'Digit1' || e.code === 'Numpad1');
+    return;
+  }
   const m = KEYMAP[e.code];
   if (m) m[0].keys[m[1]] = true;
   const jp = JUMPKEY[e.code];
@@ -2721,10 +2726,360 @@ function doDive(p) {
   playPunchMiss(); // Whoosh
 }
 
+// ---------- Bot-Spieler ----------
+// Der Bot steuert eine Figur über die NORMALE Eingabe-Pipeline: er liest nur den
+// Weltzustand (obstacles/lasers/sharks/powerups) und schreibt padX/padZ bzw. ruft
+// tryJump/tryPunch/tryTackle auf — exakt wie ein Mensch am Stick. Dadurch testet
+// er dieselben Codepfade wie echtes Gameplay (VS-BOT-Modus und Soak-Tests).
+const BOT_DIFFS = {
+  easy:   { react: 0.32, jitter: 0.20, gain: 1.2, aimErr: 1.2,  mistakeP: 0.15, horizon: 0.9, aggro: 0.20, tackleP: 0.05, puWant: 0.30, edgeMargin: 1.0 },
+  medium: { react: 0.18, jitter: 0.10, gain: 2.0, aimErr: 0.5,  mistakeP: 0.05, horizon: 1.2, aggro: 0.50, tackleP: 0.12, puWant: 0.60, edgeMargin: 1.5 },
+  hard:   { react: 0.10, jitter: 0.04, gain: 3.0, aimErr: 0.15, mistakeP: 0.01, horizon: 1.6, aggro: 0.85, tackleP: 0.25, puWant: 0.90, edgeMargin: 2.2 },
+};
+const BOT_LABELS = { easy: 'LEICHT', medium: 'MITTEL', hard: 'SCHWER' };
+
+const botCtl = [null, null]; // Controller je Spieler-Index, null = Mensch
+let botMode = false;         // Menü-Modus "GEGEN BOT": Bot auf Spieler 2, Vollbild auf Spieler 1
+let botDiff = localStorage.getItem('runordie_botDiff');
+if (!BOT_DIFFS[botDiff]) botDiff = 'medium';
+
+function makeBot(diffName, sticky = false) {
+  return {
+    d: BOT_DIFFS[diffName] || BOT_DIFFS.medium, diffName, sticky,
+    nextThink: 0, targetX: 0, targetZ: 2.5, plan: null,
+    noiseX: 0, noiseZ: 0, blunderUntil: 0, tnt: null, hangJumpAt: 0,
+  };
+}
+
+function botReset(b) { b.nextThink = 0; b.plan = null; b.tnt = null; b.blunderUntil = 0; }
+
+// Breiteste freie x-Lücke zwischen den Hinderniskörpern nahe zRef — Mitte der
+// besten Lücke (breit UND nah am Bot) oder null, wenn alles zu ist (TNT-Mauer)
+function botFindGapX(p, zRef) {
+  const spans = [];
+  for (const o of obstacles) {
+    const b = o.body, he = b.shapes[0]?.halfExtents;
+    if (!he || b.isJumpPad || o.sweep || o.wreck || o.piston || o.spin) continue;
+    if (Math.abs(b.position.z - zRef) > 1.6) continue;
+    if (b.position.y - he.y > 1.9) continue; // Tunneldach: drunter durch
+    const pad = o.boom ? 1.3 : 0.35;         // um TNT-Blöcke großzügig herum
+    spans.push([b.position.x - he.x - pad, b.position.x + he.x + pad]);
+  }
+  spans.sort((a, b) => a[0] - b[0]);
+  let x = -PLATFORM_HALF_W + 0.4, bestX = null, bestScore = -1;
+  const consider = (a, b) => {
+    if (b - a < 1.1) return;
+    const cx = (a + b) / 2;
+    const score = (b - a) - Math.abs(cx - p.torso.position.x) * 0.25;
+    if (score > bestScore) { bestScore = score; bestX = cx; }
+  };
+  for (const [a, b] of spans) { consider(x, Math.min(a, PLATFORM_HALF_W)); x = Math.max(x, b); }
+  consider(x, PLATFORM_HALF_W - 0.4);
+  return bestX;
+}
+
+// Akuteste Gefahr im Zeithorizont des Bots (kleinste Zeit bis zum Eintreffen)
+function botScanThreat(p, bot) {
+  const t = p.torso;
+  let best = null;
+  const add = (kind, tta, o) => { if (!best || tta < best.tta) best = { kind, tta, o }; };
+
+  // Haie fliegen nur ~1 s — auf gleicher z-Höhe immer akut
+  for (const S of sharks) {
+    if (Math.abs(t.position.z - S.body.position.z) < 2.0 && S.body.position.y > -1) add('shark', 0.15, S);
+  }
+
+  for (const o of obstacles) {
+    const b = o.body;
+    const closure = b.velocity.z - t.velocity.z;
+    if (closure < 0.3) continue;
+    const tta = (t.position.z - b.position.z) / closure;
+    if (tta < -0.2) continue;
+    // Katapult-Pad überstimmt die Mega-Wand dahinter: einfach drüberlaufen
+    if (b.isJumpPad) { if (tta < 1.6) add('pad', tta - 0.01, o); continue; }
+    if (tta > bot.d.horizon) continue;
+    if (o.wreck) { if (Math.abs(t.position.x) < 5.2) add('wreck', tta, o); continue; }
+    if (o.piston) { if (Math.abs(t.position.x - b.position.x) < 3.6) add('piston', tta, o); continue; }
+    if (o.sweep) { add('sweep', tta, o); continue; }
+    if (o.spin) { add('roller', tta, o); continue; }
+    const he = b.shapes[0]?.halfExtents;
+    if (!he) continue;
+    if (b.position.y - he.y > 1.9) continue; // Tunneldach
+    if (o.boom) { if (Math.abs(t.position.x - b.position.x) < he.x + 1.5) add('boom', tta, o); continue; }
+    if (Math.abs(t.position.x - b.position.x) < he.x + 0.7) add('box', tta, o);
+  }
+
+  for (const L of lasers) {
+    const closure = L.speed - t.velocity.z;
+    if (closure < 0.3) continue;
+    const tta = (t.position.z - L.z) / closure;
+    if (tta < -0.2 || tta > bot.d.horizon) continue;
+    add('laser', tta, L);
+  }
+  return best;
+}
+
+function botHandleThreat(p, bot, th) {
+  const t = p.torso, d = bot.d;
+  bot.plan = null;
+  switch (th.kind) {
+    case 'pad': // Pad katapultiert von selbst beim Drüberlaufen
+      bot.targetX = th.o.body.position.x;
+      bot.targetZ = t.position.z;
+      return;
+    case 'shark': {
+      const sz = th.o.body.position.z;
+      bot.targetZ = sz + (t.position.z >= sz ? 2.6 : -2.6);
+      bot.targetX = t.position.x;
+      return;
+    }
+    case 'wreck': // Kugel pendelt bis |x|≈4.9 — sicherer Korridor an der Seite
+      bot.targetX = Math.sign(t.position.x || 1) * 6.3;
+      bot.targetZ = t.position.z;
+      return;
+    case 'piston': // Pressblöcke bei x=±4.5 — die Mittelgasse ist frei
+      bot.targetX = 0;
+      bot.targetZ = t.position.z;
+      return;
+    case 'sweep': { // dort kreuzen, wo der Schieber beim Eintreffen NICHT ist
+      const s = th.o.sweep;
+      const px = s.amp * Math.sin(s.omega * (elapsed + th.tta) + s.phase);
+      bot.targetX = px >= 0 ? -5 : 5;
+      bot.targetZ = t.position.z;
+      return;
+    }
+    case 'roller':
+      bot.targetX = t.position.x;
+      bot.targetZ = t.position.z;
+      bot.plan = { type: 'jump', at: perfNow() + Math.max(0, th.tta - 0.30) };
+      return;
+    case 'laser': {
+      const L = th.o;
+      bot.targetZ = t.position.z;
+      if (L.type === 'line') {
+        bot.targetX = t.position.x;
+        bot.plan = { type: 'jump', at: perfNow() + Math.max(0, th.tta - 0.25) };
+      } else if (L.type === 'spin') { // Spitzen reichen bis |x|=3.5
+        bot.targetX = Math.sign(t.position.x || 1) * 5.2;
+      } else { // wiper: nahe am Drehpunkt der Gegenseite vorbei
+        bot.targetX = -L.side * 6.5;
+      }
+      return;
+    }
+    case 'boom': {
+      const z0 = th.o.body.position.z;
+      const row = obstacles.filter((o) => o.boom && Math.abs(o.body.position.z - z0) < 1.2);
+      if (row.length >= 8) { bot.tnt = { phase: 'approach', z0, until: 0 }; botTnt(p, bot); return; }
+      const gap = botFindGapX(p, z0);
+      bot.targetX = gap ?? Math.sign(t.position.x || 1) * (PLATFORM_HALF_W - d.edgeMargin);
+      bot.targetZ = t.position.z;
+      return;
+    }
+    case 'box': {
+      const b = th.o.body, he = b.shapes[0].halfExtents;
+      if (he.x < PLATFORM_HALF_W - 0.6) {
+        const gap = botFindGapX(p, b.position.z);
+        if (gap !== null) { bot.targetX = gap; bot.targetZ = t.position.z; return; }
+      }
+      // Volle Breite oder keine Lücke: springen, hohe Wände mit Doppelsprung
+      bot.targetX = t.position.x;
+      bot.targetZ = t.position.z;
+      const need = (b.position.y + he.y) - (t.position.y - RIDE_HEIGHT);
+      bot.plan = { type: 'jump', at: perfNow() + Math.max(0, th.tta - (need > 1.6 ? 0.42 : 0.30)), dbl: need > 1.9 };
+      return;
+    }
+  }
+}
+
+// TNT-Mauer: anlaufen und zünden, vor der Explosion zurückweichen, dann durchs Loch
+function botTnt(p, bot) {
+  const t = p.torso, T = bot.tnt;
+  const row = obstacles.filter((o) => o.boom && Math.abs(o.body.position.z - T.z0) < 1.5);
+  if (!row.length || T.z0 > t.position.z + 1) { bot.tnt = null; return; }
+  T.z0 = row.reduce((s, o) => s + o.body.position.z, 0) / row.length; // Mauer driftet mit
+  bot.plan = null;
+  if (row.some((o) => o.boom.armed)) { T.phase = 'retreat'; T.until = perfNow() + 1.0; }
+  if (T.phase === 'retreat' && perfNow() > T.until) T.phase = 'pass';
+  if (T.phase === 'retreat') { // von der Zündung wegweichen
+    bot.targetX = t.position.x;
+    bot.targetZ = T.z0 + 6.5;
+    return;
+  }
+  const gap = botFindGapX(p, T.z0);
+  if (T.phase === 'pass' && gap !== null) { bot.targetX = gap; bot.targetZ = t.position.z; return; }
+  bot.targetX = gap ?? t.position.x * 0.3;
+  bot.targetZ = T.z0;
+}
+
+// Wahrnehmen + Entscheiden — läuft reaktionszeit-gedrosselt, Priorität von oben:
+// Überleben > TNT-Routine > Ausweichen > Kampf > Power-up > Heimposition
+function botThink(p, bot) {
+  const d = bot.d, t = p.torso, now = perfNow();
+  bot.noiseX = (Math.random() * 2 - 1) * d.aimErr;
+  bot.noiseZ = (Math.random() * 2 - 1) * d.aimErr;
+
+  if (p.hanging || p.ragdoll) { bot.plan = null; return; } // botAct/Physik regeln das
+  if (Math.abs(t.position.x) > PLATFORM_HALF_W - 0.9 || t.position.y < -0.2) {
+    bot.targetX = Math.sign(t.position.x || 1) * 4; // zurück zur Mitte
+    bot.targetZ = Math.min(Math.max(t.position.z, 0), PLATFORM_Z_MAX - 2);
+    bot.plan = null;
+    return;
+  }
+
+  if (bot.tnt) { botTnt(p, bot); return; }
+
+  // Aussetzer: schwächere Bots übersehen Gefahren kurzzeitig
+  if (now >= bot.blunderUntil && Math.random() < d.mistakeP) bot.blunderUntil = now + 0.5;
+  const threat = now < bot.blunderUntil ? null : botScanThreat(p, bot);
+  if (threat) { botHandleThreat(p, bot, threat); return; }
+
+  const foe = p === player1 ? player2 : player1;
+  if (foe.alive && Math.random() < d.aggro) {
+    const f = foe.torso.position;
+    // Harte Bots stellen sich so, dass Schläge den Gegner Richtung Kante schieben
+    bot.targetX = f.x + (bot.diffName === 'hard' ? -Math.sign(f.x || 1) * 0.8 : 0);
+    bot.targetZ = f.z;
+    const dist = f.vsub(t.position).length();
+    if (dist < PUNCH_RANGE * 0.9 + d.aimErr * 0.3) bot.plan = { type: 'punch' };
+    else if (dist > 2.5 && dist < 6 && p.grounded && Math.random() < d.tackleP) bot.plan = { type: 'tackle' };
+    else bot.plan = null;
+    return;
+  }
+  if (powerups.length && Math.random() < d.puWant) {
+    let best = null, bd = 1e9;
+    for (const pu of powerups) {
+      const m = pu.mesh.position;
+      if (m.z < t.position.z - 14 || m.z > t.position.z + 2) continue;
+      const dist = Math.hypot(m.x - t.position.x, m.z - t.position.z);
+      if (dist < bd) { bd = dist; best = pu; }
+    }
+    if (best) { // Drift des Items vorhalten
+      bot.targetX = best.mesh.position.x;
+      bot.targetZ = best.mesh.position.z + best.speed * 0.4;
+      bot.plan = null;
+      return;
+    }
+  }
+  bot.targetX = t.position.x * 0.5;
+  bot.targetZ = 2.5;
+  bot.plan = null;
+}
+
+// Handeln — läuft jeden Frame: Steuerknüppel Richtung Ziel, geplante Aktionen zünden
+function botAct(p, bot) {
+  const t = p.torso, d = bot.d, now = perfNow();
+  if (p.hanging && p.hangEdge) {
+    // Zur Kante drücken (Eingabe von der Kante weg würde den Griff lösen) + hochziehen
+    p.padX += p.hangEdge.inX;
+    p.padZ += p.hangEdge.inZ;
+    if (now > bot.hangJumpAt) { bot.hangJumpAt = now + 0.22; tryJump(p); }
+    return;
+  }
+  if (p.ragdoll) return;
+
+  const maxX = PLATFORM_HALF_W - d.edgeMargin;
+  const tx = Math.max(-maxX, Math.min(maxX, bot.targetX + bot.noiseX));
+  const tz = Math.max(-4, Math.min(PLATFORM_Z_MAX - 1.2, bot.targetZ + bot.noiseZ * 0.4));
+  let ex = tx - t.position.x, ez = tz - t.position.z;
+  if (iceLevel > 0.3) { ex -= t.velocity.x * 0.35; ez -= t.velocity.z * 0.35; } // auf Eis früher bremsen
+  p.padX += Math.abs(ex) < 0.12 ? 0 : Math.max(-1, Math.min(1, ex * d.gain));
+  p.padZ += Math.abs(ez) < 0.12 ? 0 : Math.max(-1, Math.min(1, ez * d.gain));
+
+  const plan = bot.plan;
+  if (!plan) return;
+  if (plan.type === 'jump') {
+    if (now >= plan.at) {
+      tryJump(p);
+      // Doppelsprung: kurz nach dem Absprung nachschieben
+      bot.plan = plan.dbl ? { type: 'jump', at: now + 0.28 } : null;
+    }
+  } else if (plan.type === 'punch') { bot.plan = null; tryPunch(p); }
+  else if (plan.type === 'tackle') { bot.plan = null; tryTackle(p); } // Richtung kommt aus den eben gesetzten Pads
+}
+
+// Pro Frame nach pollGamepads()/applyTouchInput() — die Pads sind dann frisch genullt
+function updateBots() {
+  if (state !== 'playing') return;
+  for (let i = 0; i < players.length; i++) {
+    const bot = botCtl[i], p = players[i];
+    if (!bot || !p.alive) continue;
+    if (perfNow() >= bot.nextThink) {
+      bot.nextThink = perfNow() + bot.d.react + Math.random() * bot.d.jitter;
+      botThink(p, bot);
+    }
+    botAct(p, bot);
+  }
+}
+
+// ---------- Invarianten-Checks: automatisierte Fehlersuche (Soak-Tests) ----------
+// Aktiv sobald ein Bot spielt oder ?check=1 gesetzt ist. Verstöße landen einmal
+// pro Tag+Runde als console.error('[INVARIANT]', …) und in __game.invariants —
+// ein Playwright/Puppeteer-Lauf sammelt sie einfach von der Konsole ein.
+let invariantsOn = false;
+const botInvariants = [];
+const invFired = new Set();
+const invBase = { bodies: 0, scene: 0 };
+let invFrame = 0;
+
+function invSnapshot() {
+  return {
+    players: players.map((p) => ({
+      id: p.id, alive: p.alive, ragdoll: p.ragdoll, hanging: p.hanging,
+      pos: ['x', 'y', 'z'].map((a) => +p.torso.position[a].toFixed(2)),
+    })),
+    counts: { obstacles: obstacles.length, lasers: lasers.length, sharks: sharks.length, powerups: powerups.length, bodies: world.bodies.length },
+    bots: botCtl.map((b) => b?.diffName ?? null),
+    solo: soloMode, botMode, rush: rushMode, snow: snowActive,
+  };
+}
+
+function invFire(tag, detail) {
+  if (invFired.has(tag)) return;
+  invFired.add(tag);
+  const entry = { tag, detail, elapsed: +elapsed.toFixed(1), state, snapshot: invSnapshot() };
+  botInvariants.push(entry);
+  console.error('[INVARIANT]', tag, JSON.stringify(entry));
+}
+
+function checkInvariants() {
+  if (!invariantsOn && !botCtl[0] && !botCtl[1]) return;
+  if (++invFrame % 30) return;
+  const now = perfNow();
+  for (const p of players) {
+    if (soloMode && p === player2) continue;
+    for (const { body } of p.parts) {
+      const pos = body.position, v = body.velocity;
+      if (![pos.x, pos.y, pos.z, v.x, v.y, v.z].every(Number.isFinite)) { invFire('nan-body', `Spieler ${p.id}`); break; }
+      if (v.length() > 150) { invFire('velocity-explosion', `Spieler ${p.id} |v|=${v.length().toFixed(0)}`); break; }
+    }
+    if (p.alive && p.torso.position.y < DEATH_Y - 4) invFire('underworld-alive', `Spieler ${p.id} y=${p.torso.position.y.toFixed(1)}`);
+    if (state === 'playing' && p.alive && p.ragdoll) {
+      p._invRagSince ??= now;
+      if (now - p._invRagSince > 6) invFire('ragdoll-stuck', `Spieler ${p.id}`);
+    } else p._invRagSince = null;
+    if (p.hanging) {
+      p._invHangSince ??= now;
+      if (now - p._invHangSince > 5) invFire('hang-stuck', `Spieler ${p.id}`);
+    } else p._invHangSince = null;
+  }
+  if (state === 'roundEnd' && roundEndAt !== Infinity && now > roundEndAt + 10) invFire('round-stuck', `roundEndAt=${roundEndAt.toFixed(1)}`);
+  if (obstacles.length > 200) invFire('leak-obstacles', `${obstacles.length}`);
+  if (lasers.length > 6) invFire('leak-lasers', `${lasers.length}`);
+  if (powerups.length > 60) invFire('leak-powerups', `${powerups.length}`);
+  if (sharks.length > 12) invFire('leak-sharks', `${sharks.length}`);
+  if (invBase.bodies && world.bodies.length > invBase.bodies + 250) invFire('leak-bodies', `${world.bodies.length} (Basis ${invBase.bodies})`);
+  if (invBase.scene && scene.children.length > invBase.scene + 300) invFire('leak-scene', `${scene.children.length} (Basis ${invBase.scene})`);
+}
+
 // ---------- Spiel-Logik ----------
 let state = 'menu'; // menu | playing | roundEnd
 let profiling = false; // true während der GPU-Profiler die Szene einfriert und selbst rendert
 let cpuProf = false;   // true während der Live-Frame-Profiler echte Frames vermisst
+// 60-fps-Deckel (Standard AN): auf 90/120-Hz-Displays spart das Akku und Wärme, ohne dass man
+// über die 60 fps hinaus etwas sieht. Physik bleibt korrekt, da dt aus der Echtzeit kommt.
+let fpsCap = localStorage.getItem('runordie_fpscap') !== '0';
+const FPS_CAP_MS = 1000 / 60;
+let capLastT = 0;
 // Ringpuffer für das Live-Frame-Profil (echtes Gameplay): Frame-Intervall, CPU-JS-Zeit u. a.
 const cpuBuf = { top: 0, tr: 0, intervals: [], cpu: [], logic: [], rsub: [], heap: [] };
 let elapsed = 0, spawnTimer = 0, puTimer = 0, sharkTimer = 6, roundEndAt = 0, firstDeathAt = 0, spawnCount = 0;
@@ -2781,21 +3136,25 @@ function unparkPlayer2() {
 }
 
 function applySoloLayout() {
-  $('divider').style.display = soloMode ? 'none' : '';
-  $('l2').classList.toggle('hidden', soloMode);
-  $('pu2').classList.toggle('hidden', soloMode);
+  const single = soloMode || botMode; // GEGEN BOT rendert wie Solo in Vollbild
+  $('divider').style.display = single ? 'none' : '';
+  $('l2').classList.toggle('hidden', single);
+  $('pu2').classList.toggle('hidden', single);
   if (soloMode) {
     $('score').innerHTML = `<span class="p1">SOLO</span>&nbsp; <span id="solotime">0</span> s &nbsp;· Rekord ${bestSolo} s`;
   } else {
     $('score').innerHTML = `<span class="p1">SPIELER 1</span>&nbsp; <span id="s1">${player1.score}</span> : ` +
-      `<span id="s2">${player2.score}</span> &nbsp;<span class="p2">SPIELER 2</span>`;
+      `<span id="s2">${player2.score}</span> &nbsp;<span class="p2">${botMode ? `🤖 BOT (${BOT_LABELS[botDiff]})` : 'SPIELER 2'}</span>`;
   }
-  cams[0].aspect = (soloMode ? innerWidth : innerWidth / 2) / innerHeight;
+  cams[0].aspect = (single ? innerWidth : innerWidth / 2) / innerHeight;
   applyFov(cams[0]);
 }
 
-function startGame(solo = false) {
+function startGame(solo = false, vsBot = false) {
   soloMode = solo;
+  botMode = !solo && vsBot;
+  if (botMode) { if (!botCtl[1]?.sticky) botCtl[1] = makeBot(botDiff); }
+  else for (let i = 0; i < 2; i++) if (botCtl[i] && !botCtl[i].sticky) botCtl[i] = null;
   applySoloLayout();
   state = 'playing';
   $('msg').classList.add('hidden');
@@ -2805,6 +3164,7 @@ function startGame(solo = false) {
 
 function backToMenu() {
   state = 'menu';
+  botMode = false;
   $('touchui').classList.add('hidden');
   if (snowActive) endSnow(true);
   clearObstacles(); clearPowerups(); clearLasers(); clearRushTiles(); clearSharks();
@@ -2832,6 +3192,10 @@ function updateDiveBtn() {
   if (sk) sk.textContent = dayMode ? '☀️ Himmel: TAG' : '🌙 Himmel: NACHT';
   const sn = $('snowbtn');
   if (sn) sn.textContent = snowZones ? '❄️ Eiszonen: AN' : '🌤️ Eiszonen: AUS';
+  const bb = $('botdiffbtn');
+  if (bb) bb.textContent = `🤖 Bot-Stärke: ${BOT_LABELS[botDiff]}`;
+  const fc = $('fpscapbtn');
+  if (fc) fc.textContent = fpsCap ? '🔋 FPS-Limit: 60 (spart Akku)' : '⚡ FPS-Limit: AUS (volle Bildrate)';
 }
 
 // Klick-Delegation: überlebt das Neuaufbauen des Menü-HTML.
@@ -2861,11 +3225,23 @@ document.addEventListener('click', (e) => {
     if (!snowZones && snowActive) endSnow(true); // laufende Eiszone sofort beenden
     updateDiveBtn();
   }
+  if (id === 'botdiffbtn') {
+    botDiff = botDiff === 'easy' ? 'medium' : botDiff === 'medium' ? 'hard' : 'easy';
+    localStorage.setItem('runordie_botDiff', botDiff);
+    updateDiveBtn();
+  }
+  if (id === 'fpscapbtn') {
+    fpsCap = !fpsCap;
+    localStorage.setItem('runordie_fpscap', fpsCap ? '1' : '0');
+    capLastT = 0;
+    updateDiveBtn();
+  }
   if (id === 'gpuprofbtn') runGpuProfile();
   if (id === 'scoreok') submitSoloScore();
   // Start-Buttons im Menü (am Handy der einzige Weg, das Spiel zu starten)
   if (state === 'menu') {
     if (id === 'startsolo') { ensureAudio(); startGame(true); }
+    if (id === 'startbot') { ensureAudio(); startGame(false, true); }
     if (id === 'startduo') { ensureAudio(); startGame(false); }
   }
 });
@@ -2898,6 +3274,10 @@ function resetRound() {
   resetPlayer(player1); resetPlayer(player2);
   if (soloMode) parkPlayer2(); else unparkPlayer2();
   updatePowerupHud();
+  for (const b of botCtl) if (b) botReset(b);
+  invFired.clear();
+  invBase.bodies = world.bodies.length;
+  invBase.scene = scene.children.length;
   state = 'playing';
   $('msg').classList.add('hidden');
 }
@@ -2942,7 +3322,9 @@ function endRound() {
   else {
     const w = player1.alive ? player1 : player2;
     w.score++;
-    text = `SPIELER ${w.id} GEWINNT DIE RUNDE!`;
+    text = botMode
+      ? (w === player1 ? 'DU GEWINNST DIE RUNDE!' : '🤖 DER BOT GEWINNT DIE RUNDE!')
+      : `SPIELER ${w.id} GEWINNT DIE RUNDE!`;
     $('s1').textContent = player1.score; $('s2').textContent = player2.score;
   }
   const m = $('msg');
@@ -3158,11 +3540,19 @@ function syncMeshes() {
 function animate() {
   requestAnimationFrame(animate);
   if (profiling) return; // Szene eingefroren: der Profiler steuert das Rendern selbst
+  if (fpsCap) {
+    // Frame überspringen, bis ~eine 60-fps-Periode vergangen ist (−1 ms Toleranz gegen
+    // Vsync-Jitter, sonst würde ein knapp verfehlter Frame auf 30 fps halbieren).
+    const _now = performance.now();
+    if (_now - capLastT < FPS_CAP_MS - 1) return;
+    capLastT = _now;
+  }
   if (cpuProf) { const _n = performance.now(); if (cpuBuf.top) cpuBuf.intervals.push(_n - cpuBuf.top); cpuBuf.top = _n; }
   const dt = Math.min(clock.getDelta(), 0.05);
 
   pollGamepads();
   applyTouchInput();
+  updateBots();
 
   if (state === 'playing') {
     elapsed += dt;
@@ -3253,6 +3643,7 @@ function animate() {
     if (soloMode && p === player2) continue; // Spieler 2 ist geparkt
     updatePlayer(p, dt);
   }
+  checkInvariants();
   updateFx(dt);
   updateSnow(dt);
 
@@ -3261,14 +3652,14 @@ function animate() {
 
   syncMeshes();
   updateCam(cams[0], player1, dt);
-  if (!soloMode) updateCam(cams[1], player2, dt);
+  if (!soloMode && !botMode) updateCam(cams[1], player2, dt);
 
   if (cpuProf) cpuBuf.tr = performance.now(); // Grenze Logik/Physik ↔ Render-Submit
   const w = innerWidth, h = innerHeight, hw = Math.floor(w / 2);
   // Refresh the shadow map once for this frame; both splitscreen eyes then reuse it.
   renderer.shadowMap.needsUpdate = true;
-  if (soloMode) {
-    // Einzelspieler: ein Vollbild-Viewport
+  if (soloMode || botMode) {
+    // Einzelspieler / gegen Bot: ein Vollbild-Viewport
     renderer.setScissorTest(false);
     renderer.setViewport(0, 0, w, h);
     renderer.render(scene, cams[0]);
@@ -3292,7 +3683,7 @@ function animate() {
 
 addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
-  cams[0].aspect = (soloMode ? innerWidth : innerWidth / 2) / innerHeight;
+  cams[0].aspect = ((soloMode || botMode) ? innerWidth : innerWidth / 2) / innerHeight;
   cams[1].aspect = (innerWidth / 2) / innerHeight;
   for (const c of cams) applyFov(c);
 });
@@ -3308,6 +3699,23 @@ updateDiveBtn();
 if (localStorage.getItem('runordie_dayMode') === '1') toggleDaySky();
 if (localStorage.getItem('runordie_rotMode') === '1') toggleRotMode();
 animate();
+
+// Test-Harness per URL: ?bot=medium startet sofort GEGEN BOT, ?bot1=hard&bot2=hard
+// lässt zwei Bots im Splitscreen endlos gegeneinander spielen (Soak-Test; Runden
+// starten von selbst neu), ?check=1 aktiviert die Invarianten-Checks auch ohne Bot.
+{
+  const q = new URLSearchParams(location.search);
+  const lvl = (v) => (BOT_DIFFS[v] ? v : 'medium');
+  if (q.get('check') === '1') invariantsOn = true;
+  if (q.has('bot1') || q.has('bot2')) {
+    if (q.has('bot1')) botCtl[0] = makeBot(lvl(q.get('bot1')), true);
+    if (q.has('bot2')) botCtl[1] = makeBot(lvl(q.get('bot2')), true);
+    startGame(false);
+  } else if (q.has('bot')) {
+    botDiff = lvl(q.get('bot'));
+    startGame(false, true);
+  }
+}
 
 // ---------- GPU-Profiler ----------
 // Misst auf der ECHTEN GPU (nicht wie das Headless-Harness unter SwiftShader):
@@ -3476,7 +3884,10 @@ async function runGpuProfile() {
   try {
     // Repräsentative Szene: kurz solo laufen lassen, damit Hindernisse (Schattenwerfer) existieren.
     // Während dieses echten Gameplays läuft parallel das Live-Frame-Profil (CPU/FPS/Jank).
-    const trueBudget = await profMeasureRefresh(); // echten Display-Takt im Menü-Leerlauf messen
+    // Echten Display-Takt messen; bei aktivem 60-fps-Deckel ist das effektive Budget die
+    // längere der beiden Perioden (sonst läse ein 120-Hz-Gerät mit Deckel fälschlich „GPU-gebunden").
+    const nativeBudget = await profMeasureRefresh();
+    const trueBudget = fpsCap ? Math.max(nativeBudget, FPS_CAP_MS) : nativeBudget;
     cpuBuf.top = 0;
     for (const k of ['intervals', 'cpu', 'logic', 'rsub', 'heap']) cpuBuf[k].length = 0;
     startGame(true);
@@ -3737,8 +4148,13 @@ function renderProfReport(d) {
 
 // Debug-Hook für automatisierte Tests
 window.__game = { players, obstacles, powerups, world, cams, fxRings, lasers, sharks, renderer, spawnShark, spawnLaser, spawnPowerup, spawnWave, toggleRotMode, startSnow, endSnow, runGpuProfile, cpuBuf, analyzeLiveFrames, renderProfReport,
+  startGame, backToMenu, invariants: botInvariants,
+  // sticky-Bots überleben Menü-Starts — abschalten mit setBot(i, null)
+  setBot: (i, diff) => { botCtl[i] = diff ? makeBot(diff, true) : null; },
+  getBots: () => botCtl.map((b) => b?.diffName ?? null),
   get state() { return state; }, get audio() { return audioCtx && audioCtx.state; },
   get rotMode() { return rotMode; }, get dayMode() { return dayMode; }, get soloMode() { return soloMode; },
+  get botMode() { return botMode; }, get elapsed() { return elapsed; },
   get snowActive() { return snowActive; }, get snowLevel() { return snowLevel; }, get iceLevel() { return iceLevel; },
   get snowZones() { return snowZones; } };
 </script>
