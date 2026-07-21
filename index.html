@@ -2404,7 +2404,10 @@ addEventListener('mousedown', (e) => {
 addEventListener('contextmenu', (e) => e.preventDefault());
 
 // ---------- Touch-Steuerung (virtueller Stick + Buttons, steuert Spieler 1) ----------
-const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+// Nur wenn der Haupt-Zeiger grob ist (Finger). 'ontouchstart' allein reicht nicht:
+// Desktop-Chrome und Touch-Notebooks melden das trotz Maus und zeigten die
+// Touch-UI fälschlich am PC. (pointer: coarse) ist am Desktop (feine Maus) false.
+const isTouch = matchMedia('(pointer: coarse)').matches;
 const touchVec = { x: 0, z: 0 };
 
 // Wird pro Frame nach pollGamepads() addiert — Touch nutzt denselben Analog-Pfad
@@ -2946,17 +2949,39 @@ function updatePlayer(p, dt) {
       }
     }
 
-    // Sprung-Pad: katapultiert über Mega-Wände
-    if (p.grounded && res.body?.isJumpPad && perfNow() > (p.padCd || 0)) {
-      p.padCd = perfNow() + 0.8;
-      p.jumpLock = perfNow() + 0.35;
-      for (const { body } of p.parts) body.velocity.y = LAUNCH_V;
-      p.jumps = 1; // ein Luftsprung bleibt zum Nachsteuern
-      playLaunch();
+    // Sprung-Pad: katapultiert über Mega-Wände – löst schon beim bloßen
+    // Darüberlaufen aus (nicht erst, wenn man sauber oben aufsteht)
+    if (!p.ragdoll && perfNow() > (p.padCd || 0)) {
+      for (const o of obstacles) {
+        const b = o.body;
+        if (!b.isJumpPad) continue;
+        const half = b.shapes[0].halfExtents;
+        // Fußabdruck horizontal treffen und noch flach genug (nicht schon hoch drüber)
+        if (Math.abs(t.position.z - b.position.z) < half.z + 0.45 &&
+            Math.abs(t.position.x - b.position.x) < half.x + 0.45 &&
+            t.position.y < b.position.y + RIDE_HEIGHT + 1.0) {
+          p.padCd = perfNow() + 0.8;
+          p.jumpLock = perfNow() + 0.35;
+          for (const { body } of p.parts) body.velocity.y = LAUNCH_V;
+          p.jumps = 1; // ein Luftsprung bleibt zum Nachsteuern
+          playLaunch();
+          break;
+        }
+      }
     }
 
-    // Stun abgelaufen -> wieder aufrichten
-    if (p.ragdoll && perfNow() > p.stunUntil && t.position.y > 0) exitRagdoll(p);
+    // Stun abgelaufen -> wieder aufrichten. Über der Bahn darf man immer
+    // aufstehen — auch wenn ein harter Treffer (Hai, Stampfer, Explosion) den
+    // Torso auf/unter Straßenniveau gepresst hat. Ohne das blieb man im Asphalt
+    // gefangen, weil y>0 nie wieder erreicht wurde. Über einer Kante hinaus
+    // (|x| >= PLATFORM_HALF_W) bleibt es Ragdoll bis zum Todessturz.
+    const onRoad = Math.abs(t.position.x) < PLATFORM_HALF_W - 0.1 &&
+                   t.position.z > PLATFORM_Z_MIN && t.position.z < PLATFORM_Z_MAX &&
+                   t.position.y > -1.2;
+    if (p.ragdoll && perfNow() > p.stunUntil && (t.position.y > 0 || onRoad)) {
+      if (t.position.y < 0.4) { t.position.y = 0.6; if (t.velocity.y < 0) t.velocity.y = 0; }
+      exitRagdoll(p);
+    }
 
     // Kanten-Hängen: greifen, halten, hochziehen
     if (!p.ragdoll && !p.grounded && !p.hanging && !p.diving && !p.tackling &&
