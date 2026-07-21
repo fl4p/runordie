@@ -1,7 +1,7 @@
 // Service Worker: macht RUN OR DIE offline spielbar.
 // Das Spiel ist eine einzige HTML-Datei plus zwei versionierte CDN-Module —
 // alles wird beim Install vorgeladen.
-const CACHE = 'runordie-v1';
+const CACHE = 'runordie-v2'; // v2: Online-Modus (bis 4 Spieler)
 const ASSETS = [
   './',
   './index.html',

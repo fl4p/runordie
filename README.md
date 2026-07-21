@@ -1,8 +1,9 @@
 # RUN OR DIE — Ragdoll Splitscreen
 
-3D-Jump-and-Run für **2 Spieler an einer Tastatur**, Split-Screen, Ragdoll-Figuren.
+3D-Jump-and-Run für **2 Spieler an einer Tastatur** (Split-Screen) oder **2–4
+Spieler online übers Internet**, Ragdoll-Figuren.
 Hindernisse kommen auf euch zu und schieben euch von der Plattform — wer herunterfällt, stirbt.
-Der Überlebende gewinnt die Runde.
+Der letzte Überlebende gewinnt die Runde.
 
 ## Offline spielen
 
@@ -19,6 +20,37 @@ Braucht nur einen statischen Server (ES-Module + CDN-Imports):
 python3 -m http.server 8931
 # dann http://localhost:8931 öffnen
 ```
+
+## 🌐 Online-Modus (2–4 Spieler)
+
+Über den Menü-Button **🌐 ONLINE** spielt man übers Internet zusammen:
+**Raum erstellen** zeigt einen 4-stelligen Code + Einladungs-Link
+(`?room=CODE`), Freunde treten damit bei; ab 2 Spielern startet der Host.
+Slot-Farben: blau, orange, grün, pink. Letzter Überlebender gewinnt.
+
+Dafür läuft der kleine Node-Server aus `server/` (statische Dateien +
+WebSocket-Relay, keine Spiellogik):
+
+```sh
+cd server && npm install && npm start   # http://localhost:8080, PORT=… änderbar
+# Latenz-Test: LAG=120 npm start  (120 ms künstliche Einweg-Latenz im Relay)
+```
+
+Architektur: **Host-autoritativ** — der Browser des Raum-Erstellers simuliert
+das komplette Spiel, Clients schicken nur Eingaben und rendern interpolierte
+Snapshots (~120 ms Puffer). Wo möglich verbinden sich Host und Clients
+zusätzlich **direkt per WebRTC** (unzuverlässiger DataChannel für Snapshots
+und Eingaben = niedrigste Latenz, STUN only); klappt das nicht, läuft alles
+automatisch über das WebSocket-Relay. Hindernisse entstehen auf den Clients
+per **Spawn-Replay** (der Host schickt die gewürfelten Zufallswerte mit) und
+laufen dann lokal butterweich weiter — nur kleine Drift-Korrekturen kommen
+über die Snapshots. Wer hostet, sollte die beste Verbindung haben; verlässt
+der Host den Raum, endet das Spiel für alle. Statische Kopien (z.B. GitHub
+Pages) können per `?server=wss://…` auf ein gehostetes Relay zeigen.
+
+Hinweise: Online sind Rush- und Dreh-Modus deaktiviert; die übrigen
+Einstellungen (Hechtsprung, Stun, Eiszonen) bestimmt der Host. Clients sehen
+die eigene Figur mit ~Ping-Latenz — die Umgebung bleibt davon unberührt.
 
 ## ❄️ Eiszonen
 
@@ -233,6 +265,8 @@ Reaktionszeit, Zielfehler, Aussetzer-Quote und Aggressivität.
 - `?bot=easy|medium|hard` — startet sofort GEGEN BOT
 - `?bot1=hard&bot2=hard` — zwei Bots spielen endlos gegeneinander (Splitscreen,
   Runden starten von selbst neu) — ideal als Dauerlauf zum Bug-Finden
+- `?bot3=…&?bot4=…` — aktiviert zusätzlich die Spieler-Slots 3/4 (grün/pink)
+  für einen lokalen 4-Spieler-Soak-Test
 - `?check=1` — Invarianten-Checks auch ohne Bot (NaN-Positionen, festhängende
   Ragdolls/Runden, Entity-Leaks, Geschwindigkeits-Explosionen). Verstöße landen
   als `console.error('[INVARIANT]', …)` und in `window.__game.invariants`.
