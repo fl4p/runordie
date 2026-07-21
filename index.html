@@ -2407,7 +2407,15 @@ addEventListener('contextmenu', (e) => e.preventDefault());
 // Nur wenn der Haupt-Zeiger grob ist (Finger). 'ontouchstart' allein reicht nicht:
 // Desktop-Chrome und Touch-Notebooks melden das trotz Maus und zeigten die
 // Touch-UI fälschlich am PC. (pointer: coarse) ist am Desktop (feine Maus) false.
-const isTouch = matchMedia('(pointer: coarse)').matches;
+//
+// Touch-Steuerung ist standardmäßig AUS – auch am Handy. Sie ist ein Dev-/
+// Test-Feature und lässt sich nur über das versteckte localStorage-Flag
+// 'runordie_touch'='1' einschalten (nicht im Menü sichtbar). Bequem per URL
+// umschaltbar und gemerkt: ?touch=1 schaltet an, ?touch=0 (oder ?notouch) aus.
+const _touchQ = new URLSearchParams(location.search);
+if (_touchQ.has('notouch')) localStorage.setItem('runordie_touch', '0');
+if (_touchQ.has('touch')) localStorage.setItem('runordie_touch', _touchQ.get('touch') === '1' ? '1' : '0');
+const isTouch = localStorage.getItem('runordie_touch') === '1';
 const touchVec = { x: 0, z: 0 };
 
 // Wird pro Frame nach pollGamepads() addiert — Touch nutzt denselben Analog-Pfad
