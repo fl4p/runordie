@@ -3712,6 +3712,13 @@ if (localStorage.getItem('runordie_dayMode') === '1') toggleDaySky();
 if (localStorage.getItem('runordie_rotMode') === '1') toggleRotMode();
 animate();
 
+// Einmaliger Geräte-Benchmark beim allerersten Start: kurz warten (Menü sichtbar, Nutzer nicht
+// mitten im Antippen), dann automatisch vermessen und hochladen — nur wenn noch nie geschehen und
+// der Nutzer nicht schon ein Spiel gestartet hat. Danach nie wieder (localStorage-Marke).
+setTimeout(() => {
+  if (state === 'menu' && !profiling && !localStorage.getItem(GPUPROF_DONE_KEY)) runGpuProfile(true);
+}, 2200);
+
 // Test-Harness per URL: ?bot=medium startet sofort GEGEN BOT, ?bot1=hard&bot2=hard
 // lässt zwei Bots im Splitscreen endlos gegeneinander spielen (Soak-Test; Runden
 // starten von selbst neu), ?check=1 aktiviert die Invarianten-Checks auch ohne Bot.
@@ -3893,9 +3900,18 @@ function analyzeLiveFrames(budget) {
   return { S, budget, refreshHz, fpsMean, fps1low, jankPct, jankFrames, nFrames: iv.length, bound, boundNote, gc };
 }
 
-async function runGpuProfile() {
+function sendProfReport(txt) {
+  // Text-POST ohne Custom-Header -> CORS-simple, kein Preflight. true bei Erfolg.
+  return fetch(PROF_SEND_URL, { method: 'POST', body: txt }).then((r) => r.ok).catch(() => false);
+}
+
+const GPUPROF_DONE_KEY = 'runordie_gpuprof_v1'; // markiert: Gerät wurde einmalig vermessen + hochgeladen
+
+async function runGpuProfile(auto = false) {
   if (profiling || state !== 'menu') return;
-  const overlay = profStatus('🔬 GPU-Profil — Szene wird aufgewärmt … (~3 s)');
+  const overlay = profStatus(auto
+    ? '⚙️ Einmaliger Performance-Test deines Geräts … (nur beim ersten Start)'
+    : '🔬 GPU-Profil — Szene wird aufgewärmt … (~3 s)');
   let result = null;
   try {
     // Repräsentative Szene: kurz solo laufen lassen, damit Hindernisse (Schattenwerfer) existieren.
@@ -3987,10 +4003,10 @@ async function runGpuProfile() {
     try { backToMenu(); } catch (e) {}
     overlay.remove();
   }
-  if (result) renderProfReport(result);
+  if (result) renderProfReport(result, { auto });
 }
 
-function renderProfReport(d) {
+function renderProfReport(d, opts = {}) {
   const cur = d.configs.find((c) => c.current);
   const gold = d.configs.find((c) => c.gold);
   // Empfehlung: größte Ersparnis ggü. aktuell, solange sich nur ein winziger Flächenanteil sichtbar ändert.
@@ -4083,6 +4099,17 @@ function renderProfReport(d) {
     'Empfehlung: ' + (pick ? pick.label + ' spart ' + (cur.ms - pick.ms).toFixed(2) + ' ms/Frame bei ' + pick.area.toFixed(2) + '% geänderter Fläche' : 'Schatten bereits gut ausbalanciert — nächstes Ziel: Draw-Calls / Partikel / 2. Renderpass'),
   ].join('\n');
 
+  if (opts.auto) {
+    // Auto-Modus (erster Start): still hochladen, Gerät markieren, kurze Rückmeldung — keine große Karte.
+    const t = profStatus('☁️ Sende Geräte-Benchmark …');
+    sendProfReport(txt).then((ok) => {
+      if (ok) localStorage.setItem(GPUPROF_DONE_KEY, 'done'); // nur bei Erfolg markieren, sonst nächster Start erneut
+      t.textContent = ok ? '✓ Benchmark gesendet — danke!' : '⚠️ Upload fehlgeschlagen (später erneut)';
+      setTimeout(() => t.remove(), 1800);
+    });
+    return;
+  }
+
   const style = document.createElement('style');
   style.textContent = `
     #ppwrap{position:fixed;inset:0;z-index:70;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(6,8,15,.78);backdrop-filter:blur(3px);font-family:system-ui,-apple-system,sans-serif}
@@ -4146,10 +4173,10 @@ function renderProfReport(d) {
   wrap.querySelector('.pp-close').onclick = () => { wrap.remove(); style.remove(); };
   wrap.querySelector('.pp-send').onclick = (e) => {
     const btn = e.target; btn.disabled = true; btn.textContent = '☁️ Sende …';
-    // Einfacher Text-POST (keine Custom-Header -> kein CORS-Preflight); ntfy speichert die Nachricht.
-    fetch(PROF_SEND_URL, { method: 'POST', body: txt })
-      .then((r) => { btn.textContent = r.ok ? '✓ Gesendet — sag Claude „hol den Bericht"' : 'Senden fehlgeschlagen (' + r.status + ')'; })
-      .catch(() => { btn.disabled = false; btn.textContent = 'Kein Netz — erneut senden'; });
+    sendProfReport(txt).then((ok) => {
+      btn.textContent = ok ? '✓ Gesendet — sag Claude „hol den Bericht"' : 'Senden fehlgeschlagen — erneut?';
+      if (!ok) btn.disabled = false;
+    });
   };
   wrap.querySelector('.pp-copy').onclick = (e) => {
     const ok = () => { e.target.textContent = '✓ Kopiert — an Claude schicken'; };
