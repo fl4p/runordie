@@ -22,10 +22,12 @@ python3 -m http.server 8931
 
 ## ❄️ Eiszonen
 
-Ab ca. 30 Sekunden zieht regelmäßig eine **Eiszone** auf: Schnee fällt, die
-Fahrbahn vereist und wird **spiegelglatt** — Beschleunigen, Bremsen und
-Ausweichen reagieren nur noch träge, an den Kanten wird es richtig gefährlich.
-Nach 15–20 Sekunden taut die Bahn wieder auf.
+Ab ca. 30 Sekunden zieht regelmäßig eine **Eiszone** auf: Der Schneefall setzt
+langsam ein, dann friert die Fahrbahn sichtbar zu und wird **spiegelglatt** —
+bei Volleis rutscht die Figur fast ungebremst weiter, an den Kanten wird es
+richtig gefährlich. Nach ~20 Sekunden taut die Bahn allmählich wieder auf.
+Über den **❄️-Knopf im Hauptmenü** lassen sich Eiszonen komplett abschalten
+(wird im Browser gespeichert).
 
 ## Spielmodi
 

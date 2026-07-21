@@ -168,7 +168,7 @@
     <b>R</b> = Dreh-Modus: Maus (Spieler 1) bzw. rechter Stick drehen Figur, Kamera und Box-Richtung.
   </details>
   <span class="menurow settings">
-    <button id="divebtn"></button><button id="stunbtn"></button><button id="rushbtn"></button><button id="skybtn"></button>
+    <button id="divebtn"></button><button id="stunbtn"></button><button id="rushbtn"></button><button id="skybtn"></button><button id="snowbtn"></button>
   </span>
   <span class="mkeys">Tastatur: 1 = Einzelspieler · beliebige Taste = 2 Spieler · ESC = Menü · T = Tag/Nacht</span></small></div>
 
@@ -303,23 +303,25 @@ scene.add(sky);
 // Tag/Nacht-Umschaltung (Taste T) inkl. Licht- und Nebelstimmung.
 // Die Eiszone (siehe unten) überlagert beide Modi mit kalter, heller Stimmung.
 let dayMode = false;
+// Stimmung wird stufenlos zwischen Basis- und Schnee-Palette gemischt (snowLevel 0..1)
+const ATMO = {
+  night: { fog: 0x151228, bg: 0x0d1117, hemi: 0xbcd6ff, ground: 0x30241a, hemiI: 0.9, sun: 0xfff2d9, sunI: 1.6 },
+  day: { fog: 0xa5948a, bg: 0xb59b82, hemi: 0xb8b3c8, ground: 0x6e5c4c, hemiI: 1.05, sun: 0xffe0b8, sunI: 1.9 },
+  nightSnow: { fog: 0x5f7290, bg: 0x49596f, hemi: 0xdce8f5, ground: 0x8fa3b8, hemiI: 1.1, sun: 0xeaf2ff, sunI: 1.3 },
+  daySnow: { fog: 0xc4d2de, bg: 0xcfdae4, hemi: 0xdce8f5, ground: 0x8fa3b8, hemiI: 1.1, sun: 0xeaf2ff, sunI: 1.3 },
+};
+const _ca = new THREE.Color(), _cb = new THREE.Color();
 function applyAtmosphere() {
-  if (snowActive) {
-    scene.fog.color.set(dayMode ? 0xc4d2de : 0x5f7290);
-    scene.background.set(dayMode ? 0xcfdae4 : 0x49596f);
-    hemi.color.set(0xdce8f5); hemi.groundColor.set(0x8fa3b8); hemi.intensity = 1.1;
-    sun.color.set(0xeaf2ff); sun.intensity = 1.3;
-  } else if (dayMode) {
-    scene.fog.color.set(0xa5948a);
-    scene.background.set(0xb59b82);
-    hemi.color.set(0xb8b3c8); hemi.groundColor.set(0x6e5c4c); hemi.intensity = 1.05;
-    sun.color.set(0xffe0b8); sun.intensity = 1.9;
-  } else {
-    scene.fog.color.set(0x151228);
-    scene.background.set(0x0d1117);
-    hemi.color.set(0xbcd6ff); hemi.groundColor.set(0x30241a); hemi.intensity = 0.9;
-    sun.color.set(0xfff2d9); sun.intensity = 1.6;
-  }
+  const a = dayMode ? ATMO.day : ATMO.night;
+  const b = dayMode ? ATMO.daySnow : ATMO.nightSnow;
+  const s = snowLevel;
+  scene.fog.color.copy(_ca.set(a.fog).lerp(_cb.set(b.fog), s));
+  scene.background.copy(_ca.set(a.bg).lerp(_cb.set(b.bg), s));
+  hemi.color.copy(_ca.set(a.hemi).lerp(_cb.set(b.hemi), s));
+  hemi.groundColor.copy(_ca.set(a.ground).lerp(_cb.set(b.ground), s));
+  hemi.intensity = a.hemiI + (b.hemiI - a.hemiI) * s;
+  sun.color.copy(_ca.set(a.sun).lerp(_cb.set(b.sun), s));
+  sun.intensity = a.sunI + (b.sunI - a.sunI) * s;
 }
 function toggleDaySky() {
   dayMode = !dayMode;
@@ -582,6 +584,7 @@ function extendPlatform() {
     e.position.set(sx * (PLATFORM_HALF_W - 0.15), 0.03, zc);
     grp.add(e);
   }
+  addIceOverlay(grp, zc); // Eisschicht friert mit (geteiltes Material)
   for (let i = 0; i < 3; i++)
     addStreetGraffiti(grp, (Math.random() * 2 - 1) * (PLATFORM_HALF_W - 2.2), zMin + 3 + Math.random() * (platL - 6));
   for (let i = 0; i < 2; i++)
@@ -711,69 +714,130 @@ function makeIceTexture() {
 const iceTex = makeIceTexture();
 iceTex.repeat.set(3.5, 14); // wie der Asphalt gekachelt
 
+let snowZones = localStorage.getItem('runordie_snow') !== '0'; // Menü-Schalter
 let snowActive = false, nextSnowAt = 30, snowEndAt = 0;
+// Stufenlose Übergänge: snowLevel = Schneefall-Intensität, iceLevel = Vereisung
+// der Fahrbahn (hinkt dem Schnee etwas hinterher). Beide steuern Optik UND Grip.
+let snowLevel = 0, iceLevel = 0;
+const ICE_GRIP = 0.035; // Boden-Lenkfaktor bei Volleis (trocken: 0.28)
 
-// Schneefall: ein Points-Feld über der Bahn, Flocken taumeln und wrappen
-const SNOW_N = 800, SNOW_H = 16;
-const snowPos = new Float32Array(SNOW_N * 3);
-const snowSpd = new Float32Array(SNOW_N), snowPh = new Float32Array(SNOW_N);
-for (let i = 0; i < SNOW_N; i++) {
-  snowPos[i * 3] = Math.random() * 30 - 15;
-  snowPos[i * 3 + 1] = Math.random() * SNOW_H;
-  snowPos[i * 3 + 2] = Math.random() * 76 - 38;
-  snowSpd[i] = 2.2 + Math.random() * 3;
-  snowPh[i] = Math.random() * Math.PI * 2;
-}
-const snowGeo = new THREE.BufferGeometry();
-snowGeo.setAttribute('position', new THREE.BufferAttribute(snowPos, 3));
-const snowFlakeMat = new THREE.PointsMaterial({
-  color: 0xffffff, size: 0.14, transparent: true, opacity: 0, depthWrite: false,
+// Eis liegt als halbtransparente Schicht ÜBER dem Asphalt und blendet beim
+// Zufrieren ein — Fahrbahnstreifen und Graffiti schimmern durchs Eis
+const iceGeo = new THREE.PlaneGeometry(platW, platL);
+const iceOverlayMat = new THREE.MeshStandardMaterial({
+  map: iceTex, bumpMap: iceTex, bumpScale: 0.01, roughness: 0.35,
+  transparent: true, opacity: 0, depthWrite: false, visible: false,
 });
-const snowField = new THREE.Points(snowGeo, snowFlakeMat);
-snowField.visible = false;
-snowField.position.z = -18;
-scene.add(snowField);
+function addIceOverlay(parent, zc) {
+  const m = new THREE.Mesh(iceGeo, iceOverlayMat);
+  m.rotation.x = -Math.PI / 2;
+  m.position.set(0, 0.055, zc);
+  m.renderOrder = 1;
+  parent.add(m);
+}
+addIceOverlay(scene, (PLATFORM_Z_MIN + PLATFORM_Z_MAX) / 2);
+
+// Schneefall: weiche, runde Sprite-Flocken in zwei Tiefen-Ebenen
+// (fern/klein/langsam und nah/groß/schnell), mit Wind-Drift und Taumeln
+function makeFlakeTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(32, 32, 2, 32, 32, 30);
+  grad.addColorStop(0, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.45, 'rgba(255,255,255,0.6)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad;
+  g.beginPath(); g.arc(32, 32, 30, 0, 7); g.fill();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+const flakeTex = makeFlakeTexture();
+const SNOW_H = 16;
+const snowGroup = new THREE.Group();
+snowGroup.position.z = -18;
+snowGroup.visible = false;
+scene.add(snowGroup);
+
+function makeSnowLayer(n, size, baseOpacity, sMin, sMax) {
+  const pos = new Float32Array(n * 3), spd = new Float32Array(n), ph = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    pos[i * 3] = Math.random() * 30 - 15;
+    pos[i * 3 + 1] = Math.random() * SNOW_H;
+    pos[i * 3 + 2] = Math.random() * 76 - 38;
+    spd[i] = sMin + Math.random() * (sMax - sMin);
+    ph[i] = Math.random() * Math.PI * 2;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const mat = new THREE.PointsMaterial({
+    color: 0xffffff, size, map: flakeTex, transparent: true, opacity: 0, depthWrite: false,
+  });
+  snowGroup.add(new THREE.Points(geo, mat));
+  return { geo, mat, pos, spd, ph, n, baseOpacity };
+}
+const snowLayers = [
+  makeSnowLayer(520, 0.13, 0.7, 1.5, 2.6),
+  makeSnowLayer(260, 0.26, 0.95, 2.3, 3.6),
+];
 
 function startSnow() {
   snowActive = true;
-  snowEndAt = elapsed + 14 + Math.random() * 8;
-  platMesh.material.map = iceTex;      // Material ist mit den Rush-Kacheln geteilt
-  platMesh.material.bumpMap = iceTex;
-  platMesh.material.roughness = 0.4;
-  applyAtmosphere();
-  flashPad('❄️ EISZONE — spiegelglatte Fahrbahn!', '#bfe8ff');
+  snowEndAt = elapsed + 18 + Math.random() * 8;
+  flashPad('❄️ EISZONE — die Fahrbahn friert zu!', '#bfe8ff');
   playFrost();
 }
 
 function endSnow(silent = false) {
   snowActive = false;
   nextSnowAt = elapsed + 35 + Math.random() * 20;
-  platMesh.material.map = asphaltTex;
-  platMesh.material.bumpMap = asphaltTex;
-  platMesh.material.roughness = 0.95;
-  applyAtmosphere();
-  if (!silent) flashPad('☀️ Eiszone überstanden!', '#e6edf3');
+  if (silent) {
+    // Runden-Reset / Menü: Zustand sofort trockenlegen statt auszublenden
+    snowLevel = iceLevel = 0;
+    applyAtmosphere();
+  } else {
+    flashPad('☀️ Eiszone überstanden — die Bahn taut auf!', '#e6edf3');
+  }
 }
 
 function updateSnow(dt) {
   if (state === 'playing') {
-    if (!snowActive && elapsed >= nextSnowAt) startSnow();
+    if (!snowActive && snowZones && elapsed >= nextSnowAt) startSnow();
     else if (snowActive && elapsed >= snowEndAt) endSnow();
   }
+
+  // Schnee setzt langsam ein (~6 s bis zum Schneetreiben), klingt zügiger ab;
+  // das Eis bildet sich mit Verzögerung hinter dem Schneefall und taut nach
+  const prev = snowLevel + iceLevel;
+  const target = snowActive ? 1 : 0;
+  snowLevel += (target - snowLevel) * Math.min(1, dt * (target ? 0.35 : 0.7));
+  iceLevel += (snowLevel - iceLevel) * Math.min(1, dt * 0.5);
+  if (Math.abs(snowLevel + iceLevel - prev) > 0.0004) applyAtmosphere();
+
+  iceOverlayMat.opacity = 0.85 * iceLevel;
+  iceOverlayMat.visible = iceLevel > 0.01;
+
   // Im Rush-Modus reist das Schneefeld mit dem Führenden
   const cz = rushMode ? aliveMinZ() - 15 : -18;
-  snowField.position.z += (cz - snowField.position.z) * Math.min(1, dt * 3);
-  const target = snowActive ? 0.9 : 0;
-  snowFlakeMat.opacity += (target - snowFlakeMat.opacity) * Math.min(1, dt * (target ? 1.2 : 2.5));
-  snowField.visible = snowFlakeMat.opacity > 0.02;
-  if (!snowField.visible) return;
-  for (let i = 0; i < SNOW_N; i++) {
-    let y = snowPos[i * 3 + 1] - snowSpd[i] * dt;
-    snowPos[i * 3] += Math.sin(elapsed * 1.7 + snowPh[i]) * dt * 0.8;
-    if (y < 0) { y += SNOW_H; snowPos[i * 3] = Math.random() * 30 - 15; }
-    snowPos[i * 3 + 1] = y;
+  snowGroup.position.z += (cz - snowGroup.position.z) * Math.min(1, dt * 3);
+  snowGroup.visible = snowLevel > 0.01;
+  if (!snowGroup.visible) return;
+
+  const wind = Math.sin(elapsed * 0.25) * 0.5; // langsam drehende Windrichtung
+  for (const L of snowLayers) {
+    L.mat.opacity = L.baseOpacity * snowLevel;
+    const { pos, spd, ph, n } = L;
+    for (let i = 0; i < n; i++) {
+      let y = pos[i * 3 + 1] - spd[i] * dt;
+      let x = pos[i * 3] + (wind + Math.sin(elapsed * 1.3 + ph[i]) * 0.7) * dt;
+      if (y < 0) y += SNOW_H;
+      if (x > 15) x -= 30; else if (x < -15) x += 30;
+      pos[i * 3] = x;
+      pos[i * 3 + 1] = y;
+    }
+    L.geo.attributes.position.needsUpdate = true;
   }
-  snowGeo.attributes.position.needsUpdate = true;
 }
 
 // ---------- Sound (Web Audio, prozedural — keine Audiodateien) ----------
@@ -2746,6 +2810,8 @@ function updateDiveBtn() {
     : '⚔️ Modus: DUELL (feste Bahn)';
   const sk = $('skybtn');
   if (sk) sk.textContent = dayMode ? '☀️ Himmel: TAG' : '🌙 Himmel: NACHT';
+  const sn = $('snowbtn');
+  if (sn) sn.textContent = snowZones ? '❄️ Eiszonen: AN' : '🌤️ Eiszonen: AUS';
 }
 
 // Klick-Delegation: überlebt das Neuaufbauen des Menü-HTML.
@@ -2769,6 +2835,12 @@ document.addEventListener('click', (e) => {
     updateDiveBtn();
   }
   if (id === 'skybtn') toggleDaySky();
+  if (id === 'snowbtn') {
+    snowZones = !snowZones;
+    localStorage.setItem('runordie_snow', snowZones ? '1' : '0');
+    if (!snowZones && snowActive) endSnow(true); // laufende Eiszone sofort beenden
+    updateDiveBtn();
+  }
   if (id === 'scoreok') submitSoloScore();
   // Start-Buttons im Menü (am Handy der einzige Weg, das Spiel zu starten)
   if (state === 'menu') {
@@ -2984,8 +3056,9 @@ function updatePlayer(p, dt) {
       if (invuln !== p.wasInvuln) { p.wasInvuln = invuln; updatePowerupHud(); }
       if (invuln) p.goldBubble.material.emissiveIntensity = 0.6 + 0.4 * Math.sin(elapsed * 10);
       const spd = RUN_SPEED * (slowed ? 0.45 : 1);
-      // Eiszone: kaum Grip — Beschleunigen, Bremsen und Ausweichen werden träge
-      const k = p.grounded ? (snowActive ? 0.06 : 0.28) : 0.07;
+      // Vereisung: Grip sinkt stufenlos mit dem Eisgrad — bei Volleis rutscht
+      // die Figur fast ungebremst weiter
+      const k = p.grounded ? 0.28 + (ICE_GRIP - 0.28) * iceLevel : 0.07;
       if (!p.tackling) { // während der Grätsche rutscht man ungebremst
         t.velocity.x += (dx * spd - t.velocity.x) * k;
         t.velocity.z += (dz * spd - t.velocity.z) * k;
@@ -3179,7 +3252,8 @@ animate();
 window.__game = { players, obstacles, powerups, world, cams, fxRings, lasers, sharks, renderer, spawnShark, spawnLaser, spawnPowerup, spawnWave, toggleRotMode, startSnow, endSnow,
   get state() { return state; }, get audio() { return audioCtx && audioCtx.state; },
   get rotMode() { return rotMode; }, get dayMode() { return dayMode; }, get soloMode() { return soloMode; },
-  get snowActive() { return snowActive; } };
+  get snowActive() { return snowActive; }, get snowLevel() { return snowLevel; }, get iceLevel() { return iceLevel; },
+  get snowZones() { return snowZones; } };
 </script>
 </body>
 </html>
