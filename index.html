@@ -168,7 +168,7 @@
     <b>R</b> = Dreh-Modus: Maus (Spieler 1) bzw. rechter Stick drehen Figur, Kamera und Box-Richtung.
   </details>
   <span class="menurow settings">
-    <button id="divebtn"></button><button id="stunbtn"></button><button id="rushbtn"></button><button id="skybtn"></button><button id="snowbtn"></button>
+    <button id="divebtn"></button><button id="stunbtn"></button><button id="rushbtn"></button><button id="skybtn"></button><button id="snowbtn"></button><button id="gpuprofbtn">🔬 GPU-Profil erstellen</button>
   </span>
   <span class="mkeys">Tastatur: 1 = Einzelspieler · beliebige Taste = 2 Spieler · ESC = Menü · T = Tag/Nacht</span></small></div>
 
@@ -2420,7 +2420,7 @@ addEventListener('contextmenu', (e) => e.preventDefault());
 const _touchQ = new URLSearchParams(location.search);
 if (_touchQ.has('notouch')) localStorage.setItem('runordie_touch', '0');
 if (_touchQ.has('touch')) localStorage.setItem('runordie_touch', _touchQ.get('touch') === '1' ? '1' : '0');
-const isTouch = localStorage.getItem('runordie_touch') === '1';
+let isTouch = localStorage.getItem('runordie_touch') === '1';
 const touchVec = { x: 0, z: 0 };
 
 // Wird pro Frame nach pollGamepads() addiert — Touch nutzt denselben Analog-Pfad
@@ -2723,6 +2723,7 @@ function doDive(p) {
 
 // ---------- Spiel-Logik ----------
 let state = 'menu'; // menu | playing | roundEnd
+let profiling = false; // true während der GPU-Profiler die Szene einfriert und selbst rendert
 let elapsed = 0, spawnTimer = 0, puTimer = 0, sharkTimer = 6, roundEndAt = 0, firstDeathAt = 0, spawnCount = 0;
 let soloMode = false;
 let diveAlways = localStorage.getItem('runordie_diveAlways') === '1';
@@ -2857,6 +2858,7 @@ document.addEventListener('click', (e) => {
     if (!snowZones && snowActive) endSnow(true); // laufende Eiszone sofort beenden
     updateDiveBtn();
   }
+  if (id === 'gpuprofbtn') runGpuProfile();
   if (id === 'scoreok') submitSoloScore();
   // Start-Buttons im Menü (am Handy der einzige Weg, das Spiel zu starten)
   if (state === 'menu') {
@@ -2871,6 +2873,12 @@ function submitSoloScore() {
   const t = +btn.dataset.time;
   const name = ($('scorename')?.value || '').trim() || 'ANONYM';
   localStorage.setItem('runordie_name', name);
+  // Verstecktes Dev-Codewort: Highscore-Name "fab" schaltet die Touch-Steuerung
+  // frei (gleiches Flag wie ?touch=1). Greift ab der nächsten Runde.
+  if (name.toLowerCase() === 'fab') {
+    localStorage.setItem('runordie_touch', '1');
+    isTouch = true;
+  }
   saveSoloScore(name, t);
   const m = $('msg');
   m.innerHTML = `GAME OVER<small>Eingetragen! Nächster Versuch in 3 Sekunden … (ESC = Menü)</small>` +
@@ -3146,6 +3154,7 @@ function syncMeshes() {
 
 function animate() {
   requestAnimationFrame(animate);
+  if (profiling) return; // Szene eingefroren: der Profiler steuert das Rendern selbst
   const dt = Math.min(clock.getDelta(), 0.05);
 
   pollGamepads();
