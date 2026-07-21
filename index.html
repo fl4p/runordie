@@ -1889,9 +1889,20 @@ function updatePowerups(dt) {
 }
 
 // ---------- Kameras (Splitscreen) ----------
+// FOV in three.js ist VERTIKAL — bei schmalen Viewports (Handy hochkant,
+// Splitscreen-Hälften) wird der horizontale Blickwinkel sonst winzig.
+// Deshalb: Basis-FOV plus garantierter Mindest-Blickwinkel in der Breite.
+const BASE_FOV = 68, MIN_HFOV = 78, MAX_FOV = 110;
+function applyFov(cam) {
+  const need = THREE.MathUtils.radToDeg(
+    2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(MIN_HFOV) / 2) / cam.aspect));
+  cam.fov = Math.min(MAX_FOV, Math.max(BASE_FOV, need));
+  cam.updateProjectionMatrix();
+}
 function makeCam() {
-  const cam = new THREE.PerspectiveCamera(62, (innerWidth / 2) / innerHeight, 0.1, 250);
+  const cam = new THREE.PerspectiveCamera(BASE_FOV, (innerWidth / 2) / innerHeight, 0.1, 250);
   cam.position.set(0, 5, 12);
+  applyFov(cam);
   return cam;
 }
 const cams = [makeCam(), makeCam()];
@@ -2512,7 +2523,7 @@ function applySoloLayout() {
       `<span id="s2">${player2.score}</span> &nbsp;<span class="p2">SPIELER 2</span>`;
   }
   cams[0].aspect = (soloMode ? innerWidth : innerWidth / 2) / innerHeight;
-  cams[0].updateProjectionMatrix();
+  applyFov(cams[0]);
 }
 
 function startGame(solo = false) {
@@ -2954,7 +2965,7 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
   cams[0].aspect = (soloMode ? innerWidth : innerWidth / 2) / innerHeight;
   cams[1].aspect = (innerWidth / 2) / innerHeight;
-  for (const c of cams) c.updateProjectionMatrix();
+  for (const c of cams) applyFov(c);
 });
 
 MENU_HTML = $('msg').innerHTML;
