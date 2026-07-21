@@ -218,6 +218,26 @@ ein weiterer Laser dazu (max. 5 gleichzeitig). Drei Typen:
 Das Tempo steigt mit der Zeit. Treffer werfen die Figur kurz in den vollen
 Ragdoll-Modus (keine Kontrolle) — fällt sie dabei von der Plattform, war's das.
 
+## Bot-Gegner (GEGEN BOT)
+
+Über den Menü-Button **🤖 GEGEN BOT** (oder Taste `2`) spielt man allein im
+Vollbild gegen einen Computer-Gegner, der Spieler 2 steuert. Die Stärke
+(LEICHT/MITTEL/SCHWER) wird im Menü durchgeschaltet und gemerkt. Der Bot nutzt
+dieselbe Eingabe-Pipeline wie ein Mensch (Analog-Pads + `tryJump/tryPunch/
+tryTackle`): er weicht Hindernissen, Lasern und Haien aus, hangelt sich an
+Kanten hoch, sammelt Power-ups und boxt/grätscht im Nahkampf. Schwierigkeit =
+Reaktionszeit, Zielfehler, Aussetzer-Quote und Aggressivität.
+
+### Automatisierte Tests / Soak
+
+- `?bot=easy|medium|hard` — startet sofort GEGEN BOT
+- `?bot1=hard&bot2=hard` — zwei Bots spielen endlos gegeneinander (Splitscreen,
+  Runden starten von selbst neu) — ideal als Dauerlauf zum Bug-Finden
+- `?check=1` — Invarianten-Checks auch ohne Bot (NaN-Positionen, festhängende
+  Ragdolls/Runden, Entity-Leaks, Geschwindigkeits-Explosionen). Verstöße landen
+  als `console.error('[INVARIANT]', …)` und in `window.__game.invariants`.
+- `__game.setBot(spielerIndex, 'hard' | null)` schaltet Bots zur Laufzeit um.
+
 ## Technik
 
 Eine Datei (`index.html`): Three.js (Rendering, Scissor-Splitscreen) + cannon-es
