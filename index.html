@@ -3016,7 +3016,7 @@ const BOT_DIFFS = {
   // horizon 3.0: bei Tempo 16 m/s braucht die Querung zur Lücke bis zu ~2.3 s —
   // wer die Wand erst 2 s vorher sieht, wird eingeholt, gestunnt und über die
   // Hinterkante geschoben (Stun-Lock, aus den Soak-Trails)
-  hard:   { react: 0.10, jitter: 0.04, gain: 3.0, aimErr: 0.15, mistakeP: 0.01, horizon: 3.0, aggro: 0.85, tackleP: 0.22, puWant: 0.90, edgeMargin: 2.2 },
+  hard:   { react: 0.10, jitter: 0.04, gain: 3.6, aimErr: 0.15, mistakeP: 0.01, horizon: 3.0, aggro: 0.85, tackleP: 0.22, puWant: 1.0, edgeMargin: 2.3 },
 };
 const BOT_LABELS = { easy: 'LEICHT', medium: 'MITTEL', hard: 'SCHWER' };
 
@@ -3106,8 +3106,10 @@ function botScanThreat(p, bot) {
 // hinten schiebt, und er wird widerstandslos über die Hinterkante gedrückt
 // Zusätzlich weit vorn bleiben: Laser-/Explosions-Treffer schleudern nach +z —
 // wer bei z≈5 steht, fliegt über die Hinterkante, wer bei z≈2 steht, landet noch
-// Auf Eis noch weiter vorn agieren: Rutscher nach Treffern brauchen dort viel mehr Auslauf
-function botDodgeZ(t) { return Math.min(t.position.z, iceLevel > 0.3 ? 2.5 : 4); }
+// Ein einziger Ragdoll-Treffer (0.8 s) vor einer Wand schleift die liegende
+// Figur 6-13 m nach hinten — wer bei z≈5 erwischt wird, ist über der
+// Hinterkante, bevor der Stun endet. Auf Eis (längere Rutscher) noch enger.
+function botDodgeZ(t) { return Math.min(t.position.z, iceLevel > 0.3 ? 2 : 3); }
 
 // Parallel ankommende "Springer"-Gefahren (Querlaser, Latte, Walze) übersehen
 // wir nicht, nur weil gerade eine ANDERE Gefahr seitlich ausgewichen wird:
@@ -3120,7 +3122,7 @@ function botSecondaryJump(p, bot) {
     if (L.type !== 'line') continue;
     const closure = Math.max(0.3, L.speed - t.velocity.z);
     const tta = (t.position.z - L.z) / closure;
-    if (tta >= 0 && tta < 0.45) jumpAt = Math.min(jumpAt ?? 9e9, perfNow() + Math.max(0, tta - 0.25));
+    if (tta >= 0 && tta < 0.7) jumpAt = Math.min(jumpAt ?? 9e9, perfNow() + Math.max(0, tta - 0.30));
   }
   for (const o of obstacles) {
     const b = o.body;
@@ -3188,7 +3190,9 @@ function botHandleThreat(p, bot, th) {
       bot.targetZ = botDodgeZ(t);
       if (L.type === 'line') {
         bot.targetX = t.position.x;
-        bot.plan = { type: 'jump', at: perfNow() + Math.max(0, th.tta - 0.25) };
+        // Hohe/pendelnde Strahlen (bis y≈2.0, Trefferband ±0.45): ein einzelner
+        // Sprung kommt beim Kreuzen nur knapp drüber — Doppelsprung schafft Luft
+        bot.plan = { type: 'jump', at: perfNow() + Math.max(0, th.tta - 0.30), dbl: L.y0 + (L.amp || 0) > 1.15 };
       } else if (L.type === 'spin') { // Spitzen reichen bis |x|=3.5
         bot.targetX = Math.sign(t.position.x || 1) * 5.2;
       } else { // wiper: nahe am Drehpunkt der Gegenseite vorbei
@@ -3304,11 +3308,15 @@ function botThink(p, bot) {
     return;
   }
   if (powerups.length && Math.random() < d.puWant) {
+    // Nicht das NÄCHSTE Item, sondern das überlebenswichtigste: 🛡/⭐ brechen
+    // die tödliche Kette Treffer→Ragdoll→über-die-Hinterkante-geschleift —
+    // sie sind ein weiteres Leben, ein 🥊 nebenan ist nur nett
+    const puBonus = { shield: 8, invuln: 6, jump: 3 };
     let best = null, bd = 1e9;
     for (const pu of powerups) {
       const m = pu.mesh.position;
-      if (m.z < t.position.z - 14 || m.z > t.position.z + 2) continue;
-      const dist = Math.hypot(m.x - t.position.x, m.z - t.position.z);
+      if (m.z < t.position.z - 16 || m.z > t.position.z + 2) continue;
+      const dist = Math.hypot(m.x - t.position.x, m.z - t.position.z) - (puBonus[pu.type] || 0);
       if (dist < bd) { bd = dist; best = pu; }
     }
     if (best) { // Drift des Items vorhalten
