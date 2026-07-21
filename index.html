@@ -3673,7 +3673,7 @@ function renderScoreBar() {
   // nächsten resetRound synchronisiert, die Anzeige soll sofort stimmen
   $('score').innerHTML = rosterSlots.slice().sort((a, b) => a - b).map((i) => players[i]).map((p) =>
     `<span style="color:${PLAYER_DEFS[p.id - 1].css};font-weight:700">${playerLabel(p)}</span> ` +
-    `<span id="s${p.id}">${p.score}</span>`
+    `<span id="s${p.id}">${Number(p.score) || 0}</span>`
   ).join(' <span style="opacity:.45">·</span> ');
 }
 
@@ -4948,6 +4948,8 @@ function netConnectTo(url, onReady, allowFallback) {
 // fremden Relay zeigen): alles validieren, bevor es in Zustand oder innerHTML
 // landet — sonst wäre ein XSS über {t:'err',msg:'<img onerror=…>'} möglich.
 const netValidSlot = (s) => Number.isInteger(s) && s >= 0 && s < 4 ? s : null;
+// Scores kommen als JSON vom Host/Relay — vor Zustand/DOM auf Integer klemmen
+const netValidScore = (s) => Number.isInteger(s) ? Math.max(0, Math.min(255, s)) : 0;
 const netValidCode = (c) => (typeof c === 'string' && /^[A-Z0-9]{4}$/.test(c)) ? c : null;
 const netSanitizeRoster = (r) => Array.isArray(r)
   ? [...new Set(r.map(netValidSlot).filter((s) => s !== null))].sort((a, b) => a - b)
@@ -5034,17 +5036,19 @@ function netApplyEvent(m) {
       netRoundNo = m.n ?? netRoundNo;
       rosterSlots = netSanitizeRoster(m.roster) || rosterSlots;
       resetRound();
-      (m.scores || []).forEach((s, i) => { if (players[i]) players[i].score = s; });
+      (Array.isArray(m.scores) ? m.scores : []).slice(0, players.length)
+        .forEach((s, i) => { if (players[i]) players[i].score = netValidScore(s); });
       netSnaps.length = 0;
       netLastSnapAt = perfNow(); // Watchdog-Basis bis zum ersten Snapshot
       applySoloLayout();
       // Beitritt exakt beim Start-Klick des Hosts: diese Runde fehlt man noch
       if (!rosterSlots.includes(netMySlot)) flashPad('⏳ Du steigst mit der nächsten Runde ein', '#ffd23d');
       return;
-    case 'death': { const p = players[m.slot]; if (p) p.alive = false; return; }
+    case 'death': { const s = netValidSlot(m.slot); const p = s !== null ? players[s] : null; if (p) p.alive = false; return; }
     case 'end': {
       state = 'roundEnd';
-      (m.scores || []).forEach((s, i) => { if (players[i]) players[i].score = s; });
+      (Array.isArray(m.scores) ? m.scores : []).slice(0, players.length)
+        .forEach((s, i) => { if (players[i]) players[i].score = netValidScore(s); });
       renderScoreBar();
       showRoundEndMsg(m.w >= 0 ? players[m.w] : null);
       roundEndAt = Infinity; // die nächste Runde startet der Host per Event
