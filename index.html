@@ -3318,18 +3318,23 @@ const profSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const profNextFrame = () => new Promise((r) => requestAnimationFrame(() => r()));
 
 async function profMeasureRefresh(frames = 45) {
-  // Echten Display-Takt im Leerlauf (Menü) messen: dort treffen Frames das Vsync,
-  // also ist der Median der Frame-Intervalle die wahre Vsync-Periode. (Unter Last
-  // erreicht kein Frame das Vsync, deshalb lässt sich das Budget NICHT aus der Last ableiten.)
+  // Echten Display-Takt messen. WICHTIG: animate() rendert die Szene in JEDEM Zustand
+  // (auch im Menü), d. h. „Menü-Leerlauf" ist nicht wirklich leer. Deshalb frieren wir
+  // das Rendern für die Messung ein (profiling=true → animate() kehrt sofort zurück),
+  // sodass die rAF-Frames am reinen Vsync liegen und das Budget nicht die Menü-Renderzeit ist.
+  const wasProfiling = profiling;
+  profiling = true;
   const iv = []; let last = 0;
-  for (let i = 0; i < frames; i++) {
-    const t = await new Promise((r) => requestAnimationFrame(r));
-    if (last) iv.push(t - last);
-    last = t;
-  }
-  if (!iv.length) return 1000 / 60;
+  try {
+    for (let i = 0; i < frames; i++) {
+      const t = await new Promise((r) => requestAnimationFrame(r));
+      if (last) iv.push(t - last);
+      last = t;
+    }
+  } finally { profiling = wasProfiling; }
+  if (iv.length < 3) return 1000 / 60;
   iv.sort((a, b) => a - b);
-  return iv[iv.length >> 1]; // Median
+  return iv[iv.length >> 1]; // Median der leerlaufenden Vsync-Frames = wahre Periode
 }
 
 function profStats(a) {
@@ -3433,16 +3438,24 @@ function analyzeLiveFrames(budget) {
 
   // Kernfrage: passt die CPU-JS-Zeit ins Frame-Budget? Das ist der belastbare, vsync-unabhängige
   // Indikator — anders als „Frames zu langsam", das auch von Vsync-Quantelung kommen kann.
+  // Reihenfolge: CPU-gebunden > GPU/thermisch (Frames fallen ab, JS aber billig) > Ruckler
+  // (im Schnitt am Takt, aber Spitzen) > flüssig. Die Formulierung nutzt die IST-FPS, damit
+  // das Verdikt nie der angezeigten FPS-Zeile widerspricht.
   const cpuMean = S.cpu.mean;
-  const cpuLoad = cpuMean / budget;          // Anteil des Budgets, den JS allein verbraucht
-  const dropping = S.iv.mean > budget * 1.4; // Frames fallen deutlich aus dem Takt
+  const cpuLoad = cpuMean / budget;           // Anteil des Budgets, den JS allein verbraucht
+  const dropping = S.iv.mean > budget * 1.2;  // Frames fallen IM SCHNITT aus dem Takt
+  // Reihenfolge bewusst: CPU-gebunden (JS füllt Budget) > Ruckler (viele Spitzen, aber gutes Mittel —
+  // meist GC) > GPU/thermisch (Mittel fällt ab, JS billig) > flüssig. jankPct (Anteil klarer Ausreißer)
+  // ist das ehrliche Ruckel-Maß — anders als 1%-low/p99, das fast immer einen einzelnen Ausreißer trifft.
   let bound, boundNote;
   if (cpuLoad >= 0.9) {
     bound = 'cpu'; boundNote = `CPU-gebunden: JS-Arbeit ${cpuMean.toFixed(1)} ms erreicht/übersteigt das ${budget.toFixed(1)} ms-Budget (${Math.round(cpuLoad * 100)} %). Nächstes Ziel liegt im Hauptthread — Physik/Logik/GC, nicht auf der GPU.`;
+  } else if (jankPct > 5) {
+    bound = 'jank'; boundNote = `Im Schnitt am Takt (Ø ${Math.round(fpsMean)} fps), aber ${jankPct.toFixed(1)} % der Frames rucken (1%-low ${Math.round(fps1low)} fps). Typisch für GC-Spitzen — Allokationen pro Frame senken.`;
   } else if (dropping) {
-    bound = 'gpu'; boundNote = `GPU/thermisch gebunden: JS ist billig (${cpuMean.toFixed(1)} ms, ${Math.round(cpuLoad * 100)} % Budget), Frames dennoch langsam (Ø ${S.iv.mean.toFixed(1)} ms bei ${budget.toFixed(1)} ms Budget).`;
+    bound = 'gpu'; boundNote = `GPU/thermisch gebunden: JS ist billig (${cpuMean.toFixed(1)} ms, ${Math.round(cpuLoad * 100)} % Budget), aber nur Ø ${Math.round(fpsMean)} fps bei ~${refreshHz} Hz. Deutet auf GPU-Last oder Throttling.`;
   } else {
-    bound = 'vsync'; boundNote = `Läuft am Display-Takt (~${refreshHz} Hz); CPU-JS nutzt ${Math.round(cpuLoad * 100)} % des Budgets — ${cpuLoad < 0.6 ? 'reichlich' : 'noch etwas'} Luft.`;
+    bound = 'vsync'; boundNote = `Flüssig am Display-Takt (~${refreshHz} Hz, Ø ${Math.round(fpsMean)} fps); CPU-JS nutzt ${Math.round(cpuLoad * 100)} % des Budgets — ${cpuLoad < 0.6 ? 'reichlich' : 'noch etwas'} Luft.`;
   }
 
   // GC/Allocation-Näherung (performance.memory ist auf echten Geräten grob gequantelt).
@@ -3587,11 +3600,13 @@ function renderProfReport(d) {
   // ---- Live-Frame-Profil (echtes Gameplay, solo) aufbereiten ----
   const L = d.live;
   const f1 = (x) => x.toFixed(1);
-  const boundLabel = { vsync: 'FLÜSSIG (am Display-Takt)', cpu: 'CPU-GEBUNDEN', gpu: 'GPU/THERMISCH-GEBUNDEN' };
+  const boundLabel = { vsync: 'FLÜSSIG (am Display-Takt)', cpu: 'CPU-GEBUNDEN', gpu: 'GPU/THERMISCH-GEBUNDEN', jank: 'RUCKLER (GC-SPITZEN)' };
   let liveLines, liveHtml;
   if (L) {
     const waitMs = Math.max(0, L.S.iv.mean - L.S.cpu.mean);
-    const gcTxt = L.gc ? `~${f1(L.gc.allocPerFrameKB)} KB/Frame Allokation, ${L.gc.events} GC-Abfälle (grob)` : 'performance.memory nicht verfügbar';
+    // performance.memory ist auf echten Geräten grob gequantelt -> ganze KB, „Heap-Rückgänge"
+    // statt „GC-Abfälle", damit die Zahl nicht präziser wirkt als sie ist.
+    const gcTxt = L.gc ? `~${Math.round(L.gc.allocPerFrameKB)} KB/Frame, ${L.gc.events} Heap-Rückgänge (grob/quantisiert)` : 'performance.memory nicht verfügbar';
     liveLines = [
       'Live-Frame-Profil (echtes Solo-Gameplay, ' + L.nFrames + ' Frames):',
       '  Display: ~' + L.refreshHz + ' Hz (Budget ' + f1(L.budget) + ' ms/Frame)',
@@ -3603,7 +3618,8 @@ function renderProfReport(d) {
       '  GC: ' + gcTxt,
       '  VERDIKT: ' + boundLabel[L.bound] + ' — ' + L.boundNote,
     ];
-    const boundCls = L.bound === 'vsync' ? 'pp-good' : L.bound === 'cpu' ? 'pp-warn' : 'pp-warn';
+    // CPU-gebunden = rot (der Fall, den man aktiv angehen sollte); GPU/Ruckler = amber; flüssig = grün.
+    const boundCls = L.bound === 'vsync' ? 'pp-good' : L.bound === 'cpu' ? 'pp-crit' : 'pp-warn';
     liveHtml = `
     <div class="pp-sect">Live-Frame-Profil · echtes Solo-Gameplay (${L.nFrames} Frames)</div>
     <div class="pp-frame">
@@ -3613,7 +3629,7 @@ function renderProfReport(d) {
       <span>CPU-JS/Frame (Logik + Draw-Submit)</span><span class="pp-n">${f1(L.S.cpu.mean)} ms (${f1(L.S.logic.mean)} + ${f1(L.S.rsub.mean)})</span>
       <span>GPU/Vsync-Wartezeit</span><span class="pp-n">~${f1(Math.max(0, L.S.iv.mean - L.S.cpu.mean))} ms</span>
       <span>Jank (Frames &gt; 1,8× Budget)</span><span class="pp-n">${f1(L.jankPct)} %</span>
-      <span>GC (grob)</span><span class="pp-n">${L.gc ? f1(L.gc.allocPerFrameKB) + ' KB/Frame · ' + L.gc.events + ' Abfälle' : 'n/a'}</span>
+      <span>GC (grob, quantisiert)</span><span class="pp-n">${L.gc ? Math.round(L.gc.allocPerFrameKB) + ' KB/Frame · ' + L.gc.events + ' Heap-Rückg.' : 'n/a'}</span>
     </div>
     <div class="pp-rec ${boundCls}">🎯 <b>${boundLabel[L.bound]}</b> — ${L.boundNote}</div>`;
   } else {
@@ -3664,6 +3680,7 @@ function renderProfReport(d) {
     #ppcard .pp-rec.pp-ceil{border-left-color:#c9903f;color:#d9c4a0;background:#1e1a12}
     #ppcard .pp-rec.pp-good{border-left-color:#3fbf7f;color:#a7e9c6;background:#10231a}
     #ppcard .pp-rec.pp-warn{border-left-color:#e0913a;color:#f0cfa0;background:#211a10}
+    #ppcard .pp-rec.pp-crit{border-left-color:#e5544a;color:#f3b8b2;background:#241211}
     #ppcard .pp-actions{display:flex;gap:10px;justify-content:flex-end;padding:8px 22px 20px}
     #ppcard button{font:600 13px system-ui;padding:9px 16px;border-radius:8px;border:1px solid #33405f;background:#1b2233;color:#dfe6f5;cursor:pointer}
     #ppcard button.pp-primary{background:#2f5fd0;border-color:#2f5fd0;color:#fff}
