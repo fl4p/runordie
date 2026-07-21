@@ -3297,8 +3297,270 @@ if (localStorage.getItem('runordie_dayMode') === '1') toggleDaySky();
 if (localStorage.getItem('runordie_rotMode') === '1') toggleRotMode();
 animate();
 
+// ---------- GPU-Profiler ----------
+// Misst auf der ECHTEN GPU (nicht wie das Headless-Harness unter SwiftShader):
+// die Renderkosten je Schatten-Konfiguration und die visuelle Abweichung gegenüber
+// der Maximalqualität — um das nächste sinnvolle Optimierungsziel zu finden.
+const SHADOW_TYPES = { Basic: THREE.BasicShadowMap, PCF: THREE.PCFShadowMap, PCFSoft: THREE.PCFSoftShadowMap };
+const profSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const profNextFrame = () => new Promise((r) => requestAnimationFrame(() => r()));
+
+function forceMaterialRecompile() {
+  // Schattentyp/-schalter ändert die Material-Shader; Three cached kompilierte Programme,
+  // deshalb muss die Neuübersetzung erzwungen werden (genau das ging im Headless-Bench schief).
+  scene.traverse((o) => {
+    if (!o.material) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) m.needsUpdate = true;
+  });
+}
+
+function applyShadowConfig(cfg) {
+  renderer.shadowMap.enabled = cfg.enabled;
+  renderer.shadowMap.type = SHADOW_TYPES[cfg.type];
+  if (sun.shadow.mapSize.x !== cfg.size) {
+    sun.shadow.mapSize.set(cfg.size, cfg.size);
+    if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; } // erzwingt Neu-Allokation in passender Größe
+  }
+  forceMaterialRecompile();
+  renderer.shadowMap.needsUpdate = true;
+}
+
+function profTime(renderFn, n) {
+  // CPU-Timing mit gl.finish(): blockiert bis die GPU fertig ist -> echte GPU-Arbeit pro Frame.
+  const gl = renderer.getContext();
+  for (let i = 0; i < 4; i++) renderFn(); // Aufwärmen + Shader-Kompilierung aus der Messung halten
+  gl.finish();
+  const t0 = performance.now();
+  for (let i = 0; i < n; i++) renderFn();
+  gl.finish();
+  return (performance.now() - t0) / n;
+}
+
+function profGrab(cam) {
+  renderer.shadowMap.needsUpdate = true;
+  renderer.render(scene, cam);
+  const gl = renderer.getContext();
+  const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+  const buf = new Uint8Array(w * h * 4);
+  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+  return buf;
+}
+
+function profDiff(a, gold) {
+  // Ganzflächiger Mittelwert verwässert dünne Schattenkanten im großen Himmel zu 0.
+  // Deshalb: „area" = Anteil sichtbar geänderter Pixel (der Hauptindikator „wie anders sieht es aus"),
+  // „mag" = mittlere Stärke der Änderung NUR über die geänderten Pixel.
+  let changed = 0, samples = 0, magSum = 0;
+  const THRESH = 8; // Summe der RGB-Kanaldifferenz, ab der ein Pixel als „geändert" gilt (~3/255 je Kanal)
+  for (let i = 0; i < a.length; i += 16) { // jedes 4. Pixel
+    const dr = Math.abs(a[i] - gold[i]), dg = Math.abs(a[i + 1] - gold[i + 1]), db = Math.abs(a[i + 2] - gold[i + 2]);
+    const s = dr + dg + db;
+    samples++;
+    if (s > THRESH) { changed++; magSum += s; }
+  }
+  return {
+    area: 100 * changed / samples,                                   // % der Fläche, die sich sichtbar ändert
+    mag: changed ? (magSum / changed) / (3 * 255) * 100 : 0,         // mittlere Intensität dort
+  };
+}
+
+function profStatus(text, el) {
+  if (!el) {
+    el = document.createElement('div');
+    el.style.cssText = 'position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;background:rgba(8,10,18,.74);color:#e8eefc;font:600 20px/1.5 system-ui,sans-serif;backdrop-filter:blur(2px)';
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+  return el;
+}
+
+async function runGpuProfile() {
+  if (profiling || state !== 'menu') return;
+  const overlay = profStatus('🔬 GPU-Profil — Szene wird aufgewärmt … (~3 s)');
+  try {
+    // Repräsentative Szene: kurz solo laufen lassen, damit Hindernisse (Schattenwerfer) existieren.
+    startGame(true);
+    player1.invulnUntil = perfNow() + 999;
+    player2.invulnUntil = perfNow() + 999;
+    await profSleep(2800);
+    profiling = true;            // animate() einfrieren — ab jetzt rendert nur der Profiler
+    await profNextFrame();
+    profStatus('🔬 GPU-Profil — messe Renderkosten …', overlay);
+
+    const cam = cams[0];
+    cam.aspect = innerWidth / innerHeight; cam.updateProjectionMatrix();
+    renderer.setScissorTest(false);
+    renderer.setViewport(0, 0, innerWidth, innerHeight);
+
+    const gl = renderer.getContext();
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    const gpu = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : 'unbekannt (Extension blockiert)';
+
+    const N = 40;
+    const renderOnce = () => { renderer.shadowMap.needsUpdate = true; renderer.render(scene, cam); };
+    const configs = [
+      { label: 'PCFSoft · 2048 (Maximum, Referenz)', type: 'PCFSoft', size: 2048, enabled: true, gold: true },
+      { label: 'PCF · 2048 (aktuell)',                type: 'PCF',     size: 2048, enabled: true, current: true },
+      { label: 'PCF · 1024',                          type: 'PCF',     size: 1024, enabled: true },
+      { label: 'PCF · 512',                           type: 'PCF',     size: 512,  enabled: true },
+      { label: 'Basic · 2048 (harte Kanten)',         type: 'Basic',   size: 2048, enabled: true },
+      { label: 'Schatten AUS',                        type: 'PCF',     size: 2048, enabled: false },
+    ];
+
+    let goldPx = null;
+    for (const cfg of configs) {
+      applyShadowConfig(cfg);
+      await profNextFrame();
+      cfg.ms = profTime(renderOnce, N);
+      const px = profGrab(cam);
+      if (cfg.gold) { goldPx = px; cfg.area = 0; cfg.mag = 0; }
+      else { const d = profDiff(px, goldPx); cfg.area = d.area; cfg.mag = d.mag; }
+      await profNextFrame();
+    }
+    goldPx = null;
+
+    // Splitscreen: „Schatten einmal pro Frame" (ausgeliefert) vs. „doppelt" (vor dem Fix) auf DIESER GPU.
+    applyShadowConfig({ type: 'PCF', size: 2048, enabled: true });
+    await profNextFrame();
+    const c0 = cams[0], c1 = cams[1];
+    const soloMs = profTime(renderOnce, N);
+    const versusOnce = profTime(() => { renderer.shadowMap.needsUpdate = true; renderer.render(scene, c0); renderer.render(scene, c1); }, N);
+    const versusNaive = profTime(() => { renderer.shadowMap.needsUpdate = true; renderer.render(scene, c0); renderer.shadowMap.needsUpdate = true; renderer.render(scene, c1); }, N);
+
+    // Auslieferungszustand wiederherstellen und zurück ins Menü.
+    applyShadowConfig({ type: 'PCF', size: 2048, enabled: true });
+    renderer.shadowMap.autoUpdate = false;
+    profiling = false;
+    backToMenu();
+    overlay.remove();
+
+    renderProfReport({ gpu, w: gl.drawingBufferWidth, h: gl.drawingBufferHeight, pr: renderer.getPixelRatio(), configs, soloMs, versusOnce, versusNaive });
+  } catch (err) {
+    profiling = false;
+    overlay.remove();
+    try { backToMenu(); } catch (e) {}
+    alert('GPU-Profil fehlgeschlagen: ' + err);
+  }
+}
+
+function renderProfReport(d) {
+  const cur = d.configs.find((c) => c.current);
+  const gold = d.configs.find((c) => c.gold);
+  // Empfehlung: größte Ersparnis ggü. aktuell, solange sich nur ein winziger Flächenanteil sichtbar ändert.
+  const SAFE = 1.5;   // max. % der Bildfläche, die sich ggü. Maximalqualität ändern darf
+  const SAFE_MAG = 3; // und die Änderung dort darf nicht zu kräftig sein (sonst z. B. harte Kanten statt weicher)
+  const cands = d.configs.filter((c) => !c.current && c.enabled && c.area < SAFE && c.mag < SAFE_MAG && (cur.ms - c.ms) > 0.15);
+  cands.sort((a, b) => a.ms - b.ms);
+  const pick = cands[0];
+  const off = d.configs.find((c) => !c.enabled);
+  const shadowSaved = d.versusNaive - d.versusOnce;
+
+  let rec;
+  if (pick) {
+    rec = `Nächstes Ziel: <b>${pick.label}</b> → spart <b>${(cur.ms - pick.ms).toFixed(2)} ms/Frame</b> (${(100 * (cur.ms - pick.ms) / cur.ms).toFixed(0)} %) und ändert nur ${pick.area.toFixed(2)} % der Bildfläche — praktisch unsichtbar.`;
+  } else {
+    rec = `Die Schatten-Konfiguration ist auf dieser GPU bereits gut ausbalanciert (keine praktisch verlustfreie Ersparnis > 0,15 ms). Nächstes Ziel liegt woanders: Draw-Call-Anzahl, Partikel/Schnee, oder der zweite Splitscreen-Renderpass.`;
+  }
+  const ceiling = off ? `Obergrenze: <b>Schatten ganz aus</b> spart ${(cur.ms - off.ms).toFixed(2)} ms/Frame, ändert aber ${off.area.toFixed(1)} % der Fläche (sichtbar).` : '';
+
+  const maxMs = Math.max(...d.configs.map((c) => c.ms));
+  const rows = d.configs.map((c) => {
+    const dms = c.current ? '—' : ((c.ms - cur.ms >= 0 ? '+' : '') + (c.ms - cur.ms).toFixed(2));
+    const tag = c.gold ? '<span class="pp-tag pp-ref">REF</span>' : c.current ? '<span class="pp-tag pp-cur">AKTUELL</span>' : (pick && c === pick) ? '<span class="pp-tag pp-pick">EMPFOHLEN</span>' : '';
+    const barW = Math.max(2, 100 * c.ms / maxMs);
+    const vis = c.gold ? 'Referenz' : `${c.area.toFixed(2)}%`;
+    return `<tr class="${c.current ? 'pp-rowcur' : ''}${pick && c === pick ? ' pp-rowpick' : ''}">
+      <td class="pp-l">${c.label} ${tag}</td>
+      <td class="pp-n">${c.ms.toFixed(2)}<span class="pp-bar"><i style="width:${barW}%"></i></span></td>
+      <td class="pp-n">${dms}</td>
+      <td class="pp-n" title="mittlere Intensität der Änderung: ${c.gold ? 0 : c.mag.toFixed(1)}%">${vis}</td>
+    </tr>`;
+  }).join('');
+
+  // paste-fertiger Klartext-Bericht (für „Kopieren")
+  const txt = [
+    'RUN OR DIE — GPU-Profilbericht',
+    'GPU: ' + d.gpu,
+    'Canvas: ' + d.w + '×' + d.h + ' (pixelRatio ' + d.pr + '), Messmethode: CPU-Timing + gl.finish()',
+    '',
+    'Frame-Renderkosten (aktuelle Konfig, PCF·2048, Schatten 1×/Frame):',
+    '  Solo (1 Kamera):      ' + d.soloMs.toFixed(2) + ' ms  (~' + Math.round(1000 / d.soloMs) + ' fps Renderdecke)',
+    '  Versus (Splitscreen): ' + d.versusOnce.toFixed(2) + ' ms  (~' + Math.round(1000 / d.versusOnce) + ' fps Renderdecke)',
+    '  Versus OHNE Fix (2× Schatten): ' + d.versusNaive.toFixed(2) + ' ms  → ausgelieferter Fix spart ' + shadowSaved.toFixed(2) + ' ms/Frame',
+    '',
+    'Schatten-Konfigurationen (Fläche = % der Bildfläche, die sich ggü. PCFSoft·2048-Maximum ändert; Int = Intensität dort):',
+    ...d.configs.map((c) => '  ' + c.label.padEnd(34) + c.ms.toFixed(2).padStart(7) + ' ms   Fläche ' + (c.gold ? 'REF' : c.area.toFixed(2) + '%') + (c.gold ? '' : ' · Int ' + c.mag.toFixed(1) + '%')),
+    '',
+    'Empfehlung: ' + (pick ? pick.label + ' spart ' + (cur.ms - pick.ms).toFixed(2) + ' ms/Frame bei ' + pick.area.toFixed(2) + '% geänderter Fläche' : 'Schatten bereits gut ausbalanciert — nächstes Ziel: Draw-Calls / Partikel / 2. Renderpass'),
+  ].join('\n');
+
+  const style = document.createElement('style');
+  style.textContent = `
+    #ppwrap{position:fixed;inset:0;z-index:70;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(6,8,15,.78);backdrop-filter:blur(3px);font-family:system-ui,-apple-system,sans-serif}
+    #ppcard{width:min(720px,96vw);max-height:92vh;overflow:auto;background:#12151f;color:#dfe6f5;border:1px solid #29304a;border-radius:14px;box-shadow:0 24px 60px rgba(0,0,0,.5)}
+    #ppcard h2{margin:0;padding:18px 22px 6px;font-size:19px;letter-spacing:.2px}
+    #ppcard .pp-sub{padding:0 22px 14px;color:#8b96b3;font-size:12.5px;line-height:1.5;border-bottom:1px solid #222a40}
+    #ppcard .pp-sect{padding:16px 22px 4px;font:600 11px/1 system-ui;letter-spacing:1.4px;text-transform:uppercase;color:#6fa8ff}
+    #ppcard .pp-frame{padding:2px 22px 6px;display:grid;grid-template-columns:1fr auto;gap:2px 14px;font-size:13.5px}
+    #ppcard .pp-frame .pp-n{font-variant-numeric:tabular-nums;color:#eaf0ff}
+    #ppcard table{width:calc(100% - 44px);margin:6px 22px 4px;border-collapse:collapse;font-size:13px}
+    #ppcard th{text-align:left;color:#6b7597;font-weight:600;font-size:11px;letter-spacing:.6px;text-transform:uppercase;padding:6px 8px;border-bottom:1px solid #2a324c}
+    #ppcard td{padding:7px 8px;border-bottom:1px solid #1c2338;vertical-align:middle}
+    #ppcard td.pp-n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+    #ppcard .pp-l{color:#cdd6ec}
+    #ppcard .pp-rowcur td{background:#182138}
+    #ppcard .pp-rowpick td{background:#12261c}
+    #ppcard .pp-bar{display:inline-block;width:72px;height:6px;margin-left:8px;background:#232b44;border-radius:3px;vertical-align:middle;overflow:hidden}
+    #ppcard .pp-bar i{display:block;height:100%;background:linear-gradient(90deg,#4f8cff,#8a6bff)}
+    #ppcard .pp-tag{font-size:9.5px;font-weight:700;letter-spacing:.5px;padding:1px 6px;border-radius:999px;margin-left:6px;vertical-align:middle}
+    #ppcard .pp-ref{background:#2a3350;color:#9fb2e6}#ppcard .pp-cur{background:#243a66;color:#bcd4ff}#ppcard .pp-pick{background:#1d4a2e;color:#8ff0b0}
+    #ppcard .pp-rec{margin:12px 22px;padding:13px 15px;background:#141d2e;border:1px solid #2b3350;border-left:3px solid #6fa8ff;border-radius:8px;font-size:13.5px;line-height:1.55}
+    #ppcard .pp-rec.pp-ceil{border-left-color:#c9903f;color:#d9c4a0;background:#1e1a12}
+    #ppcard .pp-actions{display:flex;gap:10px;justify-content:flex-end;padding:8px 22px 20px}
+    #ppcard button{font:600 13px system-ui;padding:9px 16px;border-radius:8px;border:1px solid #33405f;background:#1b2233;color:#dfe6f5;cursor:pointer}
+    #ppcard button.pp-primary{background:#2f5fd0;border-color:#2f5fd0;color:#fff}
+    #ppcard button:hover{filter:brightness(1.12)}
+  `;
+  document.head.appendChild(style);
+
+  const wrap = document.createElement('div');
+  wrap.id = 'ppwrap';
+  wrap.innerHTML = `<div id="ppcard">
+    <h2>🔬 GPU-Profilbericht</h2>
+    <div class="pp-sub"><b>${d.gpu}</b><br>${d.w}×${d.h} px · pixelRatio ${d.pr} · Messung: CPU-Timing mit <code>gl.finish()</code> (echte GPU, kein SwiftShader)</div>
+
+    <div class="pp-sect">Frame-Renderkosten · aktuelle Konfiguration</div>
+    <div class="pp-frame">
+      <span>Solo (1 Kamera)</span><span class="pp-n">${d.soloMs.toFixed(2)} ms · ~${Math.round(1000 / d.soloMs)} fps-Decke</span>
+      <span>Versus / Splitscreen (2 Kameras)</span><span class="pp-n">${d.versusOnce.toFixed(2)} ms · ~${Math.round(1000 / d.versusOnce)} fps-Decke</span>
+      <span>Versus ohne den Fix (2× Schatten)</span><span class="pp-n">${d.versusNaive.toFixed(2)} ms</span>
+      <span style="color:#8ff0b0">→ ausgelieferter „Schatten 1×"-Fix spart</span><span class="pp-n" style="color:#8ff0b0">${shadowSaved.toFixed(2)} ms/Frame</span>
+    </div>
+
+    <div class="pp-sect">Schatten-Konfigurationen · Tempo vs. Bildqualität</div>
+    <table><thead><tr><th>Konfiguration</th><th style="text-align:right">GPU ms</th><th style="text-align:right">Δ aktuell</th><th style="text-align:right">geänd. Fläche</th></tr></thead><tbody>${rows}</tbody></table>
+
+    <div class="pp-rec">💡 ${rec}</div>
+    ${ceiling ? `<div class="pp-rec pp-ceil">⚠️ ${ceiling}</div>` : ''}
+
+    <div class="pp-actions">
+      <button class="pp-copy">📋 Bericht kopieren</button>
+      <button class="pp-primary pp-close">Schließen</button>
+    </div>
+  </div>`;
+  document.body.appendChild(wrap);
+
+  wrap.querySelector('.pp-close').onclick = () => { wrap.remove(); style.remove(); };
+  wrap.querySelector('.pp-copy').onclick = (e) => {
+    navigator.clipboard.writeText(txt).then(() => { e.target.textContent = '✓ Kopiert — an Claude schicken'; },
+      () => { e.target.textContent = 'Kopieren blockiert'; });
+  };
+  wrap.addEventListener('click', (e) => { if (e.target === wrap) { wrap.remove(); style.remove(); } });
+}
+
 // Debug-Hook für automatisierte Tests
-window.__game = { players, obstacles, powerups, world, cams, fxRings, lasers, sharks, renderer, spawnShark, spawnLaser, spawnPowerup, spawnWave, toggleRotMode, startSnow, endSnow,
+window.__game = { players, obstacles, powerups, world, cams, fxRings, lasers, sharks, renderer, spawnShark, spawnLaser, spawnPowerup, spawnWave, toggleRotMode, startSnow, endSnow, runGpuProfile,
   get state() { return state; }, get audio() { return audioCtx && audioCtx.state; },
   get rotMode() { return rotMode; }, get dayMode() { return dayMode; }, get soloMode() { return soloMode; },
   get snowActive() { return snowActive; }, get snowLevel() { return snowLevel; }, get iceLevel() { return iceLevel; },
