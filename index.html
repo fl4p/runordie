@@ -1355,9 +1355,9 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
           playDeflect();
         } else {
           playHit();
-          enterRagdoll(p, 0.9);
-          torso.velocity.x += e.body.velocity.x * 0.9;
-          torso.velocity.z += e.body.velocity.z * 0.9;
+          enterRagdoll(p, hitStun(0.9));
+          torso.velocity.x += e.body.velocity.x * 0.8;
+          torso.velocity.z += e.body.velocity.z * 0.8;
           torso.velocity.y += 3;
         }
       }
@@ -1367,6 +1367,12 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
 
   return p;
 }
+
+// Hindernis-/Laser-/Hai-Stuns skalieren mit dem Spieltempo herunter: bei 16 m/s
+// schleift eine Wand die liegende Figur sonst 13 m nach hinten — jeder Treffer
+// im Endgame wäre ein Todesurteil über die Hinterkante. Bei Tempo ≤ 10 (frühes
+// Spiel) bleibt alles wie gehabt; Spieler-gegen-Spieler-Stuns sind unberührt.
+function hitStun(base) { return base * Math.max(0.55, Math.min(1, 10 / baseSpeed())); }
 
 function enterRagdoll(p, duration) {
   p.ragdoll = true;
@@ -1659,7 +1665,7 @@ function explodeBlock(o) {
     const fall = 1 - dist / R;
     d.y = 0;
     if (d.length() > 0.01) d.normalize(); else d.set(0, 0, -1);
-    enterRagdoll(p, 0.7);
+    enterRagdoll(p, hitStun(0.7));
     for (const { body } of p.parts) {
       body.velocity.x += d.x * 15 * fall;
       body.velocity.z += d.z * 15 * fall;
@@ -1862,10 +1868,12 @@ function updateLasers(dt) {
           playDeflect();
           continue;
         }
-        enterRagdoll(p, 0.8);
+        enterRagdoll(p, hitStun(0.8));
         for (const { body } of p.parts) {
-          body.velocity.z += 4;
-          body.velocity.y += 5;
+          // Sanfterer Schub nach hinten: +4 warf die Figur aus der Bahnmitte
+          // fast garantiert über die Hinterkante
+          body.velocity.z += 2.5;
+          body.velocity.y += 4.5;
         }
         spawnShockwave({ x: t.x, y: t.y, z: L.z }, { x: 0, y: 0, z: 1 }, true);
         playZap();
@@ -1957,7 +1965,7 @@ function spawnPiston(speed) {
       if (perfNow() < pl.hitCooldown) return;
       pl.hitCooldown = perfNow() + 1.2;
       if (pl.shield > 0) { pl.shield--; updatePowerupHud(); playDeflect(); return; }
-      enterRagdoll(pl, 1.1);
+      enterRagdoll(pl, hitStun(1.1));
       for (const { body: b } of pl.parts) b.velocity.y = -5;
       spawnShockwave(pl.torso.position, { x: 0, y: 1, z: 0 }, true);
       playPunchHit();
@@ -2030,7 +2038,7 @@ function spawnShark() {
     pl.hitCooldown = perfNow() + 1.2;
     if (pl.shield > 0) { pl.shield--; updatePowerupHud(); playDeflect(); return; }
     // Zerquetscht: schwerer Stun + nach unten gedrückt
-    enterRagdoll(pl, 1.2);
+    enterRagdoll(pl, hitStun(1.2));
     for (const { body: b } of pl.parts) {
       b.velocity.x += body.velocity.x * 0.6;
       b.velocity.y = -6;
@@ -3153,9 +3161,13 @@ function botHandleThreat(p, bot, th) {
   const t = p.torso, d = bot.d;
   bot.plan = null;
   switch (th.kind) {
-    case 'pad': // Pad katapultiert von selbst beim Drüberlaufen
+    case 'pad':
+      // Pad katapultiert beim Drüberlaufen — ~2.9 s ballistischer Flug, der die
+      // HORIZONTALGESCHWINDIGKEIT beim Abschuss konserviert. Mit Rückwärtsdrift
+      // aufs Pad = 12-35 m hinter der Plattform landen. Vorher nach vorn
+      // sprinten und jeden +z-Drall abbauen.
       bot.targetX = th.o.body.position.x;
-      bot.targetZ = botDodgeZ(t);
+      bot.targetZ = t.velocity.z > 1.5 ? t.position.z - 8 : botDodgeZ(t);
       return;
     case 'shark': {
       const sz = th.o.body.position.z;
@@ -3189,11 +3201,17 @@ function botHandleThreat(p, bot, th) {
       }
       return;
     }
-    case 'roller':
+    case 'roller': {
+      // Walzen-Trio (4.5 m Abstand, bei Tempo 13+ nur ~0.35 s versetzt): wer die
+      // erste einzeln überspringt, wird von der zweiten in der Luft abgeräumt —
+      // Doppelsprung überfliegt zwei auf einmal
+      const volley = obstacles.some((o) => o !== th.o && o.spin &&
+        Math.abs(o.body.position.z - th.o.body.position.z) < 11);
       bot.targetX = t.position.x;
       bot.targetZ = botDodgeZ(t);
-      bot.plan = { type: 'jump', at: perfNow() + Math.max(0, th.tta - 0.30) };
+      bot.plan = { type: 'jump', at: perfNow() + Math.max(0, th.tta - 0.30), dbl: volley };
       return;
+    }
     case 'laser': {
       const L = th.o;
       bot.targetZ = botDodgeZ(t);
@@ -3267,6 +3285,16 @@ function botThink(p, bot) {
   bot.noiseZ = (Math.random() * 2 - 1) * d.aimErr;
 
   if (p.hanging || p.ragdoll) { bot.plan = null; return; } // botAct/Physik regeln das
+  // Ballistischer Flug (Pad-Katapult, Explosions-Schleuder — deutlich über
+  // normaler Sprunghöhe): die ganze Flugzeit hart nach vorn steuern — wo man
+  // LANDET, entscheidet über Leben und Tod, und 2-3 s Flug reichen, um jede
+  // Drift in Vorwärtsfahrt zu drehen. Normale Sprünge (Apex ~2.9 m) bleiben frei.
+  if (!p.grounded && (t.velocity.y > 10 || t.position.y > 3.2)) {
+    bot.targetX = Math.max(-4, Math.min(4, t.position.x));
+    bot.targetZ = t.position.z - 9;
+    bot.plan = null;
+    return;
+  }
   // Kantennähe VORAUSSCHAUEND erkennen (Position + kurzer Geschwindigkeits-Blick):
   // sonst ist es bei schnellen Schüben (Schieber, Wände) zu spät zum Gegensteuern
   const px = t.position.x + t.velocity.x * 0.25, pz = t.position.z + t.velocity.z * 0.25;
