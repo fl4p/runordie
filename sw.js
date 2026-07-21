@@ -2,6 +2,8 @@
 // Das Spiel ist eine einzige HTML-Datei plus zwei versionierte CDN-Module —
 // alles wird beim Install vorgeladen.
 const CACHE = 'runordie-v2'; // v2: Online-Modus (bis 4 Spieler)
+// WICHTIG: beim Ändern der CDN-Versionen in der Importmap mit hochzählen,
+// sonst sammeln sich alte Modul-Kopien (~1,3 MB je three.js) im Cache an
 const ASSETS = [
   './',
   './index.html',
@@ -41,7 +43,10 @@ self.addEventListener('fetch', (e) => {
         .then((resp) => {
           if (resp.ok) { // keine 404/500 einlagern
             const copy = resp.clone();
-            caches.open(CACHE).then((c) => c.put(e.request, copy));
+            // Query-String normalisieren: sonst legt jede Test-/Soak-URL
+            // (?bot1=…, ?room=…) eine weitere, nie gelesene Vollkopie an
+            const key = new URL(e.request.url); key.search = '';
+            caches.open(CACHE).then((c) => c.put(key.href, copy));
           }
           return resp;
         })

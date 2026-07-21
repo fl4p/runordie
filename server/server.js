@@ -17,6 +17,18 @@ const MAX_PLAYERS = 4;
 const MAX_CONNS = +(process.env.MAX_CONNS || 500); // Gesamt-Verbindungslimit
 const JOIN_BURST = 20;      // erlaubte create/join-Versuche …
 const JOIN_WINDOW_MS = 10000; // … pro Socket in diesem Fenster (gegen Code-Brute-Force)
+// Pro-IP-Limits: das Socket-Fenster allein wäre per Reconnect-Schleife umgehbar
+// (Code-Bruteforce mit >1000 Versuchen/s über frische Verbindungen)
+const MAX_CONNS_PER_IP = +(process.env.MAX_CONNS_PER_IP || 8);
+const IP_JOIN_BURST = 40;        // create/join-Versuche pro IP …
+const IP_JOIN_WINDOW_MS = 60000; // … in diesem Fenster (überlebt Reconnects)
+// CSWSH-Schutz: ORIGINS="https://example.com,https://foo.io" aktiviert eine
+// Origin-Allowlist; ohne gesetzte Variable bleibt alles erlaubt (lokale Tests)
+const ALLOWED_ORIGINS = (process.env.ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+// X-Forwarded-For nur hinter eigenem Reverse-Proxy lesen (TRUST_PROXY=1):
+// direkt exponiert könnte sonst jeder Client die Per-IP-Limits per
+// erfundenem Header umgehen — genau der Angriff, den sie verhindern sollen
+const TRUST_PROXY = process.env.TRUST_PROXY === '1';
 
 // ---------- Statische Dateien (nur Whitelist, kein Verzeichnis-Traversal) ----------
 const STATIC = {
@@ -63,8 +75,29 @@ const sendJson = (ws, obj) => send(ws, JSON.stringify(obj));
 // ws-Default von 100 MiB wäre ein Speicher-Verstärker für böswillige Clients
 const wss = new WebSocketServer({ server: http, path: '/ws', maxPayload: 64 * 1024 });
 
-wss.on('connection', (ws) => {
+const ipConns = new Map(); // ip -> offene Verbindungen
+const ipJoins = new Map(); // ip -> { n, at } — Join-Fenster, überlebt Reconnects
+function clientIp(req) {
+  if (TRUST_PROXY) {
+    const fwd = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    if (fwd) return fwd;
+  }
+  return req.socket.remoteAddress || '?';
+}
+
+wss.on('connection', (ws, req) => {
   if (wss.clients.size > MAX_CONNS) { ws.close(1013, 'server busy'); return; }
+  const origin = req.headers.origin;
+  // Same-Origin immer erlauben (der Browser sendet den Header auch dann mit) —
+  // eine Allowlist ohne die eigene Serving-Domain sperrte sonst die eigene Seite aus
+  const sameOrigin = origin && req.headers.host && origin.endsWith('//' + req.headers.host);
+  if (ALLOWED_ORIGINS.length && origin && !sameOrigin && !ALLOWED_ORIGINS.includes(origin)) {
+    ws.close(1008, 'origin'); return; // fremde Website bindet Besucher-Browser ein
+  }
+  ws.ip = clientIp(req);
+  const nIp = (ipConns.get(ws.ip) || 0) + 1;
+  if (nIp > MAX_CONNS_PER_IP) { ws.close(1013, 'too many connections'); return; }
+  ipConns.set(ws.ip, nIp);
   ws.roomCode = null; ws.slot = null; ws.missedPongs = 0;
   ws.joinCount = 0; ws.joinWindowAt = 0;
   ws.on('pong', () => { ws.missedPongs = 0; });
@@ -74,7 +107,11 @@ wss.on('connection', (ws) => {
     try { handleMessage(ws, data, isBinary); } catch (err) { console.error('message handler:', err); }
   });
 
-  ws.on('close', () => { try { leaveRoom(ws); } catch (err) { console.error('leave:', err); } });
+  ws.on('close', () => {
+    const c = (ipConns.get(ws.ip) || 1) - 1;
+    c > 0 ? ipConns.set(ws.ip, c) : ipConns.delete(ws.ip);
+    try { leaveRoom(ws); } catch (err) { console.error('leave:', err); }
+  });
   ws.on('error', () => { /* close folgt */ });
 });
 
@@ -104,6 +141,11 @@ function handleMessage(ws, data, isBinary) {
       const now = Date.now();
       if (now - ws.joinWindowAt > JOIN_WINDOW_MS) { ws.joinWindowAt = now; ws.joinCount = 0; }
       if (++ws.joinCount > JOIN_BURST) { sendJson(ws, { t: 'err', msg: 'Zu viele Versuche, kurz warten' }); return; }
+      // Pro-IP-Fenster: bremst auch Reconnect-Schleifen (Socket-Zähler frisch)
+      const b = ipJoins.get(ws.ip) || { n: 0, at: now };
+      if (now - b.at > IP_JOIN_WINDOW_MS) { b.n = 0; b.at = now; }
+      b.n++; ipJoins.set(ws.ip, b);
+      if (b.n > IP_JOIN_BURST) { sendJson(ws, { t: 'err', msg: 'Zu viele Versuche, kurz warten' }); return; }
     }
 
     if (msg.t === 'create') {
@@ -168,6 +210,8 @@ function leaveRoom(ws) {
 
 // ---------- Heartbeat: tote Verbindungen nach ~30-40 s trennen ----------
 setInterval(() => {
+  const now = Date.now();
+  for (const [ip, b] of ipJoins) if (now - b.at > IP_JOIN_WINDOW_MS * 2) ipJoins.delete(ip);
   for (const ws of wss.clients) {
     if (++ws.missedPongs > 3) { ws.terminate(); continue; }
     try { ws.ping(); } catch { /* terminate beim nächsten Takt */ }

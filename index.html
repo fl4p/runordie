@@ -235,7 +235,7 @@ scene.fog = new THREE.Fog(0x151228, 25, 70);
 // ---------- Skybox (prozedural: Sternenhimmel + Mond + Horizontglühen) ----------
 function makeSkyTexture() {
   const c = document.createElement('canvas');
-  c.width = 2048; c.height = 1024;
+  c.width = 1024; c.height = 512; // halbe Kantenlänge: -25 MB VRAM über alle drei Himmel, visuell gleichwertig
   const g = c.getContext('2d');
   const grad = g.createLinearGradient(0, 0, 0, c.height);
   grad.addColorStop(0.0, '#04050d');   // Zenit
@@ -248,24 +248,24 @@ function makeSkyTexture() {
   g.fillRect(0, 0, c.width, c.height);
 
   // Sterne: oben dicht, zum Horizont ausdünnend, ein paar größere Funkler
-  for (let i = 0; i < 1600; i++) {
+  for (let i = 0; i < 400; i++) {
     const x = Math.random() * c.width;
     const y = Math.pow(Math.random(), 1.7) * c.height * 0.68;
-    const r = Math.random() < 0.06 ? Math.random() * 1.6 + 1.1 : Math.random() * 0.9 + 0.25;
+    const r = Math.random() < 0.06 ? Math.random() * 0.8 + 0.8 : Math.random() * 0.9 + 0.25;
     const a = 0.25 + Math.random() * 0.75;
     g.fillStyle = `rgba(${235 + Math.random() * 20},${235 + Math.random() * 20},255,${a})`;
     g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
   }
 
   // Mond mit Halo
-  const mx = c.width * 0.42, my = c.height * 0.42, mr = 34;
+  const mx = c.width * 0.42, my = c.height * 0.42, mr = 17;
   const halo = g.createRadialGradient(mx, my, mr * 0.4, mx, my, mr * 2.1);
   halo.addColorStop(0, 'rgba(190,205,255,0.22)');
   halo.addColorStop(1, 'rgba(190,205,255,0)');
   g.fillStyle = halo; g.beginPath(); g.arc(mx, my, mr * 2.1, 0, 7); g.fill();
   g.fillStyle = '#e8edff'; g.beginPath(); g.arc(mx, my, mr, 0, 7); g.fill();
   g.fillStyle = 'rgba(160,170,205,0.5)'; // Krater
-  for (const [dx, dy, r] of [[-10, -6, 7], [9, 8, 5], [12, -12, 4], [-3, 13, 4], [2, -2, 3]]) {
+  for (const [dx, dy, r] of [[-5, -3, 3.5], [4.5, 4, 2.5], [6, -6, 2], [-1.5, 6.5, 2], [1, -1, 1.5]]) {
     g.beginPath(); g.arc(mx + dx, my + dy, r, 0, 7); g.fill();
   }
 
@@ -277,7 +277,7 @@ function makeSkyTexture() {
 // mit tiefstehender Sonne und Schleierwolken
 function makeDaySkyTexture() {
   const c = document.createElement('canvas');
-  c.width = 2048; c.height = 1024;
+  c.width = 1024; c.height = 512;
   const g = c.getContext('2d');
   const grad = g.createLinearGradient(0, 0, 0, c.height);
   grad.addColorStop(0.0, '#4e5470');
@@ -290,7 +290,7 @@ function makeDaySkyTexture() {
   g.fillRect(0, 0, c.width, c.height);
 
   // Tiefstehende Sonne mit warmem Glow
-  const sx = c.width * 0.42, sy = c.height * 0.52, sr = 40;
+  const sx = c.width * 0.42, sy = c.height * 0.52, sr = 20;
   const halo = g.createRadialGradient(sx, sy, sr * 0.3, sx, sy, sr * 4.5);
   halo.addColorStop(0, 'rgba(255,236,200,0.55)');
   halo.addColorStop(1, 'rgba(255,236,200,0)');
@@ -301,7 +301,7 @@ function makeDaySkyTexture() {
   for (let i = 0; i < 12; i++) {
     const y = c.height * (0.42 + Math.random() * 0.24);
     const x = Math.random() * c.width;
-    const w = 180 + Math.random() * 420, h = 8 + Math.random() * 18;
+    const w = 90 + Math.random() * 210, h = 4 + Math.random() * 9;
     const cg = g.createRadialGradient(x, y, 0, x, y, w / 2);
     cg.addColorStop(0, `rgba(205,186,172,${0.10 + Math.random() * 0.14})`);
     cg.addColorStop(1, 'rgba(205,186,172,0)');
@@ -319,7 +319,7 @@ function makeDaySkyTexture() {
 // tiefe Sonne mit breitem Glow, dunkle, von unten warm angeleuchtete Wolkenbänder
 function makeSunsetSkyTexture() {
   const c = document.createElement('canvas');
-  c.width = 2048; c.height = 1024;
+  c.width = 1024; c.height = 512;
   const g = c.getContext('2d');
   const grad = g.createLinearGradient(0, 0, 0, c.height);
   grad.addColorStop(0.0, '#2a2547');
@@ -333,7 +333,7 @@ function makeSunsetSkyTexture() {
   g.fillRect(0, 0, c.width, c.height);
 
   // Tiefstehende, glühende Sonne
-  const sx = c.width * 0.42, sy = c.height * 0.66, sr = 52;
+  const sx = c.width * 0.42, sy = c.height * 0.66, sr = 26;
   const halo = g.createRadialGradient(sx, sy, sr * 0.3, sx, sy, sr * 6);
   halo.addColorStop(0, 'rgba(255,180,110,0.65)');
   halo.addColorStop(0.4, 'rgba(255,140,74,0.28)');
@@ -345,7 +345,7 @@ function makeSunsetSkyTexture() {
   for (let i = 0; i < 10; i++) {
     const y = c.height * (0.34 + Math.random() * 0.28);
     const x = Math.random() * c.width;
-    const w = 240 + Math.random() * 520, h = 10 + Math.random() * 22;
+    const w = 120 + Math.random() * 260, h = 5 + Math.random() * 11;
     const cg = g.createRadialGradient(x, y, 0, x, y, w / 2);
     cg.addColorStop(0, `rgba(58,42,58,${0.18 + Math.random() * 0.18})`);
     cg.addColorStop(1, 'rgba(58,42,58,0)');
@@ -402,6 +402,9 @@ scene.add(skyDusk);
 let dayMode = false;   // Zielzustand des Zyklus
 let dayLevel = 0;      // 0 = Nacht, 1 = Tag — gleitet im Animationsloop weich zum Ziel
 let skyCycleT = 0;     // Sekunden seit dem letzten automatischen Wechsel
+let hudTimer = 0;      // Tacho-HUD nur 4x/s neu bauen (Stringbau = GC-Druck)
+let menuSkip = false;  // Menü-Leerlauf rendert mit halber Bildrate (Akku)
+let benchRunning = false; // GPU-Benchmark läuft: Eingaben gesperrt (Tastatur, Pad-Start, Touch-Exit)
 // Stimmung wird stufenlos zwischen Basis- und Schnee-Palette gemischt (snowLevel 0..1)
 const ATMO = {
   night: { fog: 0x151228, bg: 0x0d1117, hemi: 0xbcd6ff, ground: 0x30241a, hemiI: 0.9, sun: 0xfff2d9, sunI: 1.6 },
@@ -442,6 +445,8 @@ function applyAtmosphere() {
 }
 function toggleDaySky() {
   dayMode = !dayMode; // nur das Ziel — dayLevel gleitet im Animationsloop hinterher
+  // Online gibt der Host die Uhrzeit vor — sonst spielt jeder in anderem Licht
+  if (netRole === 'host') netSendJson({ k: 'sky', day: dayMode ? 1 : 0 });
 }
 
 const hemi = new THREE.HemisphereLight(0xbcd6ff, 0x30241a, 0.9);
@@ -858,6 +863,7 @@ function updateLanternGlow() {
   const on = Math.max(0, Math.min(1, (0.65 - dayLevel) / 0.3));
   lanternGlassMat.emissiveIntensity = 2.2 * on;
   lampGlowMat.opacity = on;
+  lampGlowMat.visible = on > 0.01; // Opacity 0 würde weiter rastern: bis ~36 additive 4x5-m-Quads Overdraw
 }
 
 // ---------- Eiszonen: Schnee-Sektoren mit spiegelglatter Fahrbahn ----------
@@ -1506,10 +1512,24 @@ texHazard.repeat.set(1.6, 1);
 texConcrete.repeat.set(3, 1.2);
 
 // Material mit pro-Hindernis gekachelter Textur (Klon wird beim Entfernen disposed)
+// Textur-Klone gecacht: jeder Klon ist eine eigene GPU-Textur samt Mipmap-
+// Upload beim ersten Draw — bislang mehrere Uploads pro Welle mitten im
+// Gameplay (Spawn-Ruckler auf Mobil-GPUs). Repeat wird auf ein 0.25er-Raster
+// quantisiert, damit der Cache klein bleibt (~einige Dutzend Einträge).
+const tiledTexCache = new Map();
+function tiledTex(baseTex, rx, ry) {
+  const qx = Math.round(rx * 4) / 4, qy = Math.round(ry * 4) / 4;
+  const key = `${baseTex.uuid}|${qx}|${qy}`;
+  let t = tiledTexCache.get(key);
+  if (!t) {
+    t = baseTex.clone(); t.needsUpdate = true; t.repeat.set(qx, qy);
+    tiledTexCache.set(key, t);
+  }
+  return t;
+}
 function tiledMat(baseTex, rx, ry, extra = {}) {
-  const t = baseTex.clone(); t.needsUpdate = true; t.repeat.set(rx, ry);
-  const m = new THREE.MeshStandardMaterial({ map: t, roughness: 0.65, ...extra });
-  m.userData.owned = true;
+  const m = new THREE.MeshStandardMaterial({ map: tiledTex(baseTex, rx, ry), roughness: 0.65, ...extra });
+  m.userData.ownedMat = true; // Material entsorgen, Textur bleibt im Cache
   return m;
 }
 
@@ -1679,7 +1699,9 @@ function explodeBlock(o) {
     const fall = 1 - dist / R;
     d.y = 0;
     if (d.length() > 0.01) d.normalize(); else d.set(0, 0, -1);
-    enterRagdoll(p, hitStun(0.7));
+    // noStun ("nur Schieben"): Druckwelle schiebt, wirft aber nicht um —
+    // konsistent zu Hindernis-, Laser-, Stampfer- und Hai-Treffern
+    if (!noStun && state === 'playing') enterRagdoll(p, hitStun(0.7));
     for (const { body } of p.parts) {
       body.velocity.x += d.x * 15 * fall;
       body.velocity.z += d.z * 15 * fall;
@@ -2336,11 +2358,17 @@ function spawnRandomPowerup() {
   const type = r < 0.3 ? 'jump' : r < 0.48 ? 'punch' : r < 0.63 ? 'slow'
     : r < 0.76 ? 'magnet' : r < 0.86 ? 'invuln' : 'shield';
   const x = (Math.random() * 2 - 1) * (PLATFORM_HALF_W - 1.5);
-  spawnPowerup(type, x, spawnFrontZ);
+  // leicht versetzt: auf der Spawnlinie steckte das Item sonst in einer im
+  // selben Frame gespawnten Mauer (gleiche Geschwindigkeit -> für immer)
+  spawnPowerup(type, x, spawnFrontZ + 3);
 }
 
+function disposePowerup(pu) {
+  scene.remove(pu.mesh);
+  pu.mesh.traverse((n) => n.geometry?.dispose()); // Formen sind pro Item frisch, Materialien geteilt
+}
 function clearPowerups() {
-  for (const pu of powerups) scene.remove(pu.mesh);
+  for (const pu of powerups) disposePowerup(pu); // läuft bei JEDEM Rundenreset — ohne dispose ein stetiges GPU-Leck
   powerups.length = 0;
 }
 
@@ -2447,6 +2475,7 @@ function makeCam() {
 }
 const cams = [makeCam(), makeCam()];
 
+const _camScratch = new THREE.Vector3(); // updateCam läuft 1-2x pro Frame
 function updateCam(cam, p, dt) {
   const t = p.torso.position;
   const k = 1 - Math.exp(-6 * dt);
@@ -2462,7 +2491,7 @@ function updateCam(cam, p, dt) {
     d = ((d + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
     // Maus (Spieler 1) sehr direkt, Pad-Kamera etwas weicher, aber flott
     ud.yaw += d * (1 - Math.exp(-(p === player1 ? 25 : 14) * dt));
-    ud.anchor.lerp(new THREE.Vector3(t.x, Math.max(t.y, 0), t.z), 1 - Math.exp(-10 * dt));
+    ud.anchor.lerp(_camScratch.set(t.x, Math.max(t.y, 0), t.z), 1 - Math.exp(-10 * dt));
     const fx = -Math.sin(ud.yaw), fz = -Math.cos(ud.yaw);
     cam.position.set(ud.anchor.x - fx * 7.5, ud.anchor.y + 4.4, ud.anchor.z - fz * 7.5);
     cam.lookAt(ud.anchor.x + fx * 6, ud.anchor.y + 0.8, ud.anchor.z + fz * 6);
@@ -2470,7 +2499,7 @@ function updateCam(cam, p, dt) {
   }
   delete cam.userData.yaw; // beim Rückwechsel in den klassischen Modus Rig verwerfen
   const tx = Math.max(-PLATFORM_HALF_W, Math.min(PLATFORM_HALF_W, t.x));
-  cam.position.lerp(new THREE.Vector3(tx * 0.7, Math.max(t.y, 0) + 4.4, t.z + 7.5), k);
+  cam.position.lerp(_camScratch.set(tx * 0.7, Math.max(t.y, 0) + 4.4, t.z + 7.5), k);
   cam.lookAt(tx * 0.7, Math.max(t.y, -2) + 0.8, t.z - 6);
 }
 
@@ -2483,6 +2512,10 @@ const JUMPKEY = { Space: player1, Enter: player2 };
 
 addEventListener('keydown', (e) => {
   ensureAudio(); // Browser erlaubt Audio erst nach Nutzer-Geste
+  // Während einer GPU-/CPU-Messung keine Zustandswechsel: "beliebige Taste"
+  // würde sonst mitten im Auto-Benchmark ein Spiel starten bzw. ESC die
+  // Live-Messung abbrechen und den Bericht mit Menü-Frames verfälschen
+  if (profiling || cpuProf || benchRunning) return;
   // Namenseingabe im Highscore-Board: Tasten gehören dem Input
   if (document.activeElement?.id === 'scorename') {
     if (e.code === 'Enter' || e.code === 'NumpadEnter') submitSoloScore();
@@ -2601,15 +2634,29 @@ function readPad(gp) {
   };
 }
 
+const _padList = [];
+let _padHadPads = false;
 function pollGamepads() {
-  const pads = (navigator.getGamepads ? Array.from(navigator.getGamepads()) : [])
-    .filter((g) => g && g.connected);
+  // Heißer Pfad (jeden Frame, auch im Menü): ohne Controller keine Allokationen
+  const raw = navigator.getGamepads ? navigator.getGamepads() : null;
+  _padList.length = 0;
+  if (raw) for (const g of raw) if (g && g.connected) _padList.push(g);
+  const pads = _padList;
 
+  for (const p of players) p.padX = p.padZ = p.padYawRate = 0; // Touch addiert danach
+
+  if (!pads.length) {
+    if (_padHadPads) { // letzter Controller weg: Zuordnungen freigeben, HUD leeren
+      for (const k of Object.keys(padAssign)) { delete padAssign[k]; delete padEdge[k]; }
+      updatePadHud(pads);
+      _padHadPads = false;
+    }
+    return;
+  }
+  _padHadPads = true;
   // Getrennte Controller freigeben
   const present = new Set(pads.map((g) => g.index));
   for (const k of Object.keys(padAssign)) if (!present.has(+k)) { delete padAssign[k]; delete padEdge[k]; }
-
-  for (const p of players) p.padX = p.padZ = p.padYawRate = 0;
 
   for (const gp of pads) {
     const st = (padEdge[gp.index] ??= { jump: false, left: false, right: false, back: false, punch: false, tackle: false });
@@ -2660,7 +2707,7 @@ function pollGamepads() {
     if (r.punch && !st.punch) tryPunch(p);
     st.punch = r.punch;
 
-    if (state === 'menu' && r.any && !netUiOpen) startGame();
+    if (state === 'menu' && r.any && !netUiOpen && !benchRunning) startGame();
   }
 
   updatePadHud(pads);
@@ -2771,7 +2818,7 @@ function applyTouchInput() {
   bindBtn('btnJump', () => tryJump(netRole ? myP() : player1));
   bindBtn('btnPunch', () => tryPunch(netRole ? myP() : player1));
   bindBtn('btnSlide', () => tryTackle(netRole ? myP() : player1));
-  bindBtn('btnExit', () => backToMenu());
+  bindBtn('btnExit', () => { if (!benchRunning) backToMenu(); }); // nicht mitten im Benchmark abbrechen
 
   // Geister-Maus-Events der Touch-Bedienung unterdrücken (Scroll/Zoom sowieso)
   el('touchui').addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
@@ -2903,6 +2950,8 @@ function tryJump(p) {
   if (!p.alive || p.ragdoll || p.tackling || state !== 'playing') return;
   // Hängend: jede Sprungtaste zieht ein Stück hoch, oben angekommen -> über die Kante stemmen
   if (p.hanging) {
+    if (perfNow() < (p.hangLiftCd || 0)) return; // gegen Netz-Jump-Bursts
+    p.hangLiftCd = perfNow() + 0.12;
     p.hangLift += 0.3;
     p.hangUntil = perfNow() + 3; // Ziehen frischt den Griff auf
     playJump(1);
@@ -3654,6 +3703,7 @@ function backToMenu() {
   m.style.color = '';
   m.classList.remove('hidden');
   updateDiveBtn();
+  applySoloLayout(); // Steuer-Labels/Scorebar nach Online-Runden zurücksetzen
 }
 
 function updateDiveBtn() {
@@ -3790,10 +3840,13 @@ function resetRound() {
   invFired.clear();
   invBase.bodies = world.bodies.length;
   invBase.scene = scene.children.length;
+  // Solverzeit wächst ~linear mit den Iterationen; bei vollen Lobbys (3-4
+  // Ragdolls in Kontakt) etwas Genauigkeit gegen CPU-Zeit tauschen
+  world.solver.iterations = activePlayers().length >= 3 ? 10 : 12;
   state = 'playing';
   $('msg').classList.add('hidden');
   if (netRole === 'host') {
-    netSnapFrame = 0;
+    netSnapTimer = 0;
     netRoundNo = (netRoundNo + 1) & 255;
     netSendJson({ k: 'round', n: netRoundNo, roster: rosterSlots, scores: players.map((p) => p.score) });
   }
@@ -3911,9 +3964,11 @@ function updatePlayer(p, dt) {
     // Torso auf/unter Straßenniveau gepresst hat. Ohne das blieb man im Asphalt
     // gefangen, weil y>0 nie wieder erreicht wurde. Über einer Kante hinaus
     // (|x| >= PLATFORM_HALF_W) bleibt es Ragdoll bis zum Todessturz.
+    // Im Rush liegt die Bahn weit vor PLATFORM_Z_MIN — Grenzen dynamisch,
+    // sonst greift die Rettung auf Rush-Kacheln nie und der Spieler hängt fest
     const onRoad = Math.abs(t.position.x) < PLATFORM_HALF_W - 0.1 &&
-                   t.position.z > PLATFORM_Z_MIN && t.position.z < PLATFORM_Z_MAX &&
-                   t.position.y > -1.2;
+                   t.position.z > (rushMode ? frontierZ : PLATFORM_Z_MIN) &&
+                   t.position.z < PLATFORM_Z_MAX && t.position.y > -1.2;
     if (p.ragdoll && perfNow() > p.stunUntil && (t.position.y > 0 || onRoad)) {
       if (t.position.y < 0.4) { t.position.y = 0.6; if (t.velocity.y < 0) t.velocity.y = 0; }
       exitRagdoll(p);
@@ -4079,13 +4134,18 @@ function animate() {
     if (_now - capLastT < FPS_CAP_MS - 1) return;
     capLastT = _now - capLastT > FPS_CAP_MS * 2 ? _now : capLastT + FPS_CAP_MS;
   }
+  // Menü-Leerlauf mit halber Bildrate (Akku) — Messläufe sind ausgenommen,
+  // Eingaben werden im jeweils gerenderten Frame ganz normal gepollt
+  if (state === 'menu' && !cpuProf && (menuSkip = !menuSkip)) return;
   if (cpuProf) { const _n = performance.now(); if (cpuBuf.top) cpuBuf.intervals.push(_n - cpuBuf.top); cpuBuf.top = _n; }
   const dt = Math.min(clock.getDelta(), 0.05);
 
   // Tag/Nacht wechselt von selbst im 25-s-Takt; der Übergang gleitet in ~6 s
   // durch eine Dämmerungsphase — Sonnenuntergang bzw. -aufgang um die Mitte
-  skyCycleT += dt;
-  if (skyCycleT >= 25) { skyCycleT = 0; toggleDaySky(); }
+  if (netRole !== 'client') { // online kommt die Uhrzeit vom Host ('sky'-Event)
+    skyCycleT += dt;
+    if (skyCycleT >= 25) { skyCycleT = 0; toggleDaySky(); }
+  }
   const dayTarget = dayMode ? 1 : 0;
   if (dayLevel !== dayTarget) {
     const step = dt / 6;
@@ -4137,7 +4197,11 @@ function animate() {
     updatePowerups(dt);
     updateLasers(dt);
     updateRush();
-    $('speed').textContent = `Tempo ${baseSpeed().toFixed(1)} m/s · ${elapsed.toFixed(0)} s`;
+    hudTimer -= dt;
+    if (hudTimer <= 0) {
+      hudTimer = 0.25;
+      $('speed').textContent = `Tempo ${baseSpeed().toFixed(1)} m/s · ${elapsed.toFixed(0)} s`;
+    }
     if (soloMode) { const st = $('solotime'); if (st) st.textContent = Math.floor(elapsed); }
   }
 
@@ -4285,11 +4349,21 @@ let netReplaying = false;
 let netApplyingFx = false;
 let netSavedSettings = null;
 let netNextId = 1;
-let netSnapFrame = 0;
+let netSnapTimer = 0;   // zeitbasierter Snapshot-Takt (20 Hz, unabhängig von der Display-Hz)
 let netInputTimer = 0;
+let netStaleWarnAt = 0; // Snapshot-Watchdog: frühester Zeitpunkt der nächsten Warnung
+let netLastSnapAt = 0;  // Watchdog-Basis, solange noch kein Snapshot ankam
+const NET_PROTO = 1;    // bei inkompatiblen Binär-/Event-Änderungen hochzählen
 let netRoundNo = 0;      // Runden-Zähler: filtert Snapshots alter Runden aus
 const netInputs = {};    // slot -> { keys, padX, padZ }
 const netActQueue = [];  // [slot, 'jump'|'punch'|'tackle']
+// Nur bekannte Aktionen, max. 1 pro Typ und Slot je Frame: ein gepatchter
+// Client könnte sonst mit Bursts spammen (z. B. Instant-Ledge-Climb)
+function netActPush(slot, a) {
+  if (a !== 'jump' && a !== 'punch' && a !== 'tackle') return;
+  for (const [s2, a2] of netActQueue) if (s2 === slot && a2 === a) return;
+  netActQueue.push([slot, a]);
+}
 const netSnaps = [];     // decodierte Snapshots für die Interpolation
 const NET_INTERP = 0.12; // s Interpolationspuffer der Replik
 
@@ -4322,7 +4396,7 @@ function netRtcWireHost(slot, peer) {
   peer.fast.onmessage = (ev) => netHandleInputFrame(slot, new DataView(ev.data), 0);
   peer.rel.onmessage = (ev) => {
     let m; try { m = JSON.parse(ev.data); } catch { return; }
-    if (m.k === 'act' && netRole === 'host') netActQueue.push([slot, m.a]);
+    if (m.k === 'act' && netRole === 'host') netActPush(slot, m.a);
   };
   peer.fast.onopen = () => flashPad(`🔗 Direktverbindung zu Spieler ${slot + 1}`, '#6ee75c');
 }
@@ -4339,7 +4413,13 @@ async function netRtcOffer(slot) {
     netPeers[slot] = peer;
     netRtcWireHost(slot, peer);
     pc.onicecandidate = (e) => { if (e.candidate) netSendJson({ k: 'rtc', to: slot, cand: e.candidate }); };
-    pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed') netRtcClose(slot); };
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'failed') { netRtcClose(slot); return; }
+      // 'disconnected' kann dauerhaft bleiben — der DataChannel wirkt offen,
+      // sendet aber ins Leere; nach Gnadenfrist schließen, Relay übernimmt
+      if (pc.connectionState === 'disconnected')
+        setTimeout(() => { if (pc.connectionState === 'disconnected') netRtcClose(slot); }, 3000);
+    };
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     netSendJson({ k: 'rtc', to: slot, sdp: pc.localDescription });
@@ -4363,13 +4443,20 @@ async function netRtcAnswer(m) {
           ch.binaryType = 'arraybuffer';
           ch.onmessage = (ev) => {
             const dv = new DataView(ev.data);
-            if (dv.getUint8(0) === 1 && netRole === 'client') netDecodeSnapshot(dv);
+            if (dv.getUint8(0) === 1 && netRole === 'client') {
+              try { netDecodeSnapshot(dv); } catch { /* verkürzter Frame */ }
+            }
           };
           ch.onopen = () => flashPad('🔗 Direktverbindung zum Host aktiv', '#6ee75c');
         }
       };
       pc.onicecandidate = (e) => { if (e.candidate) netSendJson({ k: 'rtc', cand: e.candidate }); };
-      pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed') { try { pc.close(); } catch { /* egal */ } netPeer = null; } };
+      pc.onconnectionstatechange = () => {
+        const dead = () => { try { pc.close(); } catch { /* egal */ } if (netPeer?.pc === pc) netPeer = null; };
+        if (pc.connectionState === 'failed') { dead(); return; }
+        if (pc.connectionState === 'disconnected') // s. Host-Seite: Blackhole-Kanal
+          setTimeout(() => { if (pc.connectionState === 'disconnected') dead(); }, 3000);
+      };
       peer.remoteReady = pc.setRemoteDescription(m.sdp);
       await peer.remoteReady;
       const answer = await pc.createAnswer();
@@ -4416,6 +4503,7 @@ function netHandleInputFrame(slot, dv, off) {
   netInputSeqSeen[slot] = seq;
   const bits = dv.getUint8(off + 5);
   netInputs[slot] = {
+    at: perfNow(), // für den Staleness-Check in netTick
     keys: { f: !!(bits & 1), b: !!(bits & 2), l: !!(bits & 4), r: !!(bits & 8) },
     padX: dv.getInt8(off + 6) / 127, padZ: dv.getInt8(off + 7) / 127,
   };
@@ -4621,6 +4709,9 @@ function netDecodeSnapshot(dv) {
   if (netSnaps.length && snap.tHost <= netSnaps[netSnaps.length - 1].tHost) return;
   const el = dv.getFloat32(o); o += 4;
   const n = dv.getUint8(o++), parts = dv.getUint8(o++);
+  // Bounds-Check gegen verkürzte/fremde Frames: Spielerblock nachrechnen
+  // statt 20x/s RangeErrors zu werfen (Rest fängt der try/catch am Aufrufer)
+  if (o + n * (9 + parts * 10) > dv.byteLength) return;
   for (let i = 0; i < n; i++) {
     const slot = dv.getUint8(o++);
     const flags = dv.getUint8(o++);
@@ -4726,6 +4817,23 @@ function netApplySnapshots() {
 }
 
 // ---- Pro-Frame-Haken (in animate): Host wendet Eingaben an, Client posiert ----
+// Watchdog: friert der Host ein (Tab im Hintergrund -> rAF stoppt, die
+// WS-Pings beantwortet der Browser trotzdem), kämen ewig keine Snapshots
+// mehr — erst warnen, nach 15 s zurück ins Menü statt Standbild
+function netWatchdog() {
+  if (state !== 'playing') return;
+  // Basis ist der Rundenstart, bis der erste Snapshot da ist — sonst wäre der
+  // Watchdog blind, wenn der Host direkt nach dem Start-Klick einfriert
+  const last = netSnaps.length ? netSnaps[netSnaps.length - 1].arrived : netLastSnapAt;
+  if (!last) return;
+  const stale = perfNow() - last;
+  if (stale > 15) { backToMenu(); flashPad('🌐 Verbindung zum Host verloren', '#ff6b6b'); return; }
+  if (stale > 5 && perfNow() > netStaleWarnAt) {
+    flashPad('🌐 Host reagiert nicht …', '#ffd23d');
+    netStaleWarnAt = perfNow() + 3;
+  }
+}
+
 function netTick(dt) {
   if (!netRole) return;
   if (netRole === 'host') {
@@ -4738,12 +4846,23 @@ function netTick(dt) {
       const p = players[+slot];
       if (!p || p.parked) continue;
       const inp = netInputs[slot];
-      Object.assign(p.keys, inp.keys);
-      p.padX = inp.padX; p.padZ = inp.padZ;
+      // Throttled Client-Tab (1 rAF/s): veraltete Eingaben nullen, statt die
+      // Figur mit den zuletzt gehaltenen Tasten blind weiterlaufen zu lassen
+      if (perfNow() - inp.at < 0.7) {
+        Object.assign(p.keys, inp.keys);
+        p.padX = inp.padX; p.padZ = inp.padZ;
+      } else {
+        p.keys.f = p.keys.b = p.keys.l = p.keys.r = false;
+        p.padX = p.padZ = 0;
+      }
     }
-    if (state !== 'menu' && ++netSnapFrame % 3 === 0) netSendSnapshot();
+    // Zeitbasierter Takt: an ++frame % 3 gekoppelt würde ein 144-Hz-Host
+    // 48 statt 20 Snapshots/s senden (2,4-fache Bandbreite)
+    netSnapTimer -= dt;
+    if (state !== 'menu' && netSnapTimer <= 0) { netSendSnapshot(); netSnapTimer = 1 / 20; }
   } else {
     netApplySnapshots();
+    netWatchdog();
     netInputTimer -= dt;
     if (netInputTimer <= 0) { netSendInput(); netInputTimer = 1 / 30; }
   }
@@ -4814,7 +4933,9 @@ function netOnMessage(ev) {
   if (typeof ev.data !== 'string') {
     const dv = new DataView(ev.data);
     if (netMySlot === 0) netHandleInputFrame(dv.getUint8(0), dv, 1); // Relay stempelt [slot, frame…]
-    else if (dv.getUint8(0) === 1 && netRole === 'client') netDecodeSnapshot(dv);
+    else if (dv.getUint8(0) === 1 && netRole === 'client') {
+      try { netDecodeSnapshot(dv); } catch { /* verkürzter Frame (Versions-Skew) */ }
+    }
     return;
   }
   let m;
@@ -4837,6 +4958,9 @@ function netOnMessage(ev) {
       return;
     }
     case 'err':
+      // Doppelklick-Race: das zweite create/join beantwortet der Server mit
+      // "Schon in einem Raum" — die bereits gerenderte Lobby nicht ersetzen
+      if (netCode) return;
       netRenderError(m.msg || 'Unbekannter Fehler');
       return;
     case 'peer': {
@@ -4865,7 +4989,7 @@ function netOnMessage(ev) {
   }
   if (netMySlot === 0) {
     // Host: Client-JSON = Aktion oder WebRTC-Signaling (vom Relay mit from gestempelt)
-    if (m.k === 'act' && netRole === 'host' && (m.from | 0) > 0) netActQueue.push([m.from | 0, m.a]);
+    if (m.k === 'act' && netRole === 'host' && (m.from | 0) > 0) netActPush(m.from | 0, m.a);
     if (m.k === 'rtc' && (m.from | 0) > 0) netRtcHostSignal(m.from | 0, m);
     return;
   }
@@ -4886,7 +5010,10 @@ function netApplyEvent(m) {
       resetRound();
       (m.scores || []).forEach((s, i) => { if (players[i]) players[i].score = s; });
       netSnaps.length = 0;
+      netLastSnapAt = perfNow(); // Watchdog-Basis bis zum ersten Snapshot
       applySoloLayout();
+      // Beitritt exakt beim Start-Klick des Hosts: diese Runde fehlt man noch
+      if (!rosterSlots.includes(netMySlot)) flashPad('⏳ Du steigst mit der nächsten Runde ein', '#ffd23d');
       return;
     case 'death': { const p = players[m.slot]; if (p) p.alive = false; return; }
     case 'end': {
@@ -4905,15 +5032,23 @@ function netApplyEvent(m) {
     }
     case 'pu': {
       const i = powerups.findIndex((pu) => pu.netId === m.id);
-      if (i >= 0) { scene.remove(powerups[i].mesh); powerups.splice(i, 1); }
+      if (i >= 0) { disposePowerup(powerups[i]); powerups.splice(i, 1); }
       return;
     }
+    case 'sky': dayMode = !!m.day; return; // Tag/Nacht-Ziel kommt vom Host
     case 'snow': m.on ? startSnow() : endSnow(!!m.silent); return;
     case 'fx': netApplyFx(m); return;
   }
 }
 
 function netOnStart(m) {
+  // Alte Kopie (SW-Cache, GitHub Pages) gegen neuen Host: Binärformat könnte
+  // abweichen -> NaN-Posen ohne Diagnose. Lieber sauber ablehnen.
+  if ((m.v | 0) !== NET_PROTO) {
+    netLeave();
+    netRenderError('Versionskonflikt — bitte die Seite bei allen Spielern neu laden');
+    return;
+  }
   netRole = 'client';
   netUiOpen = false;
   soloMode = false; botMode = false;
@@ -4922,6 +5057,8 @@ function netOnStart(m) {
   if (rotMode) toggleRotMode();
   diveAlways = !!m.settings?.diveAlways;
   noStun = !!m.settings?.noStun;
+  dayMode = !!m.settings?.sky; // Tag/Nacht-Phase des Hosts übernehmen
+  netLastSnapAt = perfNow();
   snowZones = !!m.settings?.snowZones;
   rosterSlots = netSanitizeRoster(m.roster) || rosterSlots;
   $('touchui').classList.toggle('hidden', !isTouch);
@@ -4939,7 +5076,7 @@ function netStartOnline() {
   rushMode = false;
   if (rotMode) toggleRotMode();
   for (let i = 0; i < botCtl.length; i++) botCtl[i] = null;
-  netSendJson({ k: 'start', roster: netRoster, settings: { diveAlways, noStun, snowZones } });
+  netSendJson({ k: 'start', v: NET_PROTO, roster: netRoster, settings: { diveAlways, noStun, snowZones, sky: dayMode ? 1 : 0 } });
   $('touchui').classList.toggle('hidden', !isTouch);
   resetRound();      // setzt state='playing' und broadcastet das 'round'-Event
   applySoloLayout(); // Vollbild-Kamera + Online-Scorebar
@@ -4976,6 +5113,7 @@ function netResetState() {
   netRole = null; netUiOpen = false; netMySlot = 0; netCode = null;
   netRoster = [0];
   netSnaps.length = 0; netActQueue.length = 0; netInputSeq = 0; netRoundNo = 0; netNextId = 1;
+  netLastSnapAt = 0; netStaleWarnAt = 0;
   for (const k of Object.keys(netInputs)) delete netInputs[k];
   for (const k of Object.keys(netInputSeqSeen)) delete netInputSeqSeen[k];
   rosterSlots = [0, 1];
@@ -5272,7 +5410,8 @@ function sendProfReport(txt) {
 const GPUPROF_DONE_KEY = 'runordie_gpuprof_v1'; // markiert: Gerät wurde einmalig vermessen + hochgeladen
 
 async function runGpuProfile(auto = false) {
-  if (profiling || state !== 'menu') return;
+  if (profiling || benchRunning || state !== 'menu') return;
+  benchRunning = true; // kompletter Lauf inkl. Refresh-Messung und Einschwingphase
   const overlay = profStatus(auto
     ? '⚙️ Einmaliger Performance-Test deines Geräts … (nur beim ersten Start)'
     : '🔬 GPU-Profil — Szene wird aufgewärmt … (~3 s)');
@@ -5363,6 +5502,7 @@ async function runGpuProfile(auto = false) {
       cams[0].aspect = innerWidth / innerHeight; cams[0].updateProjectionMatrix();
     } catch (e) {}
     profiling = false;
+    benchRunning = false; // Eingaben freigeben, BEVOR backToMenu läuft
     try { backToMenu(); } catch (e) {}
     overlay.remove();
   }
