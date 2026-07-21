@@ -2724,6 +2724,9 @@ function doDive(p) {
 // ---------- Spiel-Logik ----------
 let state = 'menu'; // menu | playing | roundEnd
 let profiling = false; // true während der GPU-Profiler die Szene einfriert und selbst rendert
+let cpuProf = false;   // true während der Live-Frame-Profiler echte Frames vermisst
+// Ringpuffer für das Live-Frame-Profil (echtes Gameplay): Frame-Intervall, CPU-JS-Zeit u. a.
+const cpuBuf = { top: 0, tr: 0, intervals: [], cpu: [], logic: [], rsub: [], heap: [] };
 let elapsed = 0, spawnTimer = 0, puTimer = 0, sharkTimer = 6, roundEndAt = 0, firstDeathAt = 0, spawnCount = 0;
 let soloMode = false;
 let diveAlways = localStorage.getItem('runordie_diveAlways') === '1';
@@ -3155,6 +3158,7 @@ function syncMeshes() {
 function animate() {
   requestAnimationFrame(animate);
   if (profiling) return; // Szene eingefroren: der Profiler steuert das Rendern selbst
+  if (cpuProf) { const _n = performance.now(); if (cpuBuf.top) cpuBuf.intervals.push(_n - cpuBuf.top); cpuBuf.top = _n; }
   const dt = Math.min(clock.getDelta(), 0.05);
 
   pollGamepads();
@@ -3259,6 +3263,7 @@ function animate() {
   updateCam(cams[0], player1, dt);
   if (!soloMode) updateCam(cams[1], player2, dt);
 
+  if (cpuProf) cpuBuf.tr = performance.now(); // Grenze Logik/Physik ↔ Render-Submit
   const w = innerWidth, h = innerHeight, hw = Math.floor(w / 2);
   // Refresh the shadow map once for this frame; both splitscreen eyes then reuse it.
   renderer.shadowMap.needsUpdate = true;
@@ -3275,6 +3280,13 @@ function animate() {
     renderer.setViewport(hw, 0, w - hw, h); renderer.setScissor(hw, 0, w - hw, h);
     renderer.render(scene, cams[1]);
     renderer.setScissorTest(false);
+  }
+  if (cpuProf) {
+    const _e = performance.now();
+    cpuBuf.cpu.push(_e - cpuBuf.top);        // gesamte JS-Zeit im Frame (Logik + Draw-Call-Submit)
+    cpuBuf.logic.push(cpuBuf.tr - cpuBuf.top); // Logik + Physik
+    cpuBuf.rsub.push(_e - cpuBuf.tr);          // CPU-Kosten der Draw-Call-Abgabe (nicht die GPU-Ausführung)
+    if (performance.memory) cpuBuf.heap.push(performance.memory.usedJSHeapSize);
   }
 }
 
@@ -3304,6 +3316,32 @@ animate();
 const SHADOW_TYPES = { Basic: THREE.BasicShadowMap, PCF: THREE.PCFShadowMap, PCFSoft: THREE.PCFSoftShadowMap };
 const profSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const profNextFrame = () => new Promise((r) => requestAnimationFrame(() => r()));
+
+async function profMeasureRefresh(frames = 45) {
+  // Echten Display-Takt im Leerlauf (Menü) messen: dort treffen Frames das Vsync,
+  // also ist der Median der Frame-Intervalle die wahre Vsync-Periode. (Unter Last
+  // erreicht kein Frame das Vsync, deshalb lässt sich das Budget NICHT aus der Last ableiten.)
+  const iv = []; let last = 0;
+  for (let i = 0; i < frames; i++) {
+    const t = await new Promise((r) => requestAnimationFrame(r));
+    if (last) iv.push(t - last);
+    last = t;
+  }
+  if (!iv.length) return 1000 / 60;
+  iv.sort((a, b) => a - b);
+  return iv[iv.length >> 1]; // Median
+}
+
+function profStats(a) {
+  if (!a.length) return { n: 0, mean: 0, p50: 0, p95: 0, p99: 0, min: 0, max: 0 };
+  const s = [...a].sort((x, y) => x - y);
+  const q = (p) => s[Math.min(s.length - 1, Math.floor(p * s.length))];
+  return {
+    n: a.length,
+    mean: a.reduce((x, y) => x + y, 0) / a.length,
+    p50: q(0.5), p95: q(0.95), p99: q(0.99), min: s[0], max: s[s.length - 1],
+  };
+}
 
 function forceMaterialRecompile() {
   // Schattentyp/-schalter ändert die Material-Shader; Three cached kompilierte Programme,
@@ -3375,16 +3413,68 @@ function profStatus(text, el) {
   return el;
 }
 
+function analyzeLiveFrames(budget) {
+  const drop = 12; // erste Frames nach Messstart verwerfen (Einschwingen)
+  const iv = cpuBuf.intervals.slice(drop);
+  const cpu = cpuBuf.cpu.slice(drop);
+  const logic = cpuBuf.logic.slice(drop);
+  const rsub = cpuBuf.rsub.slice(drop);
+  const heap = cpuBuf.heap.slice(drop);
+  if (iv.length < 20) return null;
+
+  const S = { iv: profStats(iv), cpu: profStats(cpu), logic: profStats(logic), rsub: profStats(rsub) };
+  // budget = wahre Vsync-Periode aus der Leerlaufmessung; Fallback: schnellste 5 % der Intervalle.
+  if (!budget || !isFinite(budget)) { const s = [...iv].sort((a, b) => a - b); budget = s[Math.floor(0.05 * s.length)]; }
+  const refreshHz = Math.round(1000 / budget);
+  const fpsMean = 1000 / S.iv.mean;
+  const fps1low = 1000 / S.iv.p99; // „1%-low": langsamste Frames
+  const jankFrames = iv.filter((v) => v > budget * 1.8).length;
+  const jankPct = 100 * jankFrames / iv.length;
+
+  // Kernfrage: passt die CPU-JS-Zeit ins Frame-Budget? Das ist der belastbare, vsync-unabhängige
+  // Indikator — anders als „Frames zu langsam", das auch von Vsync-Quantelung kommen kann.
+  const cpuMean = S.cpu.mean;
+  const cpuLoad = cpuMean / budget;          // Anteil des Budgets, den JS allein verbraucht
+  const dropping = S.iv.mean > budget * 1.4; // Frames fallen deutlich aus dem Takt
+  let bound, boundNote;
+  if (cpuLoad >= 0.9) {
+    bound = 'cpu'; boundNote = `CPU-gebunden: JS-Arbeit ${cpuMean.toFixed(1)} ms erreicht/übersteigt das ${budget.toFixed(1)} ms-Budget (${Math.round(cpuLoad * 100)} %). Nächstes Ziel liegt im Hauptthread — Physik/Logik/GC, nicht auf der GPU.`;
+  } else if (dropping) {
+    bound = 'gpu'; boundNote = `GPU/thermisch gebunden: JS ist billig (${cpuMean.toFixed(1)} ms, ${Math.round(cpuLoad * 100)} % Budget), Frames dennoch langsam (Ø ${S.iv.mean.toFixed(1)} ms bei ${budget.toFixed(1)} ms Budget).`;
+  } else {
+    bound = 'vsync'; boundNote = `Läuft am Display-Takt (~${refreshHz} Hz); CPU-JS nutzt ${Math.round(cpuLoad * 100)} % des Budgets — ${cpuLoad < 0.6 ? 'reichlich' : 'noch etwas'} Luft.`;
+  }
+
+  // GC/Allocation-Näherung (performance.memory ist auf echten Geräten grob gequantelt).
+  let gc = null;
+  if (heap.length > 5) {
+    let alloc = 0, events = 0;
+    for (let i = 1; i < heap.length; i++) { const d = heap[i] - heap[i - 1]; if (d > 0) alloc += d; else if (d < 0) events++; }
+    gc = { allocPerFrameKB: (alloc / heap.length) / 1024, events, coarse: true };
+  }
+
+  return { S, budget, refreshHz, fpsMean, fps1low, jankPct, jankFrames, nFrames: iv.length, bound, boundNote, gc };
+}
+
 async function runGpuProfile() {
   if (profiling || state !== 'menu') return;
   const overlay = profStatus('🔬 GPU-Profil — Szene wird aufgewärmt … (~3 s)');
   let result = null;
   try {
     // Repräsentative Szene: kurz solo laufen lassen, damit Hindernisse (Schattenwerfer) existieren.
+    // Während dieses echten Gameplays läuft parallel das Live-Frame-Profil (CPU/FPS/Jank).
+    const trueBudget = await profMeasureRefresh(); // echten Display-Takt im Menü-Leerlauf messen
+    cpuBuf.top = 0;
+    for (const k of ['intervals', 'cpu', 'logic', 'rsub', 'heap']) cpuBuf[k].length = 0;
     startGame(true);
     player1.invulnUntil = perfNow() + 999;
     player2.invulnUntil = perfNow() + 999;
-    await profSleep(2800);
+    await profSleep(600);        // erst einschwingen lassen (Szene füllt sich), dann messen
+    cpuProf = true;
+    await profSleep(3400);       // ~3,4 s echte Frames vermessen
+    cpuProf = false;
+    const live = analyzeLiveFrames(trueBudget);
+
     profiling = true;            // animate() einfrieren — ab jetzt rendert nur der Profiler
     await profNextFrame();
     profStatus('🔬 GPU-Profil — messe Renderkosten …', overlay);
@@ -3442,7 +3532,7 @@ async function runGpuProfile() {
     const versusOnce = profTime(() => renderVersus(false), N);
     const versusNaive = profTime(() => renderVersus(true), N);
 
-    result = { gpu, w: gl.drawingBufferWidth, h: gl.drawingBufferHeight, pr: renderer.getPixelRatio(), configs, soloMs, versusOnce, versusNaive };
+    result = { gpu, w: gl.drawingBufferWidth, h: gl.drawingBufferHeight, pr: renderer.getPixelRatio(), configs, soloMs, versusOnce, versusNaive, live };
   } catch (err) {
     alert('GPU-Profil fehlgeschlagen: ' + err);
   } finally {
@@ -3494,11 +3584,50 @@ function renderProfReport(d) {
     </tr>`;
   }).join('');
 
+  // ---- Live-Frame-Profil (echtes Gameplay, solo) aufbereiten ----
+  const L = d.live;
+  const f1 = (x) => x.toFixed(1);
+  const boundLabel = { vsync: 'FLÜSSIG (am Display-Takt)', cpu: 'CPU-GEBUNDEN', gpu: 'GPU/THERMISCH-GEBUNDEN' };
+  let liveLines, liveHtml;
+  if (L) {
+    const waitMs = Math.max(0, L.S.iv.mean - L.S.cpu.mean);
+    const gcTxt = L.gc ? `~${f1(L.gc.allocPerFrameKB)} KB/Frame Allokation, ${L.gc.events} GC-Abfälle (grob)` : 'performance.memory nicht verfügbar';
+    liveLines = [
+      'Live-Frame-Profil (echtes Solo-Gameplay, ' + L.nFrames + ' Frames):',
+      '  Display: ~' + L.refreshHz + ' Hz (Budget ' + f1(L.budget) + ' ms/Frame)',
+      '  Ist-FPS: ' + Math.round(L.fpsMean) + ' Ø · ' + Math.round(L.fps1low) + ' bei 1%-low',
+      '  Frame-Intervall ms: p50 ' + f1(L.S.iv.p50) + ' · p95 ' + f1(L.S.iv.p95) + ' · p99 ' + f1(L.S.iv.p99) + ' · max ' + f1(L.S.iv.max),
+      '  CPU-JS/Frame: ' + f1(L.S.cpu.mean) + ' ms Ø (Logik/Physik ' + f1(L.S.logic.mean) + ' · Draw-Submit ' + f1(L.S.rsub.mean) + ') · p99 ' + f1(L.S.cpu.p99),
+      '  GPU/Vsync-Wartezeit: ~' + f1(waitMs) + ' ms/Frame',
+      '  Jank: ' + f1(L.jankPct) + ' % der Frames > 1,8× Budget',
+      '  GC: ' + gcTxt,
+      '  VERDIKT: ' + boundLabel[L.bound] + ' — ' + L.boundNote,
+    ];
+    const boundCls = L.bound === 'vsync' ? 'pp-good' : L.bound === 'cpu' ? 'pp-warn' : 'pp-warn';
+    liveHtml = `
+    <div class="pp-sect">Live-Frame-Profil · echtes Solo-Gameplay (${L.nFrames} Frames)</div>
+    <div class="pp-frame">
+      <span>Display-Takt</span><span class="pp-n">~${L.refreshHz} Hz · Budget ${f1(L.budget)} ms</span>
+      <span>Ist-FPS (Ø · 1%-low)</span><span class="pp-n">${Math.round(L.fpsMean)} · ${Math.round(L.fps1low)} fps</span>
+      <span>Frame-Intervall (p50 / p95 / p99 / max)</span><span class="pp-n">${f1(L.S.iv.p50)} / ${f1(L.S.iv.p95)} / ${f1(L.S.iv.p99)} / ${f1(L.S.iv.max)} ms</span>
+      <span>CPU-JS/Frame (Logik + Draw-Submit)</span><span class="pp-n">${f1(L.S.cpu.mean)} ms (${f1(L.S.logic.mean)} + ${f1(L.S.rsub.mean)})</span>
+      <span>GPU/Vsync-Wartezeit</span><span class="pp-n">~${f1(Math.max(0, L.S.iv.mean - L.S.cpu.mean))} ms</span>
+      <span>Jank (Frames &gt; 1,8× Budget)</span><span class="pp-n">${f1(L.jankPct)} %</span>
+      <span>GC (grob)</span><span class="pp-n">${L.gc ? f1(L.gc.allocPerFrameKB) + ' KB/Frame · ' + L.gc.events + ' Abfälle' : 'n/a'}</span>
+    </div>
+    <div class="pp-rec ${boundCls}">🎯 <b>${boundLabel[L.bound]}</b> — ${L.boundNote}</div>`;
+  } else {
+    liveLines = ['Live-Frame-Profil: zu wenige Frames erfasst.'];
+    liveHtml = '';
+  }
+
   // paste-fertiger Klartext-Bericht (für „Kopieren")
   const txt = [
     'RUN OR DIE — GPU-Profilbericht',
     'GPU: ' + d.gpu,
     'Canvas: ' + d.w + '×' + d.h + ' (pixelRatio ' + d.pr + '), Messmethode: CPU-Timing + gl.finish()',
+    '',
+    ...liveLines,
     '',
     'Frame-Renderkosten (aktuelle Konfig, PCF·2048, Schatten 1×/Frame):',
     '  Solo (1 Kamera):      ' + d.soloMs.toFixed(2) + ' ms  (~' + Math.round(1000 / d.soloMs) + ' fps Renderdecke)',
@@ -3533,6 +3662,8 @@ function renderProfReport(d) {
     #ppcard .pp-ref{background:#2a3350;color:#9fb2e6}#ppcard .pp-cur{background:#243a66;color:#bcd4ff}#ppcard .pp-pick{background:#1d4a2e;color:#8ff0b0}
     #ppcard .pp-rec{margin:12px 22px;padding:13px 15px;background:#141d2e;border:1px solid #2b3350;border-left:3px solid #6fa8ff;border-radius:8px;font-size:13.5px;line-height:1.55}
     #ppcard .pp-rec.pp-ceil{border-left-color:#c9903f;color:#d9c4a0;background:#1e1a12}
+    #ppcard .pp-rec.pp-good{border-left-color:#3fbf7f;color:#a7e9c6;background:#10231a}
+    #ppcard .pp-rec.pp-warn{border-left-color:#e0913a;color:#f0cfa0;background:#211a10}
     #ppcard .pp-actions{display:flex;gap:10px;justify-content:flex-end;padding:8px 22px 20px}
     #ppcard button{font:600 13px system-ui;padding:9px 16px;border-radius:8px;border:1px solid #33405f;background:#1b2233;color:#dfe6f5;cursor:pointer}
     #ppcard button.pp-primary{background:#2f5fd0;border-color:#2f5fd0;color:#fff}
@@ -3545,8 +3676,8 @@ function renderProfReport(d) {
   wrap.innerHTML = `<div id="ppcard">
     <h2>🔬 GPU-Profilbericht</h2>
     <div class="pp-sub"><b>${d.gpu}</b><br>${d.w}×${d.h} px · pixelRatio ${d.pr} · Messung: CPU-Timing mit <code>gl.finish()</code> (echte GPU, kein SwiftShader)</div>
-
-    <div class="pp-sect">Frame-Renderkosten · aktuelle Konfiguration</div>
+    ${liveHtml}
+    <div class="pp-sect">Frame-Renderkosten (isoliert) · aktuelle Konfiguration</div>
     <div class="pp-frame">
       <span>Solo (1 Kamera)</span><span class="pp-n">${d.soloMs.toFixed(2)} ms · ~${Math.round(1000 / d.soloMs)} fps-Decke</span>
       <span>Versus / Splitscreen (2 Kameras)</span><span class="pp-n">${d.versusOnce.toFixed(2)} ms · ~${Math.round(1000 / d.versusOnce)} fps-Decke</span>
@@ -3588,7 +3719,7 @@ function renderProfReport(d) {
 }
 
 // Debug-Hook für automatisierte Tests
-window.__game = { players, obstacles, powerups, world, cams, fxRings, lasers, sharks, renderer, spawnShark, spawnLaser, spawnPowerup, spawnWave, toggleRotMode, startSnow, endSnow, runGpuProfile,
+window.__game = { players, obstacles, powerups, world, cams, fxRings, lasers, sharks, renderer, spawnShark, spawnLaser, spawnPowerup, spawnWave, toggleRotMode, startSnow, endSnow, runGpuProfile, cpuBuf, analyzeLiveFrames, renderProfReport,
   get state() { return state; }, get audio() { return audioCtx && audioCtx.state; },
   get rotMode() { return rotMode; }, get dayMode() { return dayMode; }, get soloMode() { return soloMode; },
   get snowActive() { return snowActive; }, get snowLevel() { return snowLevel; }, get iceLevel() { return iceLevel; },
