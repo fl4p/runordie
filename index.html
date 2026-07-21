@@ -3378,6 +3378,7 @@ function profStatus(text, el) {
 async function runGpuProfile() {
   if (profiling || state !== 'menu') return;
   const overlay = profStatus('🔬 GPU-Profil — Szene wird aufgewärmt … (~3 s)');
+  let result = null;
   try {
     // Repräsentative Szene: kurz solo laufen lassen, damit Hindernisse (Schattenwerfer) existieren.
     startGame(true);
@@ -3420,28 +3421,43 @@ async function runGpuProfile() {
     }
     goldPx = null;
 
-    // Splitscreen: „Schatten einmal pro Frame" (ausgeliefert) vs. „doppelt" (vor dem Fix) auf DIESER GPU.
+    // Splitscreen: „Schatten 1×/Frame" (ausgeliefert) vs. „2×" (vor dem Fix) auf DIESER GPU.
+    // Beide Kameras werden — wie im echten Spiel — in je eine HALBE Bildbreite (Scissor) gerendert,
+    // sonst rastert jedes Auge das volle Bild und die Versus-Zahl wäre ~2× zu hoch.
     applyShadowConfig({ type: 'PCF', size: 2048, enabled: true });
     await profNextFrame();
-    const c0 = cams[0], c1 = cams[1];
     const soloMs = profTime(renderOnce, N);
-    const versusOnce = profTime(() => { renderer.shadowMap.needsUpdate = true; renderer.render(scene, c0); renderer.render(scene, c1); }, N);
-    const versusNaive = profTime(() => { renderer.shadowMap.needsUpdate = true; renderer.render(scene, c0); renderer.shadowMap.needsUpdate = true; renderer.render(scene, c1); }, N);
+    const c0 = cams[0], c1 = cams[1];
+    const vw = innerWidth, vh = innerHeight, hw = Math.floor(vw / 2);
+    c0.aspect = hw / vh; c0.updateProjectionMatrix();
+    c1.aspect = (vw - hw) / vh; c1.updateProjectionMatrix();
+    const renderVersus = (updateBothEyes) => {
+      renderer.setScissorTest(true);
+      renderer.shadowMap.needsUpdate = true;
+      renderer.setViewport(0, 0, hw, vh); renderer.setScissor(0, 0, hw, vh); renderer.render(scene, c0);
+      if (updateBothEyes) renderer.shadowMap.needsUpdate = true; // altes Verhalten: Schatten je Auge neu
+      renderer.setViewport(hw, 0, vw - hw, vh); renderer.setScissor(hw, 0, vw - hw, vh); renderer.render(scene, c1);
+      renderer.setScissorTest(false);
+    };
+    const versusOnce = profTime(() => renderVersus(false), N);
+    const versusNaive = profTime(() => renderVersus(true), N);
 
-    // Auslieferungszustand wiederherstellen und zurück ins Menü.
-    applyShadowConfig({ type: 'PCF', size: 2048, enabled: true });
-    renderer.shadowMap.autoUpdate = false;
-    profiling = false;
-    backToMenu();
-    overlay.remove();
-
-    renderProfReport({ gpu, w: gl.drawingBufferWidth, h: gl.drawingBufferHeight, pr: renderer.getPixelRatio(), configs, soloMs, versusOnce, versusNaive });
+    result = { gpu, w: gl.drawingBufferWidth, h: gl.drawingBufferHeight, pr: renderer.getPixelRatio(), configs, soloMs, versusOnce, versusNaive };
   } catch (err) {
-    profiling = false;
-    overlay.remove();
-    try { backToMenu(); } catch (e) {}
     alert('GPU-Profil fehlgeschlagen: ' + err);
+  } finally {
+    // IMMER den Auslieferungszustand wiederherstellen — auch nach einem Fehler mitten in der Schleife,
+    // sonst liefe das echte Spiel mit abgeschalteten/512er/Basic-Schatten weiter, bis neu geladen wird.
+    try {
+      applyShadowConfig({ type: 'PCF', size: 2048, enabled: true });
+      renderer.shadowMap.autoUpdate = false;
+      cams[0].aspect = innerWidth / innerHeight; cams[0].updateProjectionMatrix();
+    } catch (e) {}
+    profiling = false;
+    try { backToMenu(); } catch (e) {}
+    overlay.remove();
   }
+  if (result) renderProfReport(result);
 }
 
 function renderProfReport(d) {
@@ -3553,8 +3569,20 @@ function renderProfReport(d) {
 
   wrap.querySelector('.pp-close').onclick = () => { wrap.remove(); style.remove(); };
   wrap.querySelector('.pp-copy').onclick = (e) => {
-    navigator.clipboard.writeText(txt).then(() => { e.target.textContent = '✓ Kopiert — an Claude schicken'; },
-      () => { e.target.textContent = 'Kopieren blockiert'; });
+    const ok = () => { e.target.textContent = '✓ Kopiert — an Claude schicken'; };
+    const fallback = () => {
+      // Unsicherer Kontext (http-LAN) o. Ä.: navigator.clipboard fehlt -> Textarea + execCommand
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = txt; ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+        document.body.appendChild(ta); ta.focus(); ta.select();
+        const done = document.execCommand('copy'); ta.remove();
+        e.target.textContent = done ? '✓ Kopiert — an Claude schicken' : 'Kopieren blockiert — Text manuell markieren';
+      } catch (_) { e.target.textContent = 'Kopieren nicht verfügbar'; }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt).then(ok, fallback);
+    } else { fallback(); }
   };
   wrap.addEventListener('click', (e) => { if (e.target === wrap) { wrap.remove(); style.remove(); } });
 }
