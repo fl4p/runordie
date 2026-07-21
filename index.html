@@ -169,9 +169,9 @@
     <b>R</b> = Dreh-Modus: Maus (Spieler 1) bzw. rechter Stick drehen Figur, Kamera und Box-Richtung.
   </details>
   <span class="menurow settings">
-    <button id="divebtn"></button><button id="stunbtn"></button><button id="rushbtn"></button><button id="skybtn"></button><button id="snowbtn"></button><button id="botdiffbtn"></button><button id="fpscapbtn"></button><button id="gpuprofbtn">🔬 GPU-Profil erstellen</button>
+    <button id="divebtn"></button><button id="stunbtn"></button><button id="rushbtn"></button><button id="snowbtn"></button><button id="botdiffbtn"></button><button id="fpscapbtn"></button><button id="gpuprofbtn">🔬 GPU-Profil erstellen</button>
   </span>
-  <span class="mkeys">Tastatur: 1 = Einzelspieler · 2 = Gegen Bot · beliebige Taste = 2 Spieler · ESC = Menü · T = Tag/Nacht</span></small></div>
+  <span class="mkeys">Tastatur: 1 = Einzelspieler · 2 = Gegen Bot · beliebige Taste = 2 Spieler · ESC = Menü</span></small></div>
 
 <script type="importmap">
 { "imports": {
@@ -296,7 +296,7 @@ function makeDaySkyTexture() {
 }
 
 const texSkyNight = makeSkyTexture();
-let texSkyDay = null; // lazy
+const texSkyDay = makeDaySkyTexture(); // eager: der erste 25-s-Auto-Wechsel soll nicht mitten im Spiel ruckeln
 const sky = new THREE.Mesh(
   new THREE.SphereGeometry(95, 48, 24),
   new THREE.MeshBasicMaterial({ map: texSkyNight, side: THREE.BackSide, fog: false })
@@ -306,9 +306,10 @@ sky.position.set(0, 0, -18);
 sky.rotation.y = Math.PI / 2;
 scene.add(sky);
 
-// Tag/Nacht-Umschaltung (Taste T) inkl. Licht- und Nebelstimmung.
+// Tag/Nacht-Wechsel: läuft automatisch im 25-s-Takt, inkl. Licht- und Nebelstimmung.
 // Die Eiszone (siehe unten) überlagert beide Modi mit kalter, heller Stimmung.
 let dayMode = false;
+let skyCycleT = 0; // Sekunden seit dem letzten automatischen Wechsel
 // Stimmung wird stufenlos zwischen Basis- und Schnee-Palette gemischt (snowLevel 0..1)
 const ATMO = {
   night: { fog: 0x151228, bg: 0x0d1117, hemi: 0xbcd6ff, ground: 0x30241a, hemiI: 0.9, sun: 0xfff2d9, sunI: 1.6 },
@@ -331,16 +332,14 @@ function applyAtmosphere() {
 }
 function toggleDaySky() {
   dayMode = !dayMode;
-  localStorage.setItem('runordie_dayMode', dayMode ? '1' : '0');
   if (dayMode) {
-    texSkyDay ??= makeDaySkyTexture();
     sky.material.map = texSkyDay;
   } else {
     sky.material.map = texSkyNight;
   }
   sky.material.needsUpdate = true;
   applyAtmosphere();
-  updateDiveBtn(); // ☀️/🌙-Button-Beschriftung im Menü nachziehen
+  updateLanternGlow(); // Laternen an den Bahnrändern leuchten nur nachts
 }
 
 const hemi = new THREE.HemisphereLight(0xbcd6ff, 0x30241a, 0.9);
@@ -590,6 +589,7 @@ function extendPlatform() {
     e.position.set(sx * (PLATFORM_HALF_W - 0.15), 0.03, zc);
     grp.add(e);
   }
+  addLanterns(grp, zMin, zMax); // Laternen wachsen mit der Bahn mit
   addIceOverlay(grp, zc); // Eisschicht friert mit (geteiltes Material)
   for (let i = 0; i < 3; i++)
     addStreetGraffiti(grp, (Math.random() * 2 - 1) * (PLATFORM_HALF_W - 2.2), zMin + 3 + Math.random() * (platL - 6));
@@ -673,6 +673,35 @@ for (const sx of [-1, 1]) {
   const edge = new THREE.Mesh(edgeGeo, edgeMat);
   edge.position.set(sx * (PLATFORM_HALF_W - 0.15), 0.03, (PLATFORM_Z_MIN + PLATFORM_Z_MAX) / 2);
   scene.add(edge);
+}
+
+// Laternen entlang der roten Randstreifen — nachts leuchten sie, tagsüber nicht.
+// Sie hängen knapp AUSSEN an der Plattformkante (Mast reicht unter die Deckplatte),
+// damit Hindernisse in voller Bahnbreite nicht durch die Masten fahren.
+// Geometrien und Materialien sind geteilt (auch die Rush-Kacheln nutzen sie),
+// das Leuchten schaltet ein einziges emissives Material für alle Laternen um.
+const lanternPoleMat = new THREE.MeshStandardMaterial({ color: 0x2c2f33, roughness: 0.55, metalness: 0.35 });
+const lanternGlassMat = new THREE.MeshStandardMaterial({ color: 0xfff3c4, emissive: 0xffb84d, emissiveIntensity: 2.2, roughness: 0.4 });
+const lanternPoleGeo = new THREE.CylinderGeometry(0.05, 0.08, 3.4, 8);
+const lanternHeadGeo = new THREE.SphereGeometry(0.17, 10, 8);
+const LANTERN_SPACING = 9;
+function addLanterns(parent, zMin, zMax) {
+  for (let z = zMin + LANTERN_SPACING / 2; z < zMax; z += LANTERN_SPACING)
+    for (const sx of [-1, 1]) {
+      const grp = new THREE.Group();
+      const pole = new THREE.Mesh(lanternPoleGeo, lanternPoleMat);
+      pole.position.y = 0.8;
+      pole.castShadow = true;
+      const head = new THREE.Mesh(lanternHeadGeo, lanternGlassMat);
+      head.position.y = 2.7;
+      grp.add(pole, head);
+      grp.position.set(sx * (PLATFORM_HALF_W + 0.28), 0, z);
+      parent.add(grp);
+    }
+}
+addLanterns(scene, PLATFORM_Z_MIN, PLATFORM_Z_MAX);
+function updateLanternGlow() {
+  lanternGlassMat.emissiveIntensity = dayMode ? 0 : 2.2;
 }
 
 // ---------- Eiszonen: Schnee-Sektoren mit spiegelglatter Fahrbahn ----------
@@ -1384,28 +1413,32 @@ function spawnObstacle(speed) {
     o.sweep = { amp: PLATFORM_HALF_W - 2.2, omega: 1.1 + Math.random() * 0.7, phase: Math.random() * Math.PI * 2 };
     o.body.velocity.set(0, 0, speed);
   } else {
-    // Rollende Walze über die volle Breite
-    const r = 0.72;
-    const shape = new CANNON.Cylinder(r, r, PLATFORM_HALF_W * 2, 16);
-    const q = new CANNON.Quaternion().setFromAxisAngle(new CANNON.Vec3(0, 0, 1), Math.PI / 2);
-    const body = new CANNON.Body({
-      mass: 0, type: CANNON.Body.KINEMATIC,
-      position: new CANNON.Vec3(0, r, spawnFrontZ),
-      material: MAT_OBST,
-      collisionFilterGroup: GROUP.OBST,
-      collisionFilterMask: GROUP.P1 | GROUP.P2 | GROUP.GROUND,
-    });
-    body.addShape(shape, new CANNON.Vec3(), q);
-    body.isObstacle = true;
-    world.addBody(body);
-    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r, r, PLATFORM_HALF_W * 2, 20), obstMats.roller);
-    mesh.rotation.z = Math.PI / 2;
-    mesh.castShadow = true;
-    const grp = new THREE.Group(); grp.add(mesh); scene.add(grp);
-    const o = { body, mesh: grp, sweep: null, spin: speed / r };
-    obstacles.push(o);
-    body.velocity.set(0, 0, speed * 1.25);
+    spawnRoller(speed, spawnFrontZ);
   }
+}
+
+// Rollende Walze über die volle Breite (einzeln und als Walzen-Trio in spawnWave)
+function spawnRoller(speed, z) {
+  const r = 0.72;
+  const shape = new CANNON.Cylinder(r, r, PLATFORM_HALF_W * 2, 16);
+  const q = new CANNON.Quaternion().setFromAxisAngle(new CANNON.Vec3(0, 0, 1), Math.PI / 2);
+  const body = new CANNON.Body({
+    mass: 0, type: CANNON.Body.KINEMATIC,
+    position: new CANNON.Vec3(0, r, z),
+    material: MAT_OBST,
+    collisionFilterGroup: GROUP.OBST,
+    collisionFilterMask: GROUP.P1 | GROUP.P2 | GROUP.GROUND,
+  });
+  body.addShape(shape, new CANNON.Vec3(), q);
+  body.isObstacle = true;
+  world.addBody(body);
+  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r, r, PLATFORM_HALF_W * 2, 20), obstMats.roller);
+  mesh.rotation.z = Math.PI / 2;
+  mesh.castShadow = true;
+  const grp = new THREE.Group(); grp.add(mesh); scene.add(grp);
+  const o = { body, mesh: grp, sweep: null, spin: speed / r };
+  obstacles.push(o);
+  body.velocity.set(0, 0, speed * 1.25);
 }
 
 function removeObstacle(o) {
@@ -1919,9 +1952,9 @@ function spawnBoomBlock(x, y, z, speed) {
 
 function spawnWave(speed) {
   const roll = Math.random();
-  if (roll < 0.12) { spawnWrecker(speed); return; }
-  if (roll < 0.24) { spawnPiston(speed); return; }
-  if (roll < 0.36) {
+  if (roll < 0.09) { spawnWrecker(speed); return; }
+  if (roll < 0.18) { spawnPiston(speed); return; }
+  if (roll < 0.27) {
     // Feld aus explodierenden Blöcken: Berührung zündet, Explosion schleudert weg
     const n = 6 + Math.floor(Math.random() * 3);
     for (let i = 0; i < n; i++) {
@@ -1934,7 +1967,7 @@ function spawnWave(speed) {
     }
     return;
   }
-  if (roll < 0.48) {
+  if (roll < 0.36) {
     // TNT-MAUER: volle Breite, 2-3 Reihen hoch — eine Berührung sprengt
     // per Kettenreaktion ein Loch (oder gleich die halbe Mauer)
     const rows = 2 + (Math.random() < 0.5 ? 1 : 0);
@@ -1943,7 +1976,7 @@ function spawnWave(speed) {
         spawnBoomBlock(x, 0.45 + r * 0.92, spawnFrontZ, speed);
     return;
   }
-  if (roll < 0.6) {
+  if (roll < 0.45) {
     // TREPPE: kleiner Block -> größerer Block -> hohe Mauer.
     // Route: Stufe für Stufe hochspringen und über die Mauer.
     const steps = [
@@ -1962,7 +1995,58 @@ function spawnWave(speed) {
     }
     return;
   }
-  if (roll < 0.8) {
+  if (roll < 0.55) {
+    // DOPPELWAND: zwei hohe Wände kurz hintereinander, Lücken auf
+    // gegenüberliegenden Seiten — erzwingt einen schnellen Spurwechsel
+    // Lücken nur ±2.2 von der Mitte und 9 m Wandabstand: der Querweg (4,4 m)
+    // bleibt auch bei hohem Tempo in der verfügbaren Zeit schaffbar
+    const H = 1.8, gapW = 2.4, side = Math.random() < 0.5 ? 1 : -1;
+    for (const [dz, s] of [[9, side], [0, -side]]) {
+      const gapX = s * 2.2;
+      const leftW = (gapX - gapW / 2) + PLATFORM_HALF_W;
+      const rightW = PLATFORM_HALF_W - (gapX + gapW / 2);
+      for (const [w, cx] of [[leftW, -PLATFORM_HALF_W + leftW / 2], [rightW, PLATFORM_HALF_W - rightW / 2]]) {
+        if (w < 0.3) continue;
+        const o = addObstBody(
+          new CANNON.Box(new CANNON.Vec3(w / 2, H, 0.35)),
+          new CANNON.Vec3(cx, H, spawnFrontZ + dz),
+          tiledMat(texBrick, w / 1.6, (H * 2) / 1.6, { roughness: 0.85 }),
+          new THREE.BoxGeometry(w, H * 2, 0.7)
+        );
+        o.body.velocity.set(0, 0, speed);
+        addWallGraffiti(o.mesh, w, H, 0.35);
+      }
+    }
+    return;
+  }
+  if (roll < 0.64) {
+    // WALZEN-TRIO: drei Walzen dicht hintereinander — drei Sprünge im Takt
+    for (const dz of [9, 4.5, 0]) spawnRoller(speed, spawnFrontZ + dz);
+    return;
+  }
+  if (roll < 0.72) {
+    // ZANGE: zwei gegenläufig pendelnde Schieber, direkt dahinter eine
+    // niedrige Latte — zwischen den Schiebern durch und sofort springen
+    for (const [dz, ph] of [[6, 0], [4.6, Math.PI]]) {
+      const o = addObstBody(
+        new CANNON.Box(new CANNON.Vec3(1.5, 0.85, 0.55)),
+        new CANNON.Vec3(0, 0.85, spawnFrontZ + dz),
+        obstMats.sweeper,
+        new THREE.BoxGeometry(3, 1.7, 1.1)
+      );
+      o.sweep = { amp: PLATFORM_HALF_W - 2.2, omega: 1.4, phase: ph };
+      o.body.velocity.set(0, 0, speed);
+    }
+    const bar = addObstBody(
+      new CANNON.Box(new CANNON.Vec3(PLATFORM_HALF_W, 0.55, 0.28)),
+      new CANNON.Vec3(0, 0.55, spawnFrontZ),
+      tiledMat(texBar, 5.5, 1),
+      new THREE.BoxGeometry(PLATFORM_HALF_W * 2, 1.1, 0.56)
+    );
+    bar.body.velocity.set(0, 0, speed);
+    return;
+  }
+  if (roll < 0.86) {
     // Mega-Wand über die volle Breite (5,2 m — ohne Pad unmöglich),
     // 9 m davor läuft ein Katapult-Pad. Rote Ziegel, und sie stunnt NICHT:
     // wer das Pad verpasst, wird nur geschoben und behält die Kontrolle.
@@ -2207,7 +2291,6 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Escape') { backToMenu(); return; }
   // Einstellungs-Tasten funktionieren auch im Menü (starten das Spiel nicht)
   if (!e.repeat && e.code === 'KeyR') { toggleRotMode(); return; }
-  if (!e.repeat && e.code === 'KeyT') { toggleDaySky(); return; }
   if (state === 'menu') {
     if (e.code === 'Digit2' || e.code === 'Numpad2') startGame(false, true);
     else startGame(e.code === 'Digit1' || e.code === 'Numpad1');
@@ -3198,8 +3281,6 @@ function updateDiveBtn() {
   if (r) r.textContent = rushMode
     ? '🏃 Modus: RUSH (Bahn wächst nach vorn)'
     : '⚔️ Modus: DUELL (feste Bahn)';
-  const sk = $('skybtn');
-  if (sk) sk.textContent = dayMode ? '☀️ Himmel: TAG' : '🌙 Himmel: NACHT';
   const sn = $('snowbtn');
   if (sn) sn.textContent = snowZones ? '❄️ Eiszonen: AN' : '🌤️ Eiszonen: AUS';
   const bb = $('botdiffbtn');
@@ -3228,7 +3309,6 @@ document.addEventListener('click', (e) => {
     localStorage.setItem('runordie_rush', rushMode ? '1' : '0');
     updateDiveBtn();
   }
-  if (id === 'skybtn') toggleDaySky();
   if (id === 'snowbtn') {
     snowZones = !snowZones;
     localStorage.setItem('runordie_snow', snowZones ? '1' : '0');
@@ -3562,6 +3642,10 @@ function animate() {
   if (cpuProf) { const _n = performance.now(); if (cpuBuf.top) cpuBuf.intervals.push(_n - cpuBuf.top); cpuBuf.top = _n; }
   const dt = Math.min(clock.getDelta(), 0.05);
 
+  // Tag/Nacht wechselt von selbst im 25-s-Takt
+  skyCycleT += dt;
+  if (skyCycleT >= 25) { skyCycleT = 0; toggleDaySky(); }
+
   pollGamepads();
   applyTouchInput();
   updateBots();
@@ -3708,7 +3792,6 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
 MENU_HTML = $('msg').innerHTML;
 updateDiveBtn();
 // Gespeicherte Einstellungen wiederherstellen (Tag/Nacht, Dreh-Modus)
-if (localStorage.getItem('runordie_dayMode') === '1') toggleDaySky();
 if (localStorage.getItem('runordie_rotMode') === '1') toggleRotMode();
 animate();
 
@@ -4198,7 +4281,7 @@ function renderProfReport(d, opts = {}) {
 }
 
 // Debug-Hook für automatisierte Tests
-window.__game = { players, obstacles, powerups, world, cams, fxRings, lasers, sharks, renderer, spawnShark, spawnLaser, spawnPowerup, spawnWave, toggleRotMode, startSnow, endSnow, runGpuProfile, cpuBuf, analyzeLiveFrames, renderProfReport,
+window.__game = { players, obstacles, powerups, world, cams, fxRings, lasers, sharks, renderer, spawnShark, spawnLaser, spawnPowerup, spawnWave, toggleDaySky, toggleRotMode, startSnow, endSnow, runGpuProfile, cpuBuf, analyzeLiveFrames, renderProfReport,
   startGame, backToMenu, invariants: botInvariants,
   // sticky-Bots überleben Menü-Starts — abschalten mit setBot(i, null)
   setBot: (i, diff) => { botCtl[i] = diff ? makeBot(diff, true) : null; },
