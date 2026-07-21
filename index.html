@@ -2842,8 +2842,12 @@ function botHandleThreat(p, bot, th) {
       bot.targetZ = t.position.z;
       return;
     case 'sweep': { // dort kreuzen, wo der Schieber beim Eintreffen NICHT ist
-      const s = th.o.sweep;
-      const px = s.amp * Math.sin(s.omega * (elapsed + th.tta) + s.phase);
+      // Der Schieber startet bei x=0 und wird nur über die Geschwindigkeit bewegt —
+      // die Zukunftsposition muss deshalb von der AKTUELLEN Position aus integriert
+      // werden, die reine Sinus-Formel hätte einen konstanten Phasenversatz.
+      const s = th.o.sweep, b = th.o.body;
+      const px = b.position.x +
+        s.amp * (Math.sin(s.omega * (elapsed + th.tta) + s.phase) - Math.sin(s.omega * elapsed + s.phase));
       bot.targetX = px >= 0 ? -5 : 5;
       bot.targetZ = t.position.z;
       return;
@@ -3052,12 +3056,17 @@ function checkInvariants() {
       if (![pos.x, pos.y, pos.z, v.x, v.y, v.z].every(Number.isFinite)) { invFire('nan-body', `Spieler ${p.id}`); break; }
       if (v.length() > 150) { invFire('velocity-explosion', `Spieler ${p.id} |v|=${v.length().toFixed(0)}`); break; }
     }
-    if (p.alive && p.torso.position.y < DEATH_Y - 4) invFire('underworld-alive', `Spieler ${p.id} y=${p.torso.position.y.toFixed(1)}`);
+    // Nur im Spiel prüfen: während roundEnd läuft die Physik weiter, aber
+    // updatePlayer (und damit killPlayer) ist eingefroren — ein Kanten-Hänger
+    // des Sieger-Bots fällt dann legitim ins Bodenlose
+    if (state === 'playing' && p.alive && p.torso.position.y < DEATH_Y - 4) invFire('underworld-alive', `Spieler ${p.id} y=${p.torso.position.y.toFixed(1)}`);
     if (state === 'playing' && p.alive && p.ragdoll) {
       p._invRagSince ??= now;
       if (now - p._invRagSince > 6) invFire('ragdoll-stuck', `Spieler ${p.id}`);
     } else p._invRagSince = null;
-    if (p.hanging) {
+    // Nur für Bot-Figuren: ein Mensch darf legitim lange hängen (jeder Sprung-Tap
+    // frischt den Griff um 3 s auf), der Bot zieht sich in <1 s hoch
+    if (p.hanging && botCtl[p.id - 1]) {
       p._invHangSince ??= now;
       if (now - p._invHangSince > 5) invFire('hang-stuck', `Spieler ${p.id}`);
     } else p._invHangSince = null;
@@ -3143,7 +3152,7 @@ function applySoloLayout() {
   if (soloMode) {
     $('score').innerHTML = `<span class="p1">SOLO</span>&nbsp; <span id="solotime">0</span> s &nbsp;· Rekord ${bestSolo} s`;
   } else {
-    $('score').innerHTML = `<span class="p1">SPIELER 1</span>&nbsp; <span id="s1">${player1.score}</span> : ` +
+    $('score').innerHTML = `<span class="p1">${botMode ? 'DU' : 'SPIELER 1'}</span>&nbsp; <span id="s1">${player1.score}</span> : ` +
       `<span id="s2">${player2.score}</span> &nbsp;<span class="p2">${botMode ? `🤖 BOT (${BOT_LABELS[botDiff]})` : 'SPIELER 2'}</span>`;
   }
   cams[0].aspect = (single ? innerWidth : innerWidth / 2) / innerHeight;
@@ -3164,7 +3173,8 @@ function startGame(solo = false, vsBot = false) {
 
 function backToMenu() {
   state = 'menu';
-  botMode = false;
+  // botMode bleibt wie soloMode stehen: so rendert der Menü-Hintergrund weiter
+  // konsistent (Vollbild-Aspect); der nächste startGame() setzt beide neu
   $('touchui').classList.add('hidden');
   if (snowActive) endSnow(true);
   clearObstacles(); clearPowerups(); clearLasers(); clearRushTiles(); clearSharks();
@@ -3543,9 +3553,11 @@ function animate() {
   if (fpsCap) {
     // Frame überspringen, bis ~eine 60-fps-Periode vergangen ist (−1 ms Toleranz gegen
     // Vsync-Jitter, sonst würde ein knapp verfehlter Frame auf 30 fps halbieren).
+    // Der Rest wird AKKUMULIERT (capLastT += Periode statt = jetzt): sonst rastet
+    // das Gate auf den rAF-Takt ein und 90/144-Hz-Displays fallen auf 45/48 fps.
     const _now = performance.now();
     if (_now - capLastT < FPS_CAP_MS - 1) return;
-    capLastT = _now;
+    capLastT = _now - capLastT > FPS_CAP_MS * 2 ? _now : capLastT + FPS_CAP_MS;
   }
   if (cpuProf) { const _n = performance.now(); if (cpuBuf.top) cpuBuf.intervals.push(_n - cpuBuf.top); cpuBuf.top = _n; }
   const dt = Math.min(clock.getDelta(), 0.05);
@@ -3722,6 +3734,10 @@ animate();
 // die Renderkosten je Schatten-Konfiguration und die visuelle Abweichung gegenüber
 // der Maximalqualität — um das nächste sinnvolle Optimierungsziel zu finden.
 const SHADOW_TYPES = { Basic: THREE.BasicShadowMap, PCF: THREE.PCFShadowMap, PCFSoft: THREE.PCFSoftShadowMap };
+// Ziel zum Hochladen des Profilberichts: öffentliches ntfy.sh-Topic (kein Konto, CORS offen).
+// Der Bericht (GPU-Modell + Messwerte, nichts Sensibles) wird für ~12 h zwischengespeichert und
+// ist per GET https://ntfy.sh/<topic>/json?poll=1&since=all abrufbar.
+const PROF_SEND_URL = 'https://ntfy.sh/runordie-gpuprof-fl4p-k7x92q3';
 const profSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const profNextFrame = () => new Promise((r) => requestAnimationFrame(() => r()));
 
@@ -4121,12 +4137,20 @@ function renderProfReport(d) {
 
     <div class="pp-actions">
       <button class="pp-copy">📋 Bericht kopieren</button>
+      <button class="pp-send">☁️ An Claude senden</button>
       <button class="pp-primary pp-close">Schließen</button>
     </div>
   </div>`;
   document.body.appendChild(wrap);
 
   wrap.querySelector('.pp-close').onclick = () => { wrap.remove(); style.remove(); };
+  wrap.querySelector('.pp-send').onclick = (e) => {
+    const btn = e.target; btn.disabled = true; btn.textContent = '☁️ Sende …';
+    // Einfacher Text-POST (keine Custom-Header -> kein CORS-Preflight); ntfy speichert die Nachricht.
+    fetch(PROF_SEND_URL, { method: 'POST', body: txt })
+      .then((r) => { btn.textContent = r.ok ? '✓ Gesendet — sag Claude „hol den Bericht"' : 'Senden fehlgeschlagen (' + r.status + ')'; })
+      .catch(() => { btn.disabled = false; btn.textContent = 'Kein Netz — erneut senden'; });
+  };
   wrap.querySelector('.pp-copy').onclick = (e) => {
     const ok = () => { e.target.textContent = '✓ Kopiert — an Claude schicken'; };
     const fallback = () => {
