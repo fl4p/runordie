@@ -1192,6 +1192,25 @@ function explodeBlock(o) {
 const lasers = [];
 const laserGlowMat = new THREE.MeshBasicMaterial({ color: 0xff2545, transparent: true, opacity: 0.2, depthWrite: false });
 
+// Fester Pool für die roten Lichtscheine: die Lichter bleiben dauerhaft in der
+// Szene (Intensität 0 = aus). Würden sie pro Laser hinzugefügt/entfernt, änderte
+// sich die Lichtanzahl und three.js müsste sämtliche Shader neu kompilieren —
+// ein spürbarer Ruckler bei jedem Laser-Spawn/-Despawn.
+const laserLightsFree = [];
+for (let i = 0; i < 8; i++) {
+  const li = new THREE.PointLight(0xff2545, 0, 11, 1.6);
+  li.position.set(0, -60, 0);
+  scene.add(li);
+  laserLightsFree.push(li);
+}
+function acquireLaserLight() { return laserLightsFree.pop() ?? null; }
+function releaseLaserLight(li) {
+  if (!li) return;
+  li.intensity = 0;
+  li.position.set(0, -60, 0);
+  laserLightsFree.push(li);
+}
+
 function makeLaserBeam(len) {
   const beam = new THREE.Mesh(
     new THREE.CylinderGeometry(0.035, 0.035, len, 8),
@@ -1249,13 +1268,10 @@ function spawnLaser(forceType) {
     grp.add(beam, glow, post);
   }
 
-  // Roter Lichtschein auf der Straße: Position/Intensität folgen der Strahlrichtung
-  L.light = new THREE.PointLight(0xff2545, 1.0, 11, 1.6);
-  scene.add(L.light);
-  if (type === 'spin') {
-    L.light2 = new THREE.PointLight(0xff2545, 1.0, 11, 1.6);
-    scene.add(L.light2);
-  }
+  // Roter Lichtschein auf der Straße: Position/Intensität folgen der Strahlrichtung.
+  // Lichter kommen aus dem festen Pool (kann leer sein -> Laser ohne Schein).
+  L.light = acquireLaserLight();
+  if (type === 'spin') L.light2 = acquireLaserLight();
 
   scene.add(grp);
   lasers.push(L);
@@ -1263,8 +1279,8 @@ function spawnLaser(forceType) {
 
 function removeLaser(L) {
   scene.remove(L.grp);
-  scene.remove(L.light);
-  if (L.light2) scene.remove(L.light2);
+  releaseLaserLight(L.light);
+  releaseLaserLight(L.light2);
   L.grp.traverse((n) => {
     n.geometry?.dispose();
     // Alle Laser-Materialien sind frisch erzeugt — nur der geteilte Glow bleibt
@@ -1296,8 +1312,10 @@ function updateLasers(dt) {
       L.grp.position.set(0, y, L.z);
       hitTest = (t) => Math.abs(t.y - y) < 0.45 && Math.abs(t.x) < PLATFORM_HALF_W;
       // Schein: je tiefer der Strahl, desto heller glüht die Straße darunter
-      L.light.position.set(0, Math.max(0.25, y * 0.7), L.z);
-      L.light.intensity = 2.6 / (0.5 + y);
+      if (L.light) {
+        L.light.position.set(0, Math.max(0.25, y * 0.7), L.z);
+        L.light.intensity = 2.6 / (0.5 + y);
+      }
     } else if (L.type === 'spin') {
       L.angle += L.angVel * dt;
       L.grp.position.set(0, L.hubY, L.z);
@@ -1311,6 +1329,7 @@ function updateLasers(dt) {
       // Schein: je ein Licht pro Balkenspitze, hell wenn die Spitze der Straße nahekommt
       const r = L.len / 2;
       for (const [light, sgn] of [[L.light, 1], [L.light2, -1]]) {
+        if (!light) continue;
         const tx = sgn * c * r, ty = L.hubY + sgn * s * r;
         light.position.set(tx, Math.max(0.25, ty), L.z);
         light.intensity = Math.max(0.1, 2.2 - Math.max(0, ty) * 0.9);
@@ -1327,9 +1346,11 @@ function updateLasers(dt) {
         return Math.hypot(vx - proj * ddx, vy - proj * ddy) < 0.45;
       };
       // Schein: Licht wandert mit dem Strahl, hell wenn er tief über die Bahn fegt
-      const mx = px + ddx * L.len * 0.55, my = py + ddy * L.len * 0.55;
-      L.light.position.set(mx, Math.max(0.25, Math.min(my, 2.5)), L.z);
-      L.light.intensity = Math.max(0.12, 2.4 - my * 0.55);
+      if (L.light) {
+        const mx = px + ddx * L.len * 0.55, my = py + ddy * L.len * 0.55;
+        L.light.position.set(mx, Math.max(0.25, Math.min(my, 2.5)), L.z);
+        L.light.intensity = Math.max(0.12, 2.4 - my * 0.55);
+      }
     }
 
     for (const p of players) {
