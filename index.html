@@ -4659,18 +4659,41 @@ function netTick(dt) {
 }
 
 // ---- Verbindung & Nachrichten ----
+// Öffentliches Relay als Fallback: statische Kopien (GitHub Pages, python
+// -m http.server, file:) haben kein /ws am eigenen Origin — dann verbinden
+// wir automatisch hierhin. ?server=wss://… überschreibt alles.
+let NET_FALLBACK_WS = 'wss://hdd.fabi.me/runordie/ws';
+
+// Same-Origin-Relay-URL relativ zum Seitenverzeichnis: funktioniert direkt am
+// Node-Server (host/ws) UND hinter einem Reverse-Proxy-Prefix (host/runordie/ws)
+function netSameOriginWs() {
+  const u = new URL('ws', location.href);
+  u.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return u.href;
+}
+
 function netConnect(onReady) {
   if (netWs && netWs.readyState <= 1) { onReady?.(); return; }
-  const q = new URLSearchParams(location.search);
-  const url = q.get('server') ||
-    ((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+  const override = new URLSearchParams(location.search).get('server');
+  if (override) { netConnectTo(override, onReady, false); return; }
+  if (location.protocol === 'file:') { netConnectTo(NET_FALLBACK_WS, onReady, false); return; }
+  netConnectTo(netSameOriginWs(), onReady, true);
+}
+
+function netConnectTo(url, onReady, allowFallback) {
   const ws = new WebSocket(url);
   ws.binaryType = 'arraybuffer';
   netWs = ws;
-  ws.onopen = () => onReady?.();
+  let opened = false;
+  ws.onopen = () => { opened = true; onReady?.(); };
   ws.onmessage = netOnMessage;
   ws.onclose = () => {
     if (netWs !== ws) return; // bereits aufgeräumt (netLeave)
+    if (!opened && allowFallback && url !== NET_FALLBACK_WS) {
+      netWs = null;
+      netConnectTo(NET_FALLBACK_WS, onReady, false); // Origin ohne Relay -> öffentliches
+      return;
+    }
     const active = netRole || netUiOpen;
     netResetState();
     if (active) { backToMenu(); flashPad('🌐 Verbindung zum Server getrennt', '#ff6b6b'); }
@@ -5429,6 +5452,7 @@ window.__game = { players, obstacles, powerups, world, cams, fxRings, lasers, sh
   get snowZones() { return snowZones; },
   // Online-Modus (Test-Harness): Lobby steuern und Netz-Zustand einsehen
   netShowOnlineMenu, netCreateRoom, netJoinRoom, netStartOnline, netLeave,
+  get netFallback() { return NET_FALLBACK_WS; }, set netFallback(v) { NET_FALLBACK_WS = v; },
   get netRole() { return netRole; }, get netCode() { return netCode; },
   get netRoster() { return netRoster.slice(); }, get netMySlot() { return netMySlot; },
   get netSnaps() { return netSnaps.length; },

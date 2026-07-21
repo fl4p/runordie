@@ -1,0 +1,21 @@
+# systemd-Unit für das RUN OR DIE Relay (nach /etc/systemd/system/)
+#   sudo systemctl daemon-reload && sudo systemctl enable --now runordie
+[Unit]
+Description=RUN OR DIE game relay (Node WebSocket + static)
+After=network.target
+
+[Service]
+User=fab
+WorkingDirectory=/opt/runordie/server
+ExecStart=/usr/bin/env node server.js
+Environment=PORT=18931
+Restart=always
+RestartSec=3
+# Härtung: das Relay braucht weder Schreibrechte noch neue Privilegien
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
