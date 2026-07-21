@@ -14,6 +14,9 @@ const PORT = +(process.env.PORT || 8080);
 const LAG = +(process.env.LAG || 0); // ms künstliche Einweg-Latenz (Latenz-Tests)
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const MAX_PLAYERS = 4;
+const MAX_CONNS = +(process.env.MAX_CONNS || 500); // Gesamt-Verbindungslimit
+const JOIN_BURST = 20;      // erlaubte create/join-Versuche …
+const JOIN_WINDOW_MS = 10000; // … pro Socket in diesem Fenster (gegen Code-Brute-Force)
 
 // ---------- Statische Dateien (nur Whitelist, kein Verzeichnis-Traversal) ----------
 const STATIC = {
@@ -61,7 +64,9 @@ const sendJson = (ws, obj) => send(ws, JSON.stringify(obj));
 const wss = new WebSocketServer({ server: http, path: '/ws', maxPayload: 64 * 1024 });
 
 wss.on('connection', (ws) => {
+  if (wss.clients.size > MAX_CONNS) { ws.close(1013, 'server busy'); return; }
   ws.roomCode = null; ws.slot = null; ws.missedPongs = 0;
+  ws.joinCount = 0; ws.joinWindowAt = 0;
   ws.on('pong', () => { ws.missedPongs = 0; });
 
   ws.on('message', (data, isBinary) => {
@@ -92,6 +97,14 @@ function handleMessage(ws, data, isBinary) {
     // ---- Textframes: Steuerprotokoll oder JSON-Relay ----
     let msg;
     try { msg = JSON.parse(data.toString()); } catch { return; }
+
+    // create/join drosseln: ein Socket ohne Raum kann sonst den 32^4-Code-Raum
+    // durchprobieren, um laufende Räume zu finden/zu stören
+    if (msg.t === 'create' || msg.t === 'join') {
+      const now = Date.now();
+      if (now - ws.joinWindowAt > JOIN_WINDOW_MS) { ws.joinWindowAt = now; ws.joinCount = 0; }
+      if (++ws.joinCount > JOIN_BURST) { sendJson(ws, { t: 'err', msg: 'Zu viele Versuche, kurz warten' }); return; }
+    }
 
     if (msg.t === 'create') {
       if (ws.roomCode) { sendJson(ws, { t: 'err', msg: 'Schon in einem Raum' }); return; }

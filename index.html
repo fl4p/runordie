@@ -3044,7 +3044,7 @@ function botFindGapX(p, zRef) {
     if (!he || b.isJumpPad || o.sweep || o.wreck || o.piston || o.spin) continue;
     if (Math.abs(b.position.z - zRef) > 1.6) continue;
     if (b.position.y - he.y > 1.9) continue; // Tunneldach: drunter durch
-    const pad = o.boom ? 1.3 : 0.35;         // um TNT-Blöcke großzügig herum
+    const pad = o.boom ? 2.4 : 0.35;         // TNT: Explosions-Radius ist 3.6 — Kettenreaktionen treffen auch "sichere" 1-2 m Abstand
     spans.push([b.position.x - he.x - pad, b.position.x + he.x + pad]);
   }
   spans.sort((a, b) => a[0] - b[0]);
@@ -3087,7 +3087,7 @@ function botScanThreat(p, bot) {
     const he = b.shapes[0]?.halfExtents;
     if (!he) continue;
     if (b.position.y - he.y > 1.9) continue; // Tunneldach
-    if (o.boom) { if (Math.abs(t.position.x - b.position.x) < he.x + 1.5) add('boom', tta, o); continue; }
+    if (o.boom) { if (Math.abs(t.position.x - b.position.x) < he.x + 2.6) add('boom', tta, o); continue; }
     if (Math.abs(t.position.x - b.position.x) < he.x + 0.7) add('box', tta, o);
   }
 
@@ -3106,7 +3106,8 @@ function botScanThreat(p, bot) {
 // hinten schiebt, und er wird widerstandslos über die Hinterkante gedrückt
 // Zusätzlich weit vorn bleiben: Laser-/Explosions-Treffer schleudern nach +z —
 // wer bei z≈5 steht, fliegt über die Hinterkante, wer bei z≈2 steht, landet noch
-function botDodgeZ(t) { return Math.min(t.position.z, 4); }
+// Auf Eis noch weiter vorn agieren: Rutscher nach Treffern brauchen dort viel mehr Auslauf
+function botDodgeZ(t) { return Math.min(t.position.z, iceLevel > 0.3 ? 2.5 : 4); }
 
 // Parallel ankommende "Springer"-Gefahren (Querlaser, Latte, Walze) übersehen
 // wir nicht, nur weil gerade eine ANDERE Gefahr seitlich ausgewichen wird:
@@ -3270,6 +3271,10 @@ function botThink(p, bot) {
       const need = (b.position.y + he.y) - (t.position.y - RIDE_HEIGHT);
       if (need > 0 && need < 3.4) { bot.plan = { type: 'jump', at: now, dbl: need > 1.9 }; break; }
     }
+    // Schneller Rückwärts-Rutsch (Schleudertreffer, meist auf Eis) Richtung
+    // Hinterkante: abspringen — in der Luft greift die Steuerung schneller
+    // als auf spiegelglattem Boden
+    if (!bot.plan && p.grounded && t.velocity.z > 3.5) bot.plan = { type: 'jump', at: now };
     return;
   }
 
@@ -3314,7 +3319,7 @@ function botThink(p, bot) {
     }
   }
   bot.targetX = t.position.x * 0.5;
-  bot.targetZ = 1; // weit vorn lauern: +z-Schleudertreffer haben dann Auslauf
+  bot.targetZ = iceLevel > 0.3 ? 0 : 1; // weit vorn lauern: +z-Schleudertreffer haben dann Auslauf
   bot.plan = null;
 }
 
@@ -4673,7 +4678,14 @@ function netSameOriginWs() {
 }
 
 function netConnect(onReady) {
-  if (netWs && netWs.readyState <= 1) { onReady?.(); return; }
+  // Schon verbunden: sofort weiter. Noch im Verbindungsaufbau (CONNECTING):
+  // NICHT synchron senden (würde auf dem Socket werfen) — an onopen anhängen.
+  if (netWs && netWs.readyState === 1) { onReady?.(); return; }
+  if (netWs && netWs.readyState === 0) {
+    const prev = netWs.onopen;
+    netWs.onopen = (e) => { prev?.(e); onReady?.(); };
+    return;
+  }
   const override = new URLSearchParams(location.search).get('server');
   if (override) { netConnectTo(override, onReady, false); return; }
   if (location.protocol === 'file:') { netConnectTo(NET_FALLBACK_WS, onReady, false); return; }
@@ -4701,6 +4713,17 @@ function netConnectTo(url, onReady, allowFallback) {
   ws.onerror = () => { /* onclose folgt */ };
 }
 
+// Server-/Relay-Daten sind NIE vertrauenswürdig (?server= kann auf einen
+// fremden Relay zeigen): alles validieren, bevor es in Zustand oder innerHTML
+// landet — sonst wäre ein XSS über {t:'err',msg:'<img onerror=…>'} möglich.
+const netValidSlot = (s) => Number.isInteger(s) && s >= 0 && s < 4 ? s : null;
+const netValidCode = (c) => (typeof c === 'string' && /^[A-Z0-9]{4}$/.test(c)) ? c : null;
+const netSanitizeRoster = (r) => Array.isArray(r)
+  ? [...new Set(r.map(netValidSlot).filter((s) => s !== null))].sort((a, b) => a - b)
+  : null;
+const netEsc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
 function netOnMessage(ev) {
   if (typeof ev.data !== 'string') {
     const dv = new DataView(ev.data);
@@ -4711,30 +4734,43 @@ function netOnMessage(ev) {
   let m;
   try { m = JSON.parse(ev.data); } catch { return; }
   switch (m.t) {
-    case 'created':
-      netCode = m.code; netMySlot = 0; netRoster = [0];
+    case 'created': {
+      const code = netValidCode(m.code);
+      if (!code) return;
+      netCode = code; netMySlot = 0; netRoster = [0];
       netRenderLobby();
       return;
-    case 'joined':
-      netCode = m.code; netMySlot = m.slot;
-      if (!netRoster.includes(m.slot)) netRoster.push(m.slot);
+    }
+    case 'joined': {
+      const code = netValidCode(m.code), slot = netValidSlot(m.slot);
+      if (!code || slot === null) return;
+      netCode = code; netMySlot = slot;
+      if (!netRoster.includes(slot)) netRoster.push(slot);
+      netRoster.sort((a, b) => a - b);
       netRenderLobby();
       return;
+    }
     case 'err':
       netRenderError(m.msg || 'Unbekannter Fehler');
       return;
-    case 'peer':
-      if (!netRoster.includes(m.slot)) netRoster.push(m.slot);
+    case 'peer': {
+      const slot = netValidSlot(m.slot);
+      if (slot === null) return;
+      if (!netRoster.includes(slot)) netRoster.push(slot);
       netRoster.sort((a, b) => a - b);
       netSendJson({ k: 'lobby', roster: netRoster });
-      netRtcOffer(m.slot); // P2P-Verbindung zum neuen Mitspieler aufbauen
+      netRtcOffer(slot); // P2P-Verbindung zum neuen Mitspieler aufbauen
       if (netUiOpen) netRenderLobby();
       return;
-    case 'left':
-      netRtcClose(m.slot);
-      delete netInputs[m.slot]; delete netInputSeqSeen[m.slot];
-      netOnPeerLeft(m.slot);
+    }
+    case 'left': {
+      const slot = netValidSlot(m.slot);
+      if (slot === null) return;
+      netRtcClose(slot);
+      delete netInputs[slot]; delete netInputSeqSeen[slot];
+      netOnPeerLeft(slot);
       return;
+    }
     case 'closed':
       netResetState();
       backToMenu();
@@ -4753,14 +4789,14 @@ function netOnMessage(ev) {
 function netApplyEvent(m) {
   switch (m.k) {
     case 'lobby':
-      netRoster = m.roster || netRoster;
+      netRoster = netSanitizeRoster(m.roster) || netRoster;
       if (netUiOpen) netRenderLobby();
       return;
     case 'rtc': if (m.to === netMySlot) netRtcAnswer(m); return;
     case 'start': netOnStart(m); return;
     case 'round':
       netRoundNo = m.n ?? netRoundNo;
-      rosterSlots = m.roster || rosterSlots;
+      rosterSlots = netSanitizeRoster(m.roster) || rosterSlots;
       resetRound();
       (m.scores || []).forEach((s, i) => { if (players[i]) players[i].score = s; });
       netSnaps.length = 0;
@@ -4801,7 +4837,7 @@ function netOnStart(m) {
   diveAlways = !!m.settings?.diveAlways;
   noStun = !!m.settings?.noStun;
   snowZones = !!m.settings?.snowZones;
-  rosterSlots = m.roster || rosterSlots;
+  rosterSlots = netSanitizeRoster(m.roster) || rosterSlots;
   $('touchui').classList.toggle('hidden', !isTouch);
   ensureAudio();
   // Das 'round'-Event des Hosts folgt direkt und startet die Runde
@@ -4888,7 +4924,7 @@ function netShowOnlineMenu() {
 function netRenderJoin(prefill = '') {
   netUiOpen = true;
   $('msg').innerHTML = netMenuShell(
-    `<span class="menurow"><input id="netcode" maxlength="4" placeholder="CODE" value="${prefill}" autocomplete="off"> ` +
+    `<span class="menurow"><input id="netcode" maxlength="4" placeholder="CODE" value="${netEsc(prefill)}" autocomplete="off"> ` +
     `<button id="netjoingo">Beitreten</button></span>`
   );
   $('msg').classList.remove('hidden');
@@ -4898,7 +4934,7 @@ function netRenderJoin(prefill = '') {
 function netRenderError(msg) {
   netUiOpen = true;
   $('msg').innerHTML = netMenuShell(
-    `<span style="color:#ff6b6b">⚠ ${msg}</span><br>` +
+    `<span style="color:#ff6b6b">⚠ ${netEsc(msg)}</span><br>` +
     `<span class="menurow"><button id="nethostgo">🏠 Raum erstellen</button><button id="netjoinshow">🔑 Raum beitreten</button></span>`
   );
 }
