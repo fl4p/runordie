@@ -3163,6 +3163,11 @@ addEventListener('resize', () => {
   for (const c of cams) applyFov(c);
 });
 
+// Offline-Spielbarkeit: Service Worker cacht das Spiel samt CDN-Modulen
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+}
+
 MENU_HTML = $('msg').innerHTML;
 updateDiveBtn();
 // Gespeicherte Einstellungen wiederherstellen (Tag/Nacht, Dreh-Modus)

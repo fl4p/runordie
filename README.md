@@ -4,6 +4,13 @@
 Hindernisse kommen auf euch zu und schieben euch von der Plattform — wer herunterfällt, stirbt.
 Der Überlebende gewinnt die Runde.
 
+## Offline spielen
+
+Ein Service Worker (`sw.js`) cacht das Spiel samt CDN-Modulen beim ersten
+Besuch — danach läuft es auch **ohne Internet** (z.B. von
+https://fl4p.github.io/runordie/ einmal öffnen, fertig). Updates werden
+automatisch geladen, sobald wieder Netz da ist.
+
 ## Starten
 
 Braucht nur einen statischen Server (ES-Module + CDN-Imports):
