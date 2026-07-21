@@ -593,7 +593,9 @@ function addStreetGraffiti(parent, x, z) {
   const mat = new THREE.MeshStandardMaterial({
     map: pickGraffiti(), transparent: true, opacity: 0.85, roughness: 1, depthWrite: false,
   });
+  mat.userData.ownedMat = true;          // Textur ist gepoolt, Material gehört dem Decal
   const m = new THREE.Mesh(new THREE.PlaneGeometry(w, w * 0.5), mat);
+  m.userData.ownedGeo = true;            // Geometrie pro Decal (zufällige Größe)
   m.rotation.x = -Math.PI / 2;
   m.rotation.z = (Math.random() - 0.5) * 0.9;
   m.position.set(x, 0.045, z);
@@ -647,6 +649,7 @@ const mhSide = new THREE.MeshStandardMaterial({ color: 0x141519, roughness: 0.9 
 function addManhole(parent, x, z) {
   const r = 0.48 + Math.random() * 0.14;
   const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.035, 24), [mhSide, mhTop, mhSide]);
+  m.userData.ownedGeo = true; // Geometrie pro Deckel (zufälliger Radius), Materialien geteilt
   m.position.set(x, 0.018, z);
   m.rotation.y = Math.random() * Math.PI;
   m.receiveShadow = true;
@@ -703,8 +706,20 @@ function extendPlatform() {
   frontierZ = zMin;
 }
 
+// Tile abbauen inkl. Dispose der pro Tile allozierten Ressourcen. Nur explizit
+// als ownedGeo/ownedMat markierte Knoten (Graffiti, Gullis) werden entsorgt —
+// alles Geteilte (Bahn, Streifen, Kanten, Laternen, Eis-Overlay) bleibt unberührt.
+function removeRushTile(t) {
+  world.removeBody(t.body);
+  scene.remove(t.grp);
+  t.grp.traverse((n) => {
+    if (n.userData?.ownedGeo) n.geometry.dispose();
+    if (n.material?.userData?.ownedMat) n.material.dispose();
+  });
+}
+
 function clearRushTiles() {
-  for (const t of rushTiles) { world.removeBody(t.body); scene.remove(t.grp); }
+  for (const t of rushTiles) removeRushTile(t);
   rushTiles.length = 0;
   frontierZ = PLATFORM_Z_MIN;
   spawnFrontZ = SPAWN_Z;
@@ -738,8 +753,7 @@ function updateRush() {
   // Segmente hinter allen Spielern abbauen
   for (let i = rushTiles.length - 1; i >= 0; i--) {
     if (rushTiles[i].zMin > aliveMaxZ() + 20) {
-      world.removeBody(rushTiles[i].body);
-      scene.remove(rushTiles[i].grp);
+      removeRushTile(rushTiles[i]);
       rushTiles.splice(i, 1);
     }
   }
@@ -3704,7 +3718,7 @@ document.addEventListener('click', (e) => {
     localStorage.setItem('runordie_punchStun', punchStun ? '1' : '0');
     updateDiveBtn();
   }
-  if (id === 'rushbtn') {
+  if (id === 'rushbtn' && state === 'menu') {
     rushMode = !rushMode;
     localStorage.setItem('runordie_rush', rushMode ? '1' : '0');
     updateDiveBtn();
@@ -4156,8 +4170,10 @@ function animate() {
     }
   }
 
-  // Gezündete Blöcke explodieren nach kurzer Lunte (Replik: Explosion kommt als Event)
-  if (netRole !== 'client') {
+  // Gezündete Blöcke explodieren nach kurzer Lunte (Replik: Explosion kommt als
+  // Event). Wie alle anderen Schadensquellen nur im laufenden Spiel — eine noch
+  // brennende Lunte zündet nicht mehr in den Rundenende-Bildschirm hinein.
+  if (netRole !== 'client' && state === 'playing') {
     for (let i = obstacles.length - 1; i >= 0; i--) {
       const o = obstacles[i];
       if (o.boom?.armed && perfNow() > o.boom.fuseAt) explodeBlock(o);
