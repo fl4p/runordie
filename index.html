@@ -179,7 +179,7 @@
     <b>R</b> = Dreh-Modus: Maus (Spieler 1) bzw. rechter Stick drehen Figur, Kamera und Box-Richtung.
   </details>
   <span class="menurow settings">
-    <button id="divebtn"></button><button id="stunbtn"></button><button id="rushbtn"></button><button id="snowbtn"></button><button id="botdiffbtn"></button><button id="fpscapbtn"></button><button id="gpuprofbtn">🔬 GPU-Profil erstellen</button>
+    <button id="divebtn"></button><button id="stunbtn"></button><button id="punchbtn"></button><button id="rushbtn"></button><button id="snowbtn"></button><button id="botdiffbtn"></button><button id="fpscapbtn"></button><button id="gpuprofbtn">🔬 GPU-Profil erstellen</button>
   </span>
   <span class="mkeys">Tastatur: 1 = Einzelspieler · 2 = Gegen Bot · beliebige Taste = 2 Spieler · ESC = Menü</span></small></div>
 
@@ -306,8 +306,57 @@ function makeDaySkyTexture() {
   return tex;
 }
 
+// Abendrot-Variante für den Sonnenauf-/-untergang: glutroter Horizont,
+// tiefe Sonne mit breitem Glow, dunkle, von unten warm angeleuchtete Wolkenbänder
+function makeSunsetSkyTexture() {
+  const c = document.createElement('canvas');
+  c.width = 2048; c.height = 1024;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, c.height);
+  grad.addColorStop(0.0, '#2a2547');
+  grad.addColorStop(0.30, '#5a3a5e');
+  grad.addColorStop(0.48, '#9a4a4e');
+  grad.addColorStop(0.60, '#d4693e');  // Glut am Horizont
+  grad.addColorStop(0.72, '#f0924a');
+  grad.addColorStop(0.80, '#8a5a48');  // = Nebelfarbe der Dämmerung
+  grad.addColorStop(1.0, '#3a2a24');   // unter dem Horizont
+  g.fillStyle = grad;
+  g.fillRect(0, 0, c.width, c.height);
+
+  // Tiefstehende, glühende Sonne
+  const sx = c.width * 0.42, sy = c.height * 0.66, sr = 52;
+  const halo = g.createRadialGradient(sx, sy, sr * 0.3, sx, sy, sr * 6);
+  halo.addColorStop(0, 'rgba(255,180,110,0.65)');
+  halo.addColorStop(0.4, 'rgba(255,140,74,0.28)');
+  halo.addColorStop(1, 'rgba(255,140,74,0)');
+  g.fillStyle = halo; g.beginPath(); g.arc(sx, sy, sr * 6, 0, 7); g.fill();
+  g.fillStyle = '#ffd9a0'; g.beginPath(); g.arc(sx, sy, sr, 0, 7); g.fill();
+
+  // Dunkle Wolkenbänder, an der Unterkante warm angeleuchtet
+  for (let i = 0; i < 10; i++) {
+    const y = c.height * (0.34 + Math.random() * 0.28);
+    const x = Math.random() * c.width;
+    const w = 240 + Math.random() * 520, h = 10 + Math.random() * 22;
+    const cg = g.createRadialGradient(x, y, 0, x, y, w / 2);
+    cg.addColorStop(0, `rgba(58,42,58,${0.18 + Math.random() * 0.18})`);
+    cg.addColorStop(1, 'rgba(58,42,58,0)');
+    g.fillStyle = cg;
+    g.save(); g.translate(x, y); g.scale(1, h / (w / 2));
+    g.beginPath(); g.arc(0, 0, w / 2, 0, 7); g.fill();
+    g.restore();
+    g.fillStyle = `rgba(255,150,90,${0.05 + Math.random() * 0.07})`;
+    g.save(); g.translate(x, y + h * 0.8); g.scale(1, (h * 0.5) / (w / 2));
+    g.beginPath(); g.arc(0, 0, w / 2, 0, 7); g.fill();
+    g.restore();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 const texSkyNight = makeSkyTexture();
 const texSkyDay = makeDaySkyTexture(); // eager: der erste 25-s-Auto-Wechsel soll nicht mitten im Spiel ruckeln
+const texSkyDusk = makeSunsetSkyTexture();
 const sky = new THREE.Mesh(
   new THREE.SphereGeometry(95, 48, 24),
   new THREE.MeshBasicMaterial({ map: texSkyNight, side: THREE.BackSide, fog: false })
@@ -328,6 +377,16 @@ skyDay.visible = false;
 skyDay.renderOrder = -1; // vor allen anderen transparenten Objekten zeichnen,
 // sonst übermalt der Himmel entfernte Effekte (Feuerball, Schockwellen, Schnee)
 scene.add(skyDay);
+// Abendhimmel als dritte Kugel: blendet um die Zyklus-Mitte ein und wieder aus
+const skyDusk = new THREE.Mesh(
+  new THREE.SphereGeometry(94.8, 48, 24),
+  new THREE.MeshBasicMaterial({ map: texSkyDusk, side: THREE.BackSide, fog: false, transparent: true, opacity: 0, depthWrite: false })
+);
+skyDusk.position.copy(sky.position);
+skyDusk.rotation.y = Math.PI / 2;
+skyDusk.visible = false;
+skyDusk.renderOrder = -2; // vor skyDay: der Tag-Himmel deckt die Dämmerung am Ende ab
+scene.add(skyDusk);
 
 // Tag/Nacht-Wechsel: läuft automatisch im 25-s-Takt, inkl. Licht- und Nebelstimmung.
 // Die Eiszone (siehe unten) überlagert beide Modi mit kalter, heller Stimmung.
@@ -338,19 +397,29 @@ let skyCycleT = 0;     // Sekunden seit dem letzten automatischen Wechsel
 const ATMO = {
   night: { fog: 0x151228, bg: 0x0d1117, hemi: 0xbcd6ff, ground: 0x30241a, hemiI: 0.9, sun: 0xfff2d9, sunI: 1.6 },
   day: { fog: 0xa5948a, bg: 0xb59b82, hemi: 0xb8b3c8, ground: 0x6e5c4c, hemiI: 1.05, sun: 0xffe0b8, sunI: 1.9 },
+  dusk: { fog: 0x8a5a48, bg: 0x7a4636, hemi: 0xffc9a0, ground: 0x3a2a24, hemiI: 0.95, sun: 0xff8c4a, sunI: 1.35 },
+  duskSnow: { fog: 0xa88696, bg: 0x96788c, hemi: 0xf2d2dc, ground: 0x74606e, hemiI: 1.05, sun: 0xffb896, sunI: 1.15 },
   nightSnow: { fog: 0x5f7290, bg: 0x49596f, hemi: 0xdce8f5, ground: 0x8fa3b8, hemiI: 1.1, sun: 0xeaf2ff, sunI: 1.3 },
   daySnow: { fog: 0xc4d2de, bg: 0xcfdae4, hemi: 0xdce8f5, ground: 0x8fa3b8, hemiI: 1.1, sun: 0xeaf2ff, sunI: 1.3 },
 };
 const _ca = new THREE.Color(), _cb = new THREE.Color(), _cc = new THREE.Color();
-// Bilineare Mischung: erst Nacht→Tag (dayLevel), dann Basis→Schnee (snowLevel)
+// Tag/Nacht-Mischung mit Dämmerungs-Zwischenstopp: dayLevel 0..0.5 blendet
+// Nacht→Dämmerung, 0.5..1 Dämmerung→Tag; darüber mischt snowLevel die Schnee-Palette
+function atmoSeg() {
+  return dayLevel < 0.5
+    ? [ATMO.night, ATMO.dusk, ATMO.nightSnow, ATMO.duskSnow, dayLevel * 2]
+    : [ATMO.dusk, ATMO.day, ATMO.duskSnow, ATMO.daySnow, dayLevel * 2 - 1];
+}
 function atmoMix(target, key) {
-  _ca.set(ATMO.night[key]).lerp(_cb.set(ATMO.day[key]), dayLevel);
-  _cc.set(ATMO.nightSnow[key]).lerp(_cb.set(ATMO.daySnow[key]), dayLevel);
+  const [A, B, AS, BS, f] = atmoSeg();
+  _ca.set(A[key]).lerp(_cb.set(B[key]), f);
+  _cc.set(AS[key]).lerp(_cb.set(BS[key]), f);
   target.copy(_ca.lerp(_cc, snowLevel));
 }
 function atmoNum(key) {
-  const a = ATMO.night[key] + (ATMO.day[key] - ATMO.night[key]) * dayLevel;
-  const b = ATMO.nightSnow[key] + (ATMO.daySnow[key] - ATMO.nightSnow[key]) * dayLevel;
+  const [A, B, AS, BS, f] = atmoSeg();
+  const a = A[key] + (B[key] - A[key]) * f;
+  const b = AS[key] + (BS[key] - AS[key]) * f;
   return a + (b - a) * snowLevel;
 }
 function applyAtmosphere() {
@@ -632,6 +701,7 @@ function clearRushTiles() {
   spawnFrontZ = SPAWN_Z;
   sky.position.set(0, 0, -18);
   skyDay.position.set(0, 0, -18);
+  skyDusk.position.set(0, 0, -18);
   sun.position.set(14, 26, -6);
   sun.target.position.set(0, 0, -18);
 }
@@ -667,6 +737,7 @@ function updateRush() {
   // Himmel und Sonne reisen mit
   sky.position.z = lead - 18;
   skyDay.position.z = lead - 18;
+  skyDusk.position.z = lead - 18;
   sun.position.z = lead + 8;
   sun.target.position.z = lead - 20;
 }
@@ -708,7 +779,7 @@ for (const sx of [-1, 1]) {
 // das Leuchten schaltet ein einziges emissives Material für alle Laternen um.
 const lanternPoleMat = new THREE.MeshStandardMaterial({ color: 0x2c2f33, roughness: 0.55, metalness: 0.35 });
 const lanternGlassMat = new THREE.MeshStandardMaterial({ color: 0xfff3c4, emissive: 0xffb84d, emissiveIntensity: 2.2, roughness: 0.4 });
-const lanternPoleGeo = new THREE.CylinderGeometry(0.05, 0.08, 3.4, 8);
+const lanternPoleGeo = new THREE.CylinderGeometry(0.05, 0.08, 4.0, 8);
 const lanternHeadGeo = new THREE.SphereGeometry(0.17, 10, 8);
 // Lichtschein auf dem Asphalt: additiv geblendetes Decal mit warmem Radialverlauf,
 // Zentrum am äußeren Texturrand (dort steht der Mast), zur Bahnmitte hin auslaufend.
@@ -733,24 +804,24 @@ const lampGlowMat = new THREE.MeshBasicMaterial({
   map: makeLampGlowTexture(), transparent: true, blending: THREE.AdditiveBlending,
   depthWrite: false,
 });
-const lampGlowGeo = new THREE.PlaneGeometry(3.6, 4.6);
+const lampGlowGeo = new THREE.PlaneGeometry(4.0, 5.0); // höhere Laterne -> etwas größere Lichtlache
 const LANTERN_SPACING = 9;
 function addLanterns(parent, zMin, zMax) {
   for (let z = zMin + LANTERN_SPACING / 2; z < zMax; z += LANTERN_SPACING)
     for (const sx of [-1, 1]) {
       const grp = new THREE.Group();
       const pole = new THREE.Mesh(lanternPoleGeo, lanternPoleMat);
-      pole.position.y = 0.8;
+      pole.position.y = 1.1;
       pole.castShadow = true;
       const head = new THREE.Mesh(lanternHeadGeo, lanternGlassMat);
-      head.position.y = 2.7;
+      head.position.y = 3.3;
       head.castShadow = true; // tagsüber wirft die ganze Laterne Schatten auf die Bahn
       grp.add(pole, head);
       // Lichtlache flach auf der Fahrbahn, helle Seite zum Mast, knapp über den
       // Randstreifen (y 0.07), damit nichts durch das Decal schneidet
       const glow = new THREE.Mesh(lampGlowGeo, lampGlowMat);
       glow.rotation.set(-Math.PI / 2, 0, sx > 0 ? 0 : Math.PI);
-      glow.position.set(-sx * 2.08, 0.07, 0);
+      glow.position.set(-sx * 2.28, 0.07, 0);
       glow.renderOrder = 2; // immer über Eis-Overlay und Straßen-Graffiti (beide 1)
       grp.add(glow);
       grp.position.set(sx * (PLATFORM_HALF_W + 0.28), 0, z);
@@ -759,8 +830,11 @@ function addLanterns(parent, zMin, zMax) {
 }
 addLanterns(scene, PLATFORM_Z_MIN, PLATFORM_Z_MAX);
 function updateLanternGlow() {
-  lanternGlassMat.emissiveIntensity = 2.2 * (1 - dayLevel);
-  lampGlowMat.opacity = 1 - dayLevel;
+  // Laternen schalten um die Dämmerung: unter dayLevel 0.35 voll an,
+  // über 0.65 ganz aus — dazwischen weich gedimmt
+  const on = Math.max(0, Math.min(1, (0.65 - dayLevel) / 0.3));
+  lanternGlassMat.emissiveIntensity = 2.2 * on;
+  lampGlowMat.opacity = on;
 }
 
 // ---------- Eiszonen: Schnee-Sektoren mit spiegelglatter Fahrbahn ----------
@@ -2724,7 +2798,7 @@ function tryPunch(p) {
   if (netRole === 'client') { netAct('punch'); return; } // Aktion entscheidet der Host
   if (!p.alive || p.ragdoll || state !== 'playing') return;
   if (perfNow() < p.punchCooldown) return;
-  p.punchCooldown = perfNow() + PUNCH_CD;
+  p.punchCooldown = perfNow() + (punchStun ? PUNCH_CD * 2 : PUNCH_CD);
 
   const foe = nearestFoe(p);
   const toFoe = foe ? foe.torso.position.vsub(p.torso.position) : new CANNON.Vec3(0, 0, -1);
@@ -2778,7 +2852,7 @@ function tryPunch(p) {
       foe.torso.velocity.z += dir.z * 2.5 * boost;
       playDeflect();
     } else {
-      enterRagdoll(foe, 0.5);
+      enterRagdoll(foe, punchStun ? 1.5 : 0.5);
       for (const { body } of foe.parts) {
         body.velocity.x += dir.x * 7 * boost;
         body.velocity.z += dir.z * 7 * boost;
@@ -3391,6 +3465,9 @@ let elapsed = 0, spawnTimer = 0, puTimer = 0, sharkTimer = 6, roundEndAt = 0, fi
 let soloMode = false;
 let diveAlways = localStorage.getItem('runordie_diveAlways') === '1';
 let noStun = localStorage.getItem('runordie_noStun') === '1';
+// Stun-Box-Modus: Schläge haben doppelten Cooldown, werfen den Getroffenen
+// dafür deutlich länger um (echter Stun statt kurzem Umkippen)
+let punchStun = localStorage.getItem('runordie_punchStun') === '1';
 
 // ---------- Solo-Highscores (Top 8, mit Namen) ----------
 let soloScores = [];
@@ -3521,6 +3598,10 @@ function updateDiveBtn() {
   if (s) s.textContent = noStun
     ? '💫 Hindernis-Stun: AUS (nur Schieben)'
     : '💫 Hindernis-Stun: AN';
+  const pb = $('punchbtn');
+  if (pb) pb.textContent = punchStun
+    ? '🥊 Boxen: STUN (längerer Cooldown, Treffer stunnt)'
+    : '🥊 Boxen: NORMAL (schnell, wirft nur kurz um)';
   const r = $('rushbtn');
   if (r) r.textContent = rushMode
     ? '🏃 Modus: RUSH (Bahn wächst nach vorn)'
@@ -3546,6 +3627,11 @@ document.addEventListener('click', (e) => {
   if (id === 'stunbtn') {
     noStun = !noStun;
     localStorage.setItem('runordie_noStun', noStun ? '1' : '0');
+    updateDiveBtn();
+  }
+  if (id === 'punchbtn') {
+    punchStun = !punchStun;
+    localStorage.setItem('runordie_punchStun', punchStun ? '1' : '0');
     updateDiveBtn();
   }
   if (id === 'rushbtn') {
@@ -3907,16 +3993,21 @@ function animate() {
   if (cpuProf) { const _n = performance.now(); if (cpuBuf.top) cpuBuf.intervals.push(_n - cpuBuf.top); cpuBuf.top = _n; }
   const dt = Math.min(clock.getDelta(), 0.05);
 
-  // Tag/Nacht wechselt von selbst im 25-s-Takt; der Übergang gleitet in ~4 s
+  // Tag/Nacht wechselt von selbst im 25-s-Takt; der Übergang gleitet in ~6 s
+  // durch eine Dämmerungsphase — Sonnenuntergang bzw. -aufgang um die Mitte
   skyCycleT += dt;
   if (skyCycleT >= 25) { skyCycleT = 0; toggleDaySky(); }
   const dayTarget = dayMode ? 1 : 0;
   if (dayLevel !== dayTarget) {
-    const step = dt / 4;
+    const step = dt / 6;
     dayLevel = dayLevel < dayTarget ? Math.min(dayTarget, dayLevel + step) : Math.max(dayTarget, dayLevel - step);
-    skyDay.material.opacity = dayLevel;
-    skyDay.visible = dayLevel > 0;
-    sky.visible = dayLevel < 1; // voll deckender Tag-Himmel: Nacht-Draw sparen
+    skyDay.material.opacity = Math.max(0, dayLevel * 2 - 1); // erst ab der Zyklus-Mitte
+    skyDay.visible = dayLevel > 0.5;
+    // Dämmerung: erste Hälfte über die Nacht einblenden, zweite Hälfte voll
+    // deckend stehen lassen — sonst schimmern Sterne/Mond durch den Sonnenaufgang
+    skyDusk.material.opacity = Math.min(1, dayLevel * 2);
+    skyDusk.visible = dayLevel > 0 && dayLevel < 1;
+    sky.visible = dayLevel < 0.5; // ab voller Dämmerungs-Deckung Nacht-Draw sparen
     applyAtmosphere();
     updateLanternGlow();
   }
