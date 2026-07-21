@@ -2939,6 +2939,9 @@ function doDive(p) {
 const BOT_DIFFS = {
   easy:   { react: 0.32, jitter: 0.20, gain: 1.2, aimErr: 1.2,  mistakeP: 0.15, horizon: 1.0, aggro: 0.20, tackleP: 0.05, puWant: 0.30, edgeMargin: 1.0 },
   medium: { react: 0.18, jitter: 0.10, gain: 2.0, aimErr: 0.5,  mistakeP: 0.05, horizon: 2.0, aggro: 0.50, tackleP: 0.12, puWant: 0.60, edgeMargin: 1.5 },
+  // horizon 3.0: bei Tempo 16 m/s braucht die Querung zur Lücke bis zu ~2.3 s —
+  // wer die Wand erst 2 s vorher sieht, wird eingeholt, gestunnt und über die
+  // Hinterkante geschoben (Stun-Lock, aus den Soak-Trails)
   hard:   { react: 0.10, jitter: 0.04, gain: 3.0, aimErr: 0.15, mistakeP: 0.01, horizon: 3.0, aggro: 0.85, tackleP: 0.22, puWant: 0.90, edgeMargin: 2.2 },
 };
 const BOT_LABELS = { easy: 'LEICHT', medium: 'MITTEL', hard: 'SCHWER' };
@@ -3024,8 +3027,16 @@ function botScanThreat(p, bot) {
   return best;
 }
 
+// Ausweich-z: nie die eigene Position weiter hinten als ~6 m "bestätigen" —
+// sonst folgt das Ziel der eigenen Position, wenn eine Wand den Bot nach
+// hinten schiebt, und er wird widerstandslos über die Hinterkante gedrückt
+// Zusätzlich weit vorn bleiben: Laser-/Explosions-Treffer schleudern nach +z —
+// wer bei z≈5 steht, fliegt über die Hinterkante, wer bei z≈2 steht, landet noch
 function botDodgeZ(t) { return Math.min(t.position.z, 4); }
 
+// Parallel ankommende "Springer"-Gefahren (Querlaser, Latte, Walze) übersehen
+// wir nicht, nur weil gerade eine ANDERE Gefahr seitlich ausgewichen wird:
+// ein Sprung kollidiert nicht mit seitlichem Steuern
 function botSecondaryJump(p, bot) {
   if (bot.plan?.type === 'jump') return;
   const t = p.torso;
@@ -3083,6 +3094,8 @@ function botHandleThreat(p, bot, th) {
         s.amp * (Math.sin(s.omega * (elapsed + th.tta) + s.phase) - Math.sin(s.omega * elapsed + s.phase));
       bot.targetX = px >= 0 ? -5 : 5;
       bot.targetZ = botDodgeZ(t);
+      // In die Ecke gedrängt (Schieber zwischen Bot und Mitte): über ihn
+      // hinwegspringen statt sich zur Kante schieben zu lassen
       if (Math.abs(t.position.x) > 4 && Math.sign(b.position.x) === Math.sign(t.position.x) &&
           Math.abs(b.position.x) < Math.abs(t.position.x) && Math.abs(b.position.z - t.position.z) < 2.5) {
         bot.targetX = 0;
@@ -3122,11 +3135,14 @@ function botHandleThreat(p, bot, th) {
       const need = (b.position.y + he.y) - (t.position.y - RIDE_HEIGHT);
       if (he.x < PLATFORM_HALF_W - 0.6) {
         const gap = botFindGapX(p, b.position.z);
+        // Lücke nur ansteuern, wenn sie in der Restzeit erreichbar ist — sonst
+        // wird der Bot von der Wand eingeholt und nach hinten bugsiert
         if (gap !== null && Math.abs(gap - t.position.x) / RUN_SPEED < th.tta + 0.35) {
           bot.targetX = gap; bot.targetZ = botDodgeZ(t); return;
         }
-        if (gap !== null && need > 3.4) { bot.targetX = gap; bot.targetZ = botDodgeZ(t); return; }
+        if (gap !== null && need > 3.4) { bot.targetX = gap; bot.targetZ = botDodgeZ(t); return; } // zu hoch: trotzdem Richtung Lücke
       }
+      // Volle Breite, keine (erreichbare) Lücke: springen, hohe Wände mit Doppelsprung
       bot.targetX = t.position.x;
       bot.targetZ = botDodgeZ(t);
       bot.plan = { type: 'jump', at: perfNow() + Math.max(0, th.tta - (need > 1.6 ? 0.42 : 0.30)), dbl: need > 1.9 };
@@ -3163,11 +3179,15 @@ function botThink(p, bot) {
   bot.noiseZ = (Math.random() * 2 - 1) * d.aimErr;
 
   if (p.hanging || p.ragdoll) { bot.plan = null; return; } // botAct/Physik regeln das
-  const ppx = t.position.x + t.velocity.x * 0.25, ppz = t.position.z + t.velocity.z * 0.25;
-  if (Math.abs(ppx) > PLATFORM_HALF_W - 0.9 || ppz > PLATFORM_Z_MAX - 1.2 || t.position.y < -0.2) {
-    bot.targetX = Math.abs(ppx) > PLATFORM_HALF_W - 0.9 ? Math.sign(t.position.x || 1) * 4 : t.position.x;
+  // Kantennähe VORAUSSCHAUEND erkennen (Position + kurzer Geschwindigkeits-Blick):
+  // sonst ist es bei schnellen Schüben (Schieber, Wände) zu spät zum Gegensteuern
+  const px = t.position.x + t.velocity.x * 0.25, pz = t.position.z + t.velocity.z * 0.25;
+  if (Math.abs(px) > PLATFORM_HALF_W - 0.9 || pz > PLATFORM_Z_MAX - 1.2 || t.position.y < -0.2) {
+    bot.targetX = Math.abs(px) > PLATFORM_HALF_W - 0.9 ? Math.sign(t.position.x || 1) * 4 : t.position.x;
     bot.targetZ = Math.min(Math.max(t.position.z, 0), 2.5);
     bot.plan = null;
+    // Drückt gerade ein Hindernis von vorn? Dann ist Wegsteuern aussichtslos —
+    // draufspringen (niedrig) bzw. per Doppelsprung drüber
     for (const o of obstacles) {
       const b = o.body, he = b.shapes[0]?.halfExtents;
       if (!he || o.piston || o.wreck) continue;
@@ -3195,6 +3215,7 @@ function botThink(p, bot) {
     const dist = f.vsub(t.position).length();
     if (dist < PUNCH_RANGE * 0.9 + d.aimErr * 0.3) bot.plan = { type: 'punch' };
     else if (dist > 2.5 && dist < 6 && p.grounded && Math.random() < d.tackleP) {
+      // Grätsche = ~7 m ungebremster Slide: nur, wenn der Auslauf auf der Bahn bleibt
       const len = Math.hypot(f.x - t.position.x, f.z - t.position.z) || 1;
       const lx = t.position.x + ((f.x - t.position.x) / len) * 8.5;
       const lz = t.position.z + ((f.z - t.position.z) / len) * 8.5;
@@ -3219,7 +3240,7 @@ function botThink(p, bot) {
     }
   }
   bot.targetX = t.position.x * 0.5;
-  bot.targetZ = 1;
+  bot.targetZ = 1; // weit vorn lauern: +z-Schleudertreffer haben dann Auslauf
   bot.plan = null;
 }
 
@@ -3239,6 +3260,8 @@ function botAct(p, bot) {
   const tx = Math.max(-maxX, Math.min(maxX, bot.targetX + bot.noiseX));
   const tz = Math.max(-4, Math.min(PLATFORM_Z_MAX - 1.2, bot.targetZ + bot.noiseZ * 0.4));
   let ex = tx - t.position.x, ez = tz - t.position.z;
+  // Geschwindigkeits-Vorhalt (PD statt reinem P): bremst vor dem Ziel statt
+  // drüber hinauszuschießen — in der Luft (wenig Grip) und auf Eis stärker
   const lead = !p.grounded ? 0.22 : iceLevel > 0.3 ? 0.35 : 0.10;
   ex -= t.velocity.x * lead; ez -= t.velocity.z * lead;
   p.padX += Math.abs(ex) < 0.12 ? 0 : Math.max(-1, Math.min(1, ex * d.gain));
@@ -3248,6 +3271,9 @@ function botAct(p, bot) {
   if (!plan) return;
   if (plan.type === 'jump') {
     if (now >= plan.at) {
+      // Klassik-Modus: der Doppelsprung IST ein Hechtsprung mit kräftigem
+      // Horizontalschub in Pad-Richtung — vorher zur Mitte zielen, sonst
+      // hechtet sich der Bot selbst über die Kante
       if (!p.grounded && diveAlways) {
         p.padX = Math.max(-1, Math.min(1, -t.position.x * 0.25));
         p.padZ = -0.5;
