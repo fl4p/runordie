@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>RUN OR DIE — Ragdoll Splitscreen</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #0d1117; font-family: "Avenir Next", "Segoe UI", sans-serif; }
   canvas { display: block; }
@@ -52,6 +52,47 @@
   .powerups { top: 12px; font-size: 22px; letter-spacing: 3px; text-shadow: 0 2px 8px #000; }
   #pu1 { left: 14px; }
   #pu2 { left: calc(50% + 16px); }
+  /* ---------- Touch-Steuerung (Handy/Tablet, steuert Spieler 1) ---------- */
+  #touchui {
+    position: fixed; inset: 0; z-index: 20;
+    pointer-events: none; user-select: none; -webkit-user-select: none;
+    touch-action: none; -webkit-touch-callout: none;
+  }
+  #joy {
+    position: absolute; left: calc(20px + env(safe-area-inset-left)); bottom: calc(24px + env(safe-area-inset-bottom));
+    width: 150px; height: 150px; border-radius: 50%;
+    background: rgba(230,237,243,.07); border: 2px solid rgba(230,237,243,.25);
+    pointer-events: auto; touch-action: none;
+  }
+  #joyknob {
+    position: absolute; left: 50%; top: 50%; width: 62px; height: 62px; border-radius: 50%;
+    background: rgba(230,237,243,.35); border: 2px solid rgba(230,237,243,.5);
+    transform: translate(-50%,-50%); pointer-events: none;
+  }
+  .tbtn {
+    position: absolute; border-radius: 50%; pointer-events: auto; touch-action: none;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; color: #e6edf3; text-shadow: 0 2px 8px #000;
+    background: rgba(230,237,243,.10); border: 2px solid rgba(230,237,243,.3);
+  }
+  .tbtn:active { background: rgba(230,237,243,.28); }
+  #btnJump { right: calc(22px + env(safe-area-inset-right)); bottom: calc(28px + env(safe-area-inset-bottom)); width: 96px; height: 96px; font-size: 32px; }
+  #btnPunch { right: calc(130px + env(safe-area-inset-right)); bottom: calc(52px + env(safe-area-inset-bottom)); width: 64px; height: 64px; font-size: 26px; }
+  #btnSlide { right: calc(48px + env(safe-area-inset-right)); bottom: calc(140px + env(safe-area-inset-bottom)); width: 64px; height: 64px; font-size: 26px; }
+  #btnExit { right: calc(12px + env(safe-area-inset-right)); top: calc(12px + env(safe-area-inset-top)); width: 44px; height: 44px; font-size: 20px; border-radius: 12px; }
+  @media (pointer: coarse) { .plabel { display: none; } }
+  /* Kleine Bildschirme: Menütext kompakt und scrollbar, sonst liegen die Buttons außerhalb */
+  @media (max-height: 560px), (max-width: 700px) {
+    #msg {
+      top: 50%; transform: translate(-50%,-50%);
+      font-size: 28px; max-height: 92dvh; max-width: 94vw; overflow-y: auto;
+      pointer-events: auto; touch-action: pan-y;
+      background: rgba(13,17,23,.7); border-radius: 12px; padding: 10px 16px;
+    }
+    #msg small { font-size: 13px; margin-top: 8px; line-height: 1.45; }
+    #score { font-size: 18px; padding: 4px 14px; white-space: nowrap; }
+    #speed { top: 46px; }
+  }
   .hidden { display: none !important; }
 </style>
 </head>
@@ -65,7 +106,15 @@
 <div class="hud hidden" id="padflash"></div>
 <div class="hud powerups" id="pu1"></div>
 <div class="hud powerups" id="pu2"></div>
+<div id="touchui" class="hidden">
+  <div id="joy"><div id="joyknob"></div></div>
+  <div class="tbtn" id="btnJump">▲</div>
+  <div class="tbtn" id="btnPunch">🥊</div>
+  <div class="tbtn" id="btnSlide">🛝</div>
+  <div class="tbtn" id="btnExit">✕</div>
+</div>
 <div class="hud" id="msg">RUN OR DIE<small>
+  <button id="startsolo">▶ Einzelspieler starten</button> <button id="startduo">▶▶ 2 Spieler starten</button><br>
   Ragdoll-Splitscreen für 2 Spieler an einer Tastatur.<br>
   Hindernisse rollen auf euch zu und schieben euch von der Plattform — wer fällt, stirbt!<br>
   Vorsicht vor 💥-Blöcken: Berührung zündet sie — die Explosion schleudert dich weg (Kettenreaktion!).<br>
@@ -80,6 +129,7 @@
   <b>T</b> = Tag/Nacht-Himmel umschalten.<br><br>
   <b>Taste 1 = Einzelspieler (Überlebenszeit) · beliebige andere Taste = 2 Spieler</b><br>
   <span style="opacity:.6">ESC = zurück ins Menü</span><br>
+  <span style="opacity:.6">📱 Am Handy: linker Stick = laufen · ▲ = springen (2× tippen = Doppelsprung) · 🥊 = boxen · 🛝 = grätschen · ✕ = Menü</span><br>
   <button id="divebtn"></button> <button id="stunbtn"></button> <button id="rushbtn"></button></small></div>
 
 <script type="importmap">
@@ -2088,10 +2138,69 @@ renderer.domElement.addEventListener('click', () => {
 // Linke Maustaste boxt, rechte Maustaste grätscht (Spieler 1)
 addEventListener('mousedown', (e) => {
   ensureAudio();
+  if (isTouch) return; // am Handy boxen die Touch-Buttons, nicht synthetische Maus-Events
   if (e.button === 0) tryPunch(player1);
   if (e.button === 2) tryTackle(player1);
 });
 addEventListener('contextmenu', (e) => e.preventDefault());
+
+// ---------- Touch-Steuerung (virtueller Stick + Buttons, steuert Spieler 1) ----------
+const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+const touchVec = { x: 0, z: 0 };
+
+// Wird pro Frame nach pollGamepads() addiert — Touch nutzt denselben Analog-Pfad
+// wie der Gamepad-Stick (Bewegung, Hechtsprung- und Grätsch-Richtung inklusive)
+function applyTouchInput() {
+  player1.padX += touchVec.x;
+  player1.padZ += touchVec.z;
+}
+
+{
+  const el = (id) => document.getElementById(id); // $ ist hier noch nicht initialisiert
+  const joyEl = el('joy'), knobEl = el('joyknob');
+  let joyPointer = null;
+
+  const joyUpdate = (e) => {
+    const r = joyEl.getBoundingClientRect();
+    let dx = e.clientX - (r.left + r.width / 2);
+    let dy = e.clientY - (r.top + r.height / 2);
+    const R = r.width / 2 - 8;
+    const len = Math.hypot(dx, dy);
+    if (len > R) { dx *= R / len; dy *= R / len; }
+    knobEl.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+    const DEAD = 0.18;
+    const nx = dx / R, ny = dy / R;
+    touchVec.x = Math.abs(nx) > DEAD ? nx : 0;
+    touchVec.z = Math.abs(ny) > DEAD ? ny : 0; // Stick hoch (dy < 0) = vorwärts (-z)
+  };
+  const joyReset = () => {
+    joyPointer = null;
+    touchVec.x = touchVec.z = 0;
+    knobEl.style.transform = 'translate(-50%,-50%)';
+  };
+  joyEl.addEventListener('pointerdown', (e) => {
+    ensureAudio();
+    joyPointer = e.pointerId;
+    joyEl.setPointerCapture(e.pointerId);
+    joyUpdate(e);
+  });
+  joyEl.addEventListener('pointermove', (e) => { if (e.pointerId === joyPointer) joyUpdate(e); });
+  joyEl.addEventListener('pointerup', (e) => { if (e.pointerId === joyPointer) joyReset(); });
+  joyEl.addEventListener('pointercancel', (e) => { if (e.pointerId === joyPointer) joyReset(); });
+
+  const bindBtn = (id, fn) => el(id).addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    ensureAudio();
+    fn();
+  });
+  bindBtn('btnJump', () => tryJump(player1));
+  bindBtn('btnPunch', () => tryPunch(player1));
+  bindBtn('btnSlide', () => tryTackle(player1));
+  bindBtn('btnExit', () => backToMenu());
+
+  // Geister-Maus-Events der Touch-Bedienung unterdrücken (Scroll/Zoom sowieso)
+  el('touchui').addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+}
 
 // ---------- Effekte: Schallwellen-Ringe ----------
 const fxRings = [];
@@ -2411,11 +2520,13 @@ function startGame(solo = false) {
   applySoloLayout();
   state = 'playing';
   $('msg').classList.add('hidden');
+  $('touchui').classList.toggle('hidden', !isTouch);
   resetRound();
 }
 
 function backToMenu() {
   state = 'menu';
+  $('touchui').classList.add('hidden');
   clearObstacles(); clearPowerups(); clearLasers(); clearRushTiles(); clearSharks();
   const m = $('msg');
   if (MENU_HTML) m.innerHTML = MENU_HTML;
@@ -2457,6 +2568,11 @@ document.addEventListener('click', (e) => {
     updateDiveBtn();
   }
   if (e.target?.id === 'scoreok') submitSoloScore();
+  // Start-Buttons im Menü (am Handy der einzige Weg, das Spiel zu starten)
+  if (state === 'menu') {
+    if (e.target?.id === 'startsolo') { ensureAudio(); startGame(true); }
+    if (e.target?.id === 'startduo') { ensureAudio(); startGame(false); }
+  }
 });
 
 function submitSoloScore() {
@@ -2717,6 +2833,7 @@ function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
 
   pollGamepads();
+  applyTouchInput();
 
   if (state === 'playing') {
     elapsed += dt;

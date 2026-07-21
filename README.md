@@ -15,9 +15,22 @@ python3 -m http.server 8931
 
 ## Spielmodi
 
-Im Hauptmenü: **Taste 1** startet den **Einzelspieler-Modus** (Vollbild,
-Überlebenszeit zählt, Rekord wird im Browser gespeichert), jede andere Taste
-den 2-Spieler-Splitscreen. **ESC** führt jederzeit zurück ins Menü.
+Im Hauptmenü: **Taste 1** (oder der Button **▶ Einzelspieler starten**) startet
+den **Einzelspieler-Modus** (Vollbild, Überlebenszeit zählt, Rekord wird im
+Browser gespeichert), jede andere Taste den 2-Spieler-Splitscreen.
+**ESC** führt jederzeit zurück ins Menü.
+
+## 📱 Handy / Tablet
+
+Auf Touch-Geräten erscheinen im Spiel automatisch Touch-Controls (steuern
+Spieler 1 — ideal für den Einzelspieler-Modus):
+
+- **Virtueller Stick** (links) — laufen, analog in alle Richtungen
+- **▲** (rechts) — springen, 2× tippen = Doppelsprung, 3× = Hechtsprung (mit 💎)
+- **🥊** — boxen · **🛝** — grätschen
+- **✕** (oben rechts) — zurück ins Menü
+
+Gestartet wird über die Buttons im Hauptmenü.
 
 ## Steuerung
 
