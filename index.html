@@ -2863,9 +2863,9 @@ function doDive(p) {
 // tryJump/tryPunch/tryTackle auf — exakt wie ein Mensch am Stick. Dadurch testet
 // er dieselben Codepfade wie echtes Gameplay (VS-BOT-Modus und Soak-Tests).
 const BOT_DIFFS = {
-  easy:   { react: 0.32, jitter: 0.20, gain: 1.2, aimErr: 1.2,  mistakeP: 0.15, horizon: 0.9, aggro: 0.20, tackleP: 0.05, puWant: 0.30, edgeMargin: 1.0 },
-  medium: { react: 0.18, jitter: 0.10, gain: 2.0, aimErr: 0.5,  mistakeP: 0.05, horizon: 1.2, aggro: 0.50, tackleP: 0.12, puWant: 0.60, edgeMargin: 1.5 },
-  hard:   { react: 0.10, jitter: 0.04, gain: 3.0, aimErr: 0.15, mistakeP: 0.01, horizon: 1.6, aggro: 0.85, tackleP: 0.25, puWant: 0.90, edgeMargin: 2.2 },
+  easy:   { react: 0.32, jitter: 0.20, gain: 1.2, aimErr: 1.2,  mistakeP: 0.15, horizon: 1.0, aggro: 0.20, tackleP: 0.05, puWant: 0.30, edgeMargin: 1.0 },
+  medium: { react: 0.18, jitter: 0.10, gain: 2.0, aimErr: 0.5,  mistakeP: 0.05, horizon: 2.0, aggro: 0.50, tackleP: 0.12, puWant: 0.60, edgeMargin: 1.5 },
+  hard:   { react: 0.10, jitter: 0.04, gain: 3.0, aimErr: 0.15, mistakeP: 0.01, horizon: 3.0, aggro: 0.85, tackleP: 0.22, puWant: 0.90, edgeMargin: 2.2 },
 };
 const BOT_LABELS = { easy: 'LEICHT', medium: 'MITTEL', hard: 'SCHWER' };
 
@@ -2950,13 +2950,41 @@ function botScanThreat(p, bot) {
   return best;
 }
 
+function botDodgeZ(t) { return Math.min(t.position.z, 4); }
+
+function botSecondaryJump(p, bot) {
+  if (bot.plan?.type === 'jump') return;
+  const t = p.torso;
+  let jumpAt = null;
+  for (const L of lasers) {
+    if (L.type !== 'line') continue;
+    const closure = Math.max(0.3, L.speed - t.velocity.z);
+    const tta = (t.position.z - L.z) / closure;
+    if (tta >= 0 && tta < 0.45) jumpAt = Math.min(jumpAt ?? 9e9, perfNow() + Math.max(0, tta - 0.25));
+  }
+  for (const o of obstacles) {
+    const b = o.body;
+    const closure = b.velocity.z - t.velocity.z;
+    if (closure < 0.3) continue;
+    const tta = (t.position.z - b.position.z) / closure;
+    if (tta < 0 || tta > 0.45) continue;
+    if (o.spin) { jumpAt = Math.min(jumpAt ?? 9e9, perfNow() + Math.max(0, tta - 0.30)); continue; }
+    const he = b.shapes[0]?.halfExtents;
+    if (!he || o.sweep || o.wreck || o.piston || o.boom || b.isJumpPad) continue;
+    if (Math.abs(t.position.x - b.position.x) > he.x + 0.7) continue;
+    const need = (b.position.y + he.y) - (t.position.y - RIDE_HEIGHT);
+    if (need > 0 && need < 1.3) jumpAt = Math.min(jumpAt ?? 9e9, perfNow() + Math.max(0, tta - 0.30));
+  }
+  if (jumpAt !== null) bot.plan = { type: 'jump', at: jumpAt };
+}
+
 function botHandleThreat(p, bot, th) {
   const t = p.torso, d = bot.d;
   bot.plan = null;
   switch (th.kind) {
     case 'pad': // Pad katapultiert von selbst beim Drüberlaufen
       bot.targetX = th.o.body.position.x;
-      bot.targetZ = t.position.z;
+      bot.targetZ = botDodgeZ(t);
       return;
     case 'shark': {
       const sz = th.o.body.position.z;
@@ -2966,11 +2994,11 @@ function botHandleThreat(p, bot, th) {
     }
     case 'wreck': // Kugel pendelt bis |x|≈4.9 — sicherer Korridor an der Seite
       bot.targetX = Math.sign(t.position.x || 1) * 6.3;
-      bot.targetZ = t.position.z;
+      bot.targetZ = botDodgeZ(t);
       return;
     case 'piston': // Pressblöcke bei x=±4.5 — die Mittelgasse ist frei
       bot.targetX = 0;
-      bot.targetZ = t.position.z;
+      bot.targetZ = botDodgeZ(t);
       return;
     case 'sweep': { // dort kreuzen, wo der Schieber beim Eintreffen NICHT ist
       // Der Schieber startet bei x=0 und wird nur über die Geschwindigkeit bewegt —
@@ -2980,17 +3008,22 @@ function botHandleThreat(p, bot, th) {
       const px = b.position.x +
         s.amp * (Math.sin(s.omega * (elapsed + th.tta) + s.phase) - Math.sin(s.omega * elapsed + s.phase));
       bot.targetX = px >= 0 ? -5 : 5;
-      bot.targetZ = t.position.z;
+      bot.targetZ = botDodgeZ(t);
+      if (Math.abs(t.position.x) > 4 && Math.sign(b.position.x) === Math.sign(t.position.x) &&
+          Math.abs(b.position.x) < Math.abs(t.position.x) && Math.abs(b.position.z - t.position.z) < 2.5) {
+        bot.targetX = 0;
+        bot.plan = { type: 'jump', at: perfNow(), dbl: true };
+      }
       return;
     }
     case 'roller':
       bot.targetX = t.position.x;
-      bot.targetZ = t.position.z;
+      bot.targetZ = botDodgeZ(t);
       bot.plan = { type: 'jump', at: perfNow() + Math.max(0, th.tta - 0.30) };
       return;
     case 'laser': {
       const L = th.o;
-      bot.targetZ = t.position.z;
+      bot.targetZ = botDodgeZ(t);
       if (L.type === 'line') {
         bot.targetX = t.position.x;
         bot.plan = { type: 'jump', at: perfNow() + Math.max(0, th.tta - 0.25) };
@@ -3007,19 +3040,21 @@ function botHandleThreat(p, bot, th) {
       if (row.length >= 8) { bot.tnt = { phase: 'approach', z0, until: 0 }; botTnt(p, bot); return; }
       const gap = botFindGapX(p, z0);
       bot.targetX = gap ?? Math.sign(t.position.x || 1) * (PLATFORM_HALF_W - d.edgeMargin);
-      bot.targetZ = t.position.z;
+      bot.targetZ = botDodgeZ(t);
       return;
     }
     case 'box': {
       const b = th.o.body, he = b.shapes[0].halfExtents;
+      const need = (b.position.y + he.y) - (t.position.y - RIDE_HEIGHT);
       if (he.x < PLATFORM_HALF_W - 0.6) {
         const gap = botFindGapX(p, b.position.z);
-        if (gap !== null) { bot.targetX = gap; bot.targetZ = t.position.z; return; }
+        if (gap !== null && Math.abs(gap - t.position.x) / RUN_SPEED < th.tta + 0.35) {
+          bot.targetX = gap; bot.targetZ = botDodgeZ(t); return;
+        }
+        if (gap !== null && need > 3.4) { bot.targetX = gap; bot.targetZ = botDodgeZ(t); return; }
       }
-      // Volle Breite oder keine Lücke: springen, hohe Wände mit Doppelsprung
       bot.targetX = t.position.x;
-      bot.targetZ = t.position.z;
-      const need = (b.position.y + he.y) - (t.position.y - RIDE_HEIGHT);
+      bot.targetZ = botDodgeZ(t);
       bot.plan = { type: 'jump', at: perfNow() + Math.max(0, th.tta - (need > 1.6 ? 0.42 : 0.30)), dbl: need > 1.9 };
       return;
     }
@@ -3054,10 +3089,19 @@ function botThink(p, bot) {
   bot.noiseZ = (Math.random() * 2 - 1) * d.aimErr;
 
   if (p.hanging || p.ragdoll) { bot.plan = null; return; } // botAct/Physik regeln das
-  if (Math.abs(t.position.x) > PLATFORM_HALF_W - 0.9 || t.position.y < -0.2) {
-    bot.targetX = Math.sign(t.position.x || 1) * 4; // zurück zur Mitte
-    bot.targetZ = Math.min(Math.max(t.position.z, 0), PLATFORM_Z_MAX - 2);
+  const ppx = t.position.x + t.velocity.x * 0.25, ppz = t.position.z + t.velocity.z * 0.25;
+  if (Math.abs(ppx) > PLATFORM_HALF_W - 0.9 || ppz > PLATFORM_Z_MAX - 1.2 || t.position.y < -0.2) {
+    bot.targetX = Math.abs(ppx) > PLATFORM_HALF_W - 0.9 ? Math.sign(t.position.x || 1) * 4 : t.position.x;
+    bot.targetZ = Math.min(Math.max(t.position.z, 0), 2.5);
     bot.plan = null;
+    for (const o of obstacles) {
+      const b = o.body, he = b.shapes[0]?.halfExtents;
+      if (!he || o.piston || o.wreck) continue;
+      if (Math.abs(b.position.z - t.position.z) > 1.4) continue;
+      if (Math.abs(b.position.x - t.position.x) > he.x + 0.7) continue;
+      const need = (b.position.y + he.y) - (t.position.y - RIDE_HEIGHT);
+      if (need > 0 && need < 3.4) { bot.plan = { type: 'jump', at: now, dbl: need > 1.9 }; break; }
+    }
     return;
   }
 
@@ -3066,7 +3110,7 @@ function botThink(p, bot) {
   // Aussetzer: schwächere Bots übersehen Gefahren kurzzeitig
   if (now >= bot.blunderUntil && Math.random() < d.mistakeP) bot.blunderUntil = now + 0.5;
   const threat = now < bot.blunderUntil ? null : botScanThreat(p, bot);
-  if (threat) { botHandleThreat(p, bot, threat); return; }
+  if (threat) { botHandleThreat(p, bot, threat); botSecondaryJump(p, bot); return; }
 
   const foe = p === player1 ? player2 : player1;
   if (foe.alive && Math.random() < d.aggro) {
@@ -3076,7 +3120,12 @@ function botThink(p, bot) {
     bot.targetZ = f.z;
     const dist = f.vsub(t.position).length();
     if (dist < PUNCH_RANGE * 0.9 + d.aimErr * 0.3) bot.plan = { type: 'punch' };
-    else if (dist > 2.5 && dist < 6 && p.grounded && Math.random() < d.tackleP) bot.plan = { type: 'tackle' };
+    else if (dist > 2.5 && dist < 6 && p.grounded && Math.random() < d.tackleP) {
+      const len = Math.hypot(f.x - t.position.x, f.z - t.position.z) || 1;
+      const lx = t.position.x + ((f.x - t.position.x) / len) * 8.5;
+      const lz = t.position.z + ((f.z - t.position.z) / len) * 8.5;
+      bot.plan = (Math.abs(lx) < PLATFORM_HALF_W - 0.8 && lz < PLATFORM_Z_MAX - 0.8) ? { type: 'tackle' } : null;
+    }
     else bot.plan = null;
     return;
   }
@@ -3096,7 +3145,7 @@ function botThink(p, bot) {
     }
   }
   bot.targetX = t.position.x * 0.5;
-  bot.targetZ = 2.5;
+  bot.targetZ = 1;
   bot.plan = null;
 }
 
@@ -3116,7 +3165,8 @@ function botAct(p, bot) {
   const tx = Math.max(-maxX, Math.min(maxX, bot.targetX + bot.noiseX));
   const tz = Math.max(-4, Math.min(PLATFORM_Z_MAX - 1.2, bot.targetZ + bot.noiseZ * 0.4));
   let ex = tx - t.position.x, ez = tz - t.position.z;
-  if (iceLevel > 0.3) { ex -= t.velocity.x * 0.35; ez -= t.velocity.z * 0.35; } // auf Eis früher bremsen
+  const lead = !p.grounded ? 0.22 : iceLevel > 0.3 ? 0.35 : 0.10;
+  ex -= t.velocity.x * lead; ez -= t.velocity.z * lead;
   p.padX += Math.abs(ex) < 0.12 ? 0 : Math.max(-1, Math.min(1, ex * d.gain));
   p.padZ += Math.abs(ez) < 0.12 ? 0 : Math.max(-1, Math.min(1, ez * d.gain));
 
@@ -3124,6 +3174,10 @@ function botAct(p, bot) {
   if (!plan) return;
   if (plan.type === 'jump') {
     if (now >= plan.at) {
+      if (!p.grounded && diveAlways) {
+        p.padX = Math.max(-1, Math.min(1, -t.position.x * 0.25));
+        p.padZ = -0.5;
+      }
       tryJump(p);
       // Doppelsprung: kurz nach dem Absprung nachschieben
       bot.plan = plan.dbl ? { type: 'jump', at: now + 0.28 } : null;
@@ -3133,11 +3187,15 @@ function botAct(p, bot) {
 }
 
 // Pro Frame nach pollGamepads()/applyTouchInput() — die Pads sind dann frisch genullt
+let botTurn = 0;
 function updateBots() {
   if (state !== 'playing') return;
-  for (let i = 0; i < players.length; i++) {
+  botTurn ^= 1;
+  for (const i of botTurn ? [0, 1] : [1, 0]) {
     const bot = botCtl[i], p = players[i];
     if (!bot || !p.alive) continue;
+    if (bot.wasRagdoll && !p.ragdoll) bot.nextThink = 0;
+    bot.wasRagdoll = p.ragdoll;
     if (perfNow() >= bot.nextThink) {
       bot.nextThink = perfNow() + bot.d.react + Math.random() * bot.d.jitter;
       botThink(p, bot);
@@ -4343,6 +4401,7 @@ window.__game = { players, obstacles, powerups, world, cams, fxRings, lasers, sh
   startGame, backToMenu, invariants: botInvariants,
   // sticky-Bots überleben Menü-Starts — abschalten mit setBot(i, null)
   setBot: (i, diff) => { botCtl[i] = diff ? makeBot(diff, true) : null; },
+  botCtl, BOT_DIFFS,
   getBots: () => botCtl.map((b) => b?.diffName ?? null),
   get state() { return state; }, get audio() { return audioCtx && audioCtx.state; },
   get rotMode() { return rotMode; }, get dayMode() { return dayMode; }, get soloMode() { return soloMode; },
