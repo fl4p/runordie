@@ -1378,7 +1378,9 @@ function explodeBlock(o) {
 
 // ---------- Laser: wandern langsam über die Straße, werden mit der Zeit mehr ----------
 const lasers = [];
-const laserGlowMat = new THREE.MeshBasicMaterial({ color: 0xff2545, transparent: true, opacity: 0.2, depthWrite: false });
+// fog:false — Laser sind tödlich und müssen schon ab Spawn-Distanz sichtbar sein;
+// mit Nebel tauchten sie erst ~20 m vor dem Spieler "aus dem Nichts" auf
+const laserGlowMat = new THREE.MeshBasicMaterial({ color: 0xff2545, transparent: true, opacity: 0.2, depthWrite: false, fog: false });
 
 // Fester Pool für die roten Lichtscheine: die Lichter bleiben dauerhaft in der
 // Szene (Intensität 0 = aus). Würden sie pro Laser hinzugefügt/entfernt, änderte
@@ -1402,11 +1404,15 @@ function releaseLaserLight(li) {
 function makeLaserBeam(len) {
   const beam = new THREE.Mesh(
     new THREE.CylinderGeometry(0.035, 0.035, len, 8),
-    new THREE.MeshBasicMaterial({ color: 0xff2545 })
+    new THREE.MeshBasicMaterial({ color: 0xff2545, fog: false })
   );
   beam.rotation.z = Math.PI / 2;
   const glow = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, len, 8), laserGlowMat);
   glow.rotation.z = Math.PI / 2;
+  // Über den Graffiti-Decals (renderOrder 1) zeichnen: die Decals schreiben keine
+  // Tiefe und stanzten sonst Löcher in den Glow-Zylinder. Echte Wände verdecken
+  // den Glow weiterhin korrekt (depthTest bleibt an).
+  glow.renderOrder = 2;
   return [beam, glow];
 }
 
