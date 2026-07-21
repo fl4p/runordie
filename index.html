@@ -2151,9 +2151,11 @@ function spawnBoomBlock(x, y, z, speed) {
   );
   o.body.velocity.set(0, 0, speed);
   o.body.isObstacle = false; // kein normaler Stun — die Explosion erledigt das
-  o.boom = { armed: false, fuseAt: 0 };
+  o.boom = { armed: false, fuseAt: 0, punchSafeUntil: 0, knockUntil: 0, restoreVz: speed };
   o.body.addEventListener('collide', (e) => {
     if (o.boom.armed) return;
+    // Frisch weggeboxte Kiste zündet nicht an der schlagenden Faust
+    if (perfNow() < o.boom.punchSafeUntil) return;
     if (e.body.collisionFilterGroup & GROUP.PALL) {
       o.boom.armed = true;
       o.boom.fuseAt = perfNow() + 0.3;
@@ -2909,6 +2911,23 @@ function tryPunch(p) {
   // Schallwelle an der Faust
   const tp = p.torso.position;
   spawnShockwave({ x: tp.x + dir.x * 0.9, y: tp.y + 0.25, z: tp.z + dir.z * 0.9 }, dir, false);
+
+  // TNT-Kisten in Reichweite werden weggeschlagen statt an der Faust zu zünden.
+  // Trifft die fliegende Kiste den Gegner, zündet die Lunte ganz normal bei ihm.
+  let knockedBox = false;
+  for (const o of obstacles) {
+    if (!o.boom || o.boom.armed) continue;
+    const d = o.body.position.vsub(tp);
+    d.y = 0;
+    const len = d.length();
+    if (len > PUNCH_RANGE + 0.5 || len < 0.01) continue;
+    d.scale(1 / len, d);
+    o.boom.punchSafeUntil = perfNow() + 0.4;
+    o.boom.knockUntil = perfNow() + 0.55;
+    o.body.velocity.set(d.x * 14, 0, d.z * 14);
+    knockedBox = true;
+  }
+  if (knockedBox) playDeflect();
 
   // Im Dreh-Modus muss der Gegner grob vor einem stehen; ⭐-Unverwundbare prallen ab
   const inFront = !rotMode || (dir.x * toFoe.x + dir.z * toFoe.z) > 0.35;
@@ -4245,7 +4264,14 @@ function animate() {
   if (netRole !== 'client' && state === 'playing') {
     for (let i = obstacles.length - 1; i >= 0; i--) {
       const o = obstacles[i];
-      if (o.boom?.armed && perfNow() > o.boom.fuseAt) explodeBlock(o);
+      if (!o.boom) continue;
+      // Weggeboxte Kiste: nach kurzem Flug wieder normal mitfahren (sonst
+      // driftet sie ewig und despawnt nie)
+      if (o.boom.knockUntil && perfNow() > o.boom.knockUntil) {
+        o.body.velocity.set(0, 0, o.boom.restoreVz);
+        o.boom.knockUntil = 0;
+      }
+      if (o.boom.armed && perfNow() > o.boom.fuseAt) explodeBlock(o);
     }
   }
 

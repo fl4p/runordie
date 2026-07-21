@@ -214,7 +214,9 @@ Jede 5. Spawn-Welle ist eine Formation:
 - **💥 Explodierende Blöcke:** Ein verstreutes Feld aus TNT-Kisten. Berührung
   zündet (0,3 s blinkende Lunte), dann schleudert die Explosion alle Spieler im
   Umkreis als Ragdoll weg — und zündet Nachbarblöcke als **Kettenreaktion**.
-  Drüberspringen oder durchschlängeln!
+  Drüberspringen, durchschlängeln — oder **wegboxen**: Ein Faustschlag schlägt
+  eine unscharfe Kiste weg, statt sie zu zünden. Trifft die fliegende Kiste den
+  Gegner, zündet die Lunte bei ihm!
 - **🏗 Abrissbirne:** Ein Galgen über der ganzen Bahn, an dem eine Stahlkugel
   an der Kette quer über die Straße pendelt — Timing oder die Randspuren
   nutzen. Treffer stunnen wie Hindernisse.
