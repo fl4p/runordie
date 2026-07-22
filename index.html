@@ -397,16 +397,6 @@ skyDusk.visible = false;
 skyDusk.renderOrder = -2; // vor skyDay: der Tag-Himmel deckt die Dämmerung am Ende ab
 scene.add(skyDusk);
 
-// Himmel reist mit der Kamera: die drei Kugeln werden vor JEDEM Render-Pass exakt
-// auf die Kameraposition zentriert. So läuft der Horizont nie aus (Kamera bleibt
-// im Kugelmittelpunkt) und der Mond steht in fester Weltrichtung ohne Parallax.
-// Im Splitscreen wird pro Auge neu zentriert — beide Kameras stehen woanders.
-function centerSkyOn(cam) {
-  sky.position.copy(cam.position);
-  skyDay.position.copy(cam.position);
-  skyDusk.position.copy(cam.position);
-}
-
 // Tag/Nacht-Wechsel: läuft automatisch im 25-s-Takt, inkl. Licht- und Nebelstimmung.
 // Die Eiszone (siehe unten) überlagert beide Modi mit kalter, heller Stimmung.
 let dayMode = false;   // Zielzustand des Zyklus
@@ -709,7 +699,7 @@ function extendPlatform() {
     e.position.set(sx * (PLATFORM_HALF_W - 0.15), 0.03, zc);
     grp.add(e);
   }
-  addLanterns(grp, zMin, zMax); // Laternen wachsen mit der Bahn mit
+  const lanterns = addLanterns(zMin, zMax); // Laternen wachsen mit der Bahn mit (Pool-Spots)
   addIceOverlay(grp, zc); // Eisschicht friert mit (geteiltes Material)
   for (let i = 0; i < 3; i++)
     addStreetGraffiti(grp, (Math.random() * 2 - 1) * (PLATFORM_HALF_W - 2.2), zMin + 3 + Math.random() * (platL - 6));
@@ -717,13 +707,14 @@ function extendPlatform() {
     addManhole(grp, (Math.random() * 2 - 1) * (PLATFORM_HALF_W - 1.8), zMin + 3 + Math.random() * (platL - 6));
   scene.add(grp);
 
-  rushTiles.push({ body, grp, zMin, zMax });
+  rushTiles.push({ body, grp, zMin, zMax, lanterns });
   frontierZ = zMin;
 }
 
 // Tile abbauen inkl. Dispose der pro Tile allozierten Ressourcen. Nur explizit
 // als ownedGeo/ownedMat markierte Knoten (Graffiti, Gullis) werden entsorgt —
-// alles Geteilte (Bahn, Streifen, Kanten, Laternen, Eis-Overlay) bleibt unberührt.
+// alles Geteilte (Bahn, Streifen, Kanten, Eis-Overlay) bleibt unberührt; die
+// Laternen-Spots des Tiles werden aus dem InstancedMesh-Pool ausgetragen.
 function removeRushTile(t) {
   world.removeBody(t.body);
   scene.remove(t.grp);
@@ -731,6 +722,7 @@ function removeRushTile(t) {
     if (n.userData?.ownedGeo) n.geometry.dispose();
     if (n.material?.userData?.ownedMat) n.material.dispose();
   });
+  removeLanterns(t.lanterns);
 }
 
 function clearRushTiles() {
@@ -844,29 +836,66 @@ const lampGlowMat = new THREE.MeshBasicMaterial({
 });
 const lampGlowGeo = new THREE.PlaneGeometry(4.0, 5.0); // höhere Laterne -> etwas größere Lichtlache
 const LANTERN_SPACING = 9;
-function addLanterns(parent, zMin, zMax) {
-  for (let z = zMin + LANTERN_SPACING / 2; z < zMax; z += LANTERN_SPACING)
-    for (const sx of [-1, 1]) {
-      const grp = new THREE.Group();
-      const pole = new THREE.Mesh(lanternPoleGeo, lanternPoleMat);
-      pole.position.y = 1.1;
-      pole.castShadow = true;
-      const head = new THREE.Mesh(lanternHeadGeo, lanternGlassMat);
-      head.position.y = 3.3;
-      head.castShadow = true; // tagsüber wirft die ganze Laterne Schatten auf die Bahn
-      grp.add(pole, head);
-      // Lichtlache flach auf der Fahrbahn, helle Seite zum Mast, knapp über den
-      // Randstreifen (y 0.07), damit nichts durch das Decal schneidet
-      const glow = new THREE.Mesh(lampGlowGeo, lampGlowMat);
-      glow.rotation.set(-Math.PI / 2, 0, sx > 0 ? 0 : Math.PI);
-      glow.position.set(-sx * 2.28, 0.07, 0);
-      glow.renderOrder = 2; // immer über Eis-Overlay und Straßen-Graffiti (beide 1)
-      grp.add(glow);
-      grp.position.set(sx * (PLATFORM_HALF_W + 0.28), 0, z);
-      parent.add(grp);
-    }
+// Laternen als InstancedMesh-Trio (Mast/Kopf/Lichtlache): je EIN Draw pro Teil
+// für alle Laternen statt ~3 pro Laterne (plus Schattenpass) — im Rush bis zu
+// ~150 gesparte Draws. Die Spots sind statisch; Matrizen werden nur beim
+// Kachel-Auf-/Abbau neu geschrieben, nicht pro Frame.
+// 256 statt knapper: im Rush hält ein Camper an der Hinterkante den Kachel-
+// Abbau auf, während der Führende Kacheln ansammelt (~12 Spots je Kachel).
+// Der Matrix-Puffer kostet pro Pool nur ~16 KB, die Draw-Calls bleiben 3.
+const LANTERN_MAX = 256;
+const lanternSpots = [];
+const lanternInstPole = new THREE.InstancedMesh(lanternPoleGeo, lanternPoleMat, LANTERN_MAX);
+const lanternInstHead = new THREE.InstancedMesh(lanternHeadGeo, lanternGlassMat, LANTERN_MAX);
+const lanternInstGlow = new THREE.InstancedMesh(lampGlowGeo, lampGlowMat, LANTERN_MAX);
+lanternInstPole.castShadow = true;
+lanternInstHead.castShadow = true; // tagsüber wirft die ganze Laterne Schatten auf die Bahn
+lanternInstGlow.renderOrder = 2;   // immer über Eis-Overlay und Straßen-Graffiti (beide 1)
+for (const im of [lanternInstPole, lanternInstHead, lanternInstGlow]) {
+  im.frustumCulled = false; // die Spots reisen im Rush weit nach vorn
+  im.count = 0;
+  scene.add(im);
 }
-addLanterns(scene, PLATFORM_Z_MIN, PLATFORM_Z_MAX);
+const _lanM4 = new THREE.Matrix4(), _lanQ = new THREE.Quaternion(), _lanE = new THREE.Euler();
+function rebuildLanterns() {
+  // Bei Überlauf die NEUESTEN Spots schreiben — das sind die vordersten
+  // Kacheln, auf denen tatsächlich gespielt wird (statt der Camper-Zone hinten)
+  const start = Math.max(0, lanternSpots.length - LANTERN_MAX);
+  const n = lanternSpots.length - start;
+  for (let i = 0; i < n; i++) {
+    const s = lanternSpots[start + i];
+    const x = s.sx * (PLATFORM_HALF_W + 0.28);
+    _lanM4.identity().setPosition(x, 1.1, s.z);
+    lanternInstPole.setMatrixAt(i, _lanM4);
+    _lanM4.identity().setPosition(x, 3.3, s.z);
+    lanternInstHead.setMatrixAt(i, _lanM4);
+    // Lichtlache flach auf der Fahrbahn, helle Seite zum Mast, knapp über den
+    // Randstreifen (y 0.07), damit nichts durch das Decal schneidet
+    _lanQ.setFromEuler(_lanE.set(-Math.PI / 2, 0, s.sx > 0 ? 0 : Math.PI));
+    _lanM4.makeRotationFromQuaternion(_lanQ);
+    _lanM4.setPosition(x - s.sx * 2.28, 0.07, s.z);
+    lanternInstGlow.setMatrixAt(i, _lanM4);
+  }
+  lanternInstPole.count = lanternInstHead.count = lanternInstGlow.count = n;
+  lanternInstPole.instanceMatrix.needsUpdate = true;
+  lanternInstHead.instanceMatrix.needsUpdate = true;
+  lanternInstGlow.instanceMatrix.needsUpdate = true;
+}
+function addLanterns(zMin, zMax) {
+  const added = [];
+  for (let z = zMin + LANTERN_SPACING / 2; z < zMax; z += LANTERN_SPACING)
+    for (const sx of [-1, 1]) added.push({ sx, z });
+  lanternSpots.push(...added);
+  rebuildLanterns();
+  return added; // Rush-Kacheln geben ihre Spots beim Abbau zurück
+}
+function removeLanterns(spots) {
+  if (!spots?.length) return;
+  const dead = new Set(spots);
+  for (let i = lanternSpots.length - 1; i >= 0; i--) if (dead.has(lanternSpots[i])) lanternSpots.splice(i, 1);
+  rebuildLanterns();
+}
+addLanterns(PLATFORM_Z_MIN, PLATFORM_Z_MAX);
 function updateLanternGlow() {
   // Laternen schalten um die Dämmerung: unter dayLevel 0.35 voll an,
   // über 0.65 ganz aus — dazwischen weich gedimmt
@@ -1550,7 +1579,7 @@ const obstMats = {
   roller: new THREE.MeshStandardMaterial({ map: texConcrete, roughness: 0.7 }),
 };
 
-function addObstBody(shape, pos, mat, geo) {
+function addObstBody(shape, pos, mat, geo, instanced = false) {
   const body = new CANNON.Body({
     mass: 0, type: CANNON.Body.KINEMATIC, shape,
     position: pos,
@@ -1560,6 +1589,12 @@ function addObstBody(shape, pos, mat, geo) {
   });
   body.isObstacle = true;
   world.addBody(body);
+  if (instanced) {
+    // Visual kommt aus einem InstancedMesh-Pool (TNT-Kisten) — kein Einzel-Mesh
+    const o = { body, mesh: null, sweep: null, instanced: true };
+    obstacles.push(o);
+    return o;
+  }
   const mesh = new THREE.Mesh(geo, mat);
   mesh.castShadow = true; mesh.receiveShadow = true;
   scene.add(mesh);
@@ -1647,6 +1682,7 @@ function spawnRoller(speed, z) {
 
 function removeObstacle(o) {
   world.removeBody(o.body);
+  if (o.instanced) return; // Pool-Visual (TNT): Matrizen werden ohnehin jeden Frame neu geschrieben
   scene.remove(o.mesh);
   o.mesh.traverse((n) => {
     n.geometry?.dispose(); // Hindernis-Geometrien sind immer frisch erzeugt
@@ -1675,6 +1711,41 @@ const texBoom = canvasTex(128, 128, (g, w, h) => {
 const boomBaseMat = new THREE.MeshStandardMaterial({
   map: texBoom, emissive: 0xff3300, emissiveIntensity: 0.12, roughness: 0.55,
 });
+// TNT-Kisten als InstancedMesh: eine 3-reihige Mauer sind ~60 Kisten und damit
+// ~120 Einzel-Draws (Haupt- + Schattenpass). Zwei Pools — ruhig und gezündet —
+// weil Instanzfarben nur die Grundfarbe modulieren, das Lunten-Blinken aber
+// emissiv ist: der gezündete Pool blinkt global (alle Lunten im Takt, wie zuvor).
+// Die Matrizen werden jeden Frame aus den Physik-Körpern neu geschrieben;
+// Entfernen ist damit gratis (die Kiste wird schlicht nicht mehr geschrieben).
+const BOOM_MAX = 128;
+const boomGeoShared = new THREE.BoxGeometry(0.9, 0.9, 0.9);
+const boomArmedMat = boomBaseMat.clone();
+const boomInstCalm = new THREE.InstancedMesh(boomGeoShared, boomBaseMat, BOOM_MAX);
+const boomInstArmed = new THREE.InstancedMesh(boomGeoShared, boomArmedMat, BOOM_MAX);
+for (const im of [boomInstCalm, boomInstArmed]) {
+  im.castShadow = true; im.receiveShadow = true;
+  im.frustumCulled = false; // count wechselt laufend, das Bounding-Volumen wäre stale
+  im.count = 0;
+  scene.add(im);
+}
+const _boomM4 = new THREE.Matrix4(), _boomQ = new THREE.Quaternion();
+function updateBoomInstances() {
+  let calm = 0, armed = 0;
+  for (const o of obstacles) {
+    if (!o.boom) continue;
+    const b = o.body;
+    _boomQ.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
+    _boomM4.makeRotationFromQuaternion(_boomQ);
+    _boomM4.setPosition(b.position.x, b.position.y, b.position.z);
+    if (o.boom.armed) { if (armed < BOOM_MAX) boomInstArmed.setMatrixAt(armed++, _boomM4); }
+    else if (calm < BOOM_MAX) boomInstCalm.setMatrixAt(calm++, _boomM4);
+  }
+  boomInstCalm.count = calm;
+  boomInstArmed.count = armed;
+  boomInstCalm.instanceMatrix.needsUpdate = true;
+  boomInstArmed.instanceMatrix.needsUpdate = true;
+  boomArmedMat.emissiveIntensity = 0.7 + 0.6 * Math.sin(perfNow() * 45);
+}
 
 // Feuerball-Visual (auch als Netz-FX an Clients gesendet, daher eigene Funktion)
 function spawnFireball(pos) {
@@ -2159,8 +2230,7 @@ function spawnBoomBlock(x, y, z, speed) {
   const o = addObstBody(
     new CANNON.Box(new CANNON.Vec3(0.45, 0.45, 0.45)),
     new CANNON.Vec3(x, y, z),
-    (() => { const m = boomBaseMat.clone(); m.userData.ownedMat = true; return m; })(),
-    new THREE.BoxGeometry(0.9, 0.9, 0.9)
+    null, null, true // Visual liegt im TNT-Pool, kein eigenes Mesh/Material
   );
   o.body.velocity.set(0, 0, speed);
   o.body.isObstacle = false; // kein normaler Stun — die Explosion erledigt das
@@ -4151,12 +4221,13 @@ function syncMeshes() {
       o.piston.marker.material.opacity = hovering ? 0.22 + 0.16 * Math.sin(elapsed * 12) : 0.06;
       continue;
     }
+    if (o.instanced) continue; // TNT-Kisten: Matrizen schreibt updateBoomInstances
     o.mesh.position.copy(o.body.position);
     if (o.spin) o.mesh.children[0].rotation.x += o.spin * 0.016;
     else o.mesh.quaternion.copy(o.body.quaternion);
     if (o.pulse) o.mesh.material.emissiveIntensity = 0.75 + 0.45 * Math.sin(elapsed * 6);
-    if (o.boom?.armed) o.mesh.material.emissiveIntensity = 0.7 + 0.6 * Math.sin(perfNow() * 45);
   }
+  updateBoomInstances(); // inkl. globalem Lunten-Blinken des gezündeten Pools
 }
 
 function animate() {
@@ -4344,16 +4415,13 @@ function animate() {
     // Einzelspieler / gegen Bot / Online: ein Vollbild-Viewport
     renderer.setScissorTest(false);
     renderer.setViewport(0, 0, w, h);
-    centerSkyOn(cams[0]);
     renderer.render(scene, cams[0]);
   } else {
     // Splitscreen-Rendering
     renderer.setScissorTest(true);
     renderer.setViewport(0, 0, hw, h); renderer.setScissor(0, 0, hw, h);
-    centerSkyOn(cams[0]);
     renderer.render(scene, cams[0]);
     renderer.setViewport(hw, 0, w - hw, h); renderer.setScissor(hw, 0, w - hw, h);
-    centerSkyOn(cams[1]);
     renderer.render(scene, cams[1]);
     renderer.setScissorTest(false);
   }
@@ -5752,7 +5820,7 @@ function renderProfReport(d, opts = {}) {
 }
 
 // Debug-Hook für automatisierte Tests
-window.__game = { players, obstacles, powerups, world, cams, sky, fxRings, lasers, sharks, renderer, spawnShark, spawnLaser, spawnPowerup, spawnWave, toggleDaySky, toggleRotMode, startSnow, endSnow, runGpuProfile, cpuBuf, analyzeLiveFrames, renderProfReport,
+window.__game = { players, obstacles, powerups, world, cams, fxRings, lasers, sharks, renderer, spawnShark, spawnLaser, spawnPowerup, spawnWave, toggleDaySky, toggleRotMode, startSnow, endSnow, runGpuProfile, cpuBuf, analyzeLiveFrames, renderProfReport,
   startGame, backToMenu, invariants: botInvariants,
   // sticky-Bots überleben Menü-Starts — abschalten mit setBot(i, null)
   setBot: (i, diff) => { botCtl[i] = diff ? makeBot(diff, true) : null; },
