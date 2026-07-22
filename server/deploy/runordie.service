@@ -16,6 +16,8 @@ Environment=CORS_ORIGINS=https://fl4p.github.io
 # Hinter nginx: echte Client-IP aus X-Forwarded-For lesen (sonst zählen alle
 # Rate-Limits gegen 127.0.0.1). nginx MUSS den Header setzen (tut es im Snippet).
 Environment=TRUST_PROXY=1
+# Registrierungs-Limit deaktiviert (0 = aus); zum Wiedereinschalten z.B. 20 setzen.
+Environment=REG_MAX=0
 Restart=always
 RestartSec=3
 # Härtung: das Relay braucht weder Schreibrechte noch neue Privilegien

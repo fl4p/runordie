@@ -33,9 +33,11 @@ function loginFail(ip) {
 
 // Registrierungen pro IP drosseln: sonst könnte ein Angreifer die DB fluten und
 // (über scrypt je Aufruf) CPU verbrennen. JEDER Versuch zählt, nicht nur Fehler.
+// Per REG_MAX abschaltbar: 0 (oder negativ) = kein Limit.
 const regHits = new Map(); // ip -> { n, at }
-const REG_MAX = 8, REG_WINDOW_MS = 60 * 60 * 1000;
+const REG_MAX = +(process.env.REG_MAX ?? 8), REG_WINDOW_MS = 60 * 60 * 1000;
 function regBlocked(ip) {
+  if (REG_MAX <= 0) return false; // Limit deaktiviert
   const now = Date.now();
   const b = regHits.get(ip) || { n: 0, at: now };
   if (now - b.at > REG_WINDOW_MS) { b.n = 0; b.at = now; }
