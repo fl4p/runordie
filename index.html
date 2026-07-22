@@ -3506,13 +3506,20 @@ function applyTouchInput() {
   };
   joyEl.addEventListener('pointerdown', (e) => {
     ensureAudio();
+    if (joyPointer !== null) joyReset(); // verwaister Zeiger (verpasstes up) -> erst säubern
     joyPointer = e.pointerId;
-    joyEl.setPointerCapture(e.pointerId);
+    try { joyEl.setPointerCapture(e.pointerId); } catch { /* capture optional */ }
     joyUpdate(e);
   });
   joyEl.addEventListener('pointermove', (e) => { if (e.pointerId === joyPointer) joyUpdate(e); });
   joyEl.addEventListener('pointerup', (e) => { if (e.pointerId === joyPointer) joyReset(); });
   joyEl.addEventListener('pointercancel', (e) => { if (e.pointerId === joyPointer) joyReset(); });
+  // WICHTIG gegen den "klemmenden Knopf": auf Mobilgeräten geht ein pointerup/-cancel
+  // gern verloren (iOS-Systemgesten, Anrufe/Dialoge, ausgeblendetes Touch-UI). Dann
+  // bliebe joyPointer gesetzt und touchVec auf dem letzten Wert -> die Figur läuft
+  // ohne Finger weiter. lostpointercapture feuert IMMER, wenn die Erfassung endet
+  // (auch bei Unterbrechung) und setzt den Stick sicher zurück.
+  joyEl.addEventListener('lostpointercapture', (e) => { if (e.pointerId === joyPointer) joyReset(); });
 
   const bindBtn = (id, fn) => el(id).addEventListener('pointerdown', (e) => {
     e.preventDefault();
