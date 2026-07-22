@@ -195,6 +195,7 @@
   #msg .senslabel input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border: none; border-radius: 50%; background: #4da3ff; }
   #msg .senslabel #sensval { opacity: .7; min-width: 34px; text-align: right; flex: none; margin-left: auto; }
   /* ---- Fußzeile (Tastatur-Hinweise) ---- */
+  #msg .mver { display: block; font-size: 11px; opacity: .4; margin-top: 4px; letter-spacing: .3px; }
   #msg .mkeys { display: block; font-size: 11.5px; font-weight: 400; opacity: .45; letter-spacing: .3px; margin-top: 10px; }
   /* ---- Tablet/Desktop (und Handy quer ab 640px Breite) ---- */
   @media (min-width: 640px) {
@@ -375,13 +376,14 @@
       <button id="divebtn"></button><button id="stunbtn"></button><button id="punchbtn"></button><button id="rushbtn"></button><button id="snowbtn"></button><button id="botdiffbtn"></button>
       <span class="sgh">🖥️ Grafik &amp; System</span>
       <button id="fpscapbtn"></button>
-      <label class="senslabel" for="sensrange">🎮 Stick-Empfindlichkeit <input type="range" id="sensrange" min="0.5" max="2" step="0.05" value="1"><span id="sensval">1×</span></label>
+      <label class="senslabel" for="sensrange">🎮 Stick-Empfindlichkeit <input type="range" id="sensrange" min="0.5" max="4" step="0.05" value="1"><span id="sensval">1×</span></label>
       <span class="sgh">🎮 Controller-Tasten</span>
       <button id="padmapjump"></button><button id="padmappunch"></button><button id="padmaptackle"></button><button id="padmapghost"></button><button id="padmapreset"></button>
       <button id="gpuprofbtn">🔬 GPU-Profil erstellen</button>
     </span>
   </details>
-  <span class="mkeys">⌨️ 1 = Einzelspieler · 2 = Gegen Bot · beliebige Taste = 2 Spieler · ESC = Menü</span></div>
+  <span class="mkeys">⌨️ 1 = Einzelspieler · 2 = Gegen Bot · beliebige Taste = 2 Spieler · ESC = Menü</span>
+  <span class="mver">RUN OR DIE · v2026.07.22</span></div>
 
 <script type="importmap">
 { "imports": {
@@ -4232,7 +4234,7 @@ let noStun = localStorage.getItem('runordie_noStun') === '1';
 let punchStun = localStorage.getItem('runordie_punchStun') === '1';
 // Stick-Empfindlichkeit fürs Gamepad (0.5–2, Regler im Menü): skaliert die
 // Analog-Achsen beider Sticks, D-Pad bleibt digital ±1
-let padSens = Math.min(2, Math.max(0.5, parseFloat(localStorage.getItem('runordie_padSens')) || 1));
+let padSens = Math.min(4, Math.max(0.5, parseFloat(localStorage.getItem('runordie_padSens')) || 1));
 
 // ---------- Solo-Highscores (Top 8, mit Namen) ----------
 // Versioniert: Balance-Änderungen (Tempo-Rampe, Spawn-Dichte, Laser-Takt) machen
