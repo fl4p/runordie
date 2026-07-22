@@ -4978,11 +4978,8 @@ function updatePlayer(p, dt) {
       const len = Math.hypot(dx, dz);
       if (len > 1) { dx /= len; dz /= len; }
 
-      // Dreh-Modus: Eingabe vom Figuren- ins Welt-Koordinatensystem drehen.
-      // Auf Touch NICHT: dort dreht die freie Kamera nur die Ansicht, die
-      // Steuerung bleibt bildschirmfest — sonst wurde "seitwärts" bei gedrehter
-      // Kamera zu vor/zurück und die Figur klemmte in x (Bug-Report #3)
-      if (rotMode && !isTouch && (dx || dz)) {
+      // Dreh-Modus: Eingabe vom Figuren- ins Welt-Koordinatensystem drehen
+      if (rotMode && (dx || dz)) {
         const c = Math.cos(p.yaw), s = Math.sin(p.yaw);
         const wx = dx * c + dz * s;
         const wz = -dx * s + dz * c;
@@ -5139,6 +5136,13 @@ function animate() {
   if (state === 'menu' && !cpuProf && (menuSkip = !menuSkip)) return;
   if (cpuProf) { const _n = performance.now(); if (cpuBuf.top) cpuBuf.intervals.push(_n - cpuBuf.top); cpuBuf.top = _n; }
   const dt = Math.min(clock.getDelta(), 0.05);
+  // net #1 — Umwelt bei Snapshot-Unterlauf mitfrieren: läuft der Replik der Puffer
+  // leer (Netzhänger/Jitter), klemmt netApplySnapshots die interpolierten Spieler
+  // am neuesten Snapshot fest. Die kinematische Umwelt darf dann NICHT weiterlaufen,
+  // sonst marschieren Wände/Hindernisse durch die stehenden Figuren (das sichtbare
+  // "Charakter verschwindet in der Wand"). envDt=0 hält Uhr + Kinematik solange an;
+  // der Host (kein Client) rechnet immer mit vollem dt.
+  const envDt = (netRole === 'client' && !netNoFreeze && netEnvFrozen()) ? 0 : dt;
 
   // Tag/Nacht wechselt von selbst im 25-s-Takt; der Übergang gleitet in ~6 s
   // durch eine Dämmerungsphase — Sonnenuntergang bzw. -aufgang um die Mitte
@@ -5167,7 +5171,7 @@ function animate() {
   netTick(dt); // Online: Host wendet Client-Eingaben an, Client posiert die Replik
 
   if (state === 'playing') {
-    elapsed += dt;
+    elapsed += envDt; // Replik: friert bei Unterlauf ein (Formel-Hindernisse ruhen mit)
     if (netRole !== 'client') { // Replik: Spawns kommen als Events vom Host
       spawnTimer -= dt;
       if (spawnTimer <= 0) {
@@ -5195,7 +5199,7 @@ function animate() {
       }
     }
     updatePowerups(dt);
-    updateLasers(dt);
+    updateLasers(envDt); // Replik: Laser-Vorschub friert bei Unterlauf mit ein
     updateRush();
     hudTimer -= dt;
     if (hudTimer <= 0) {
@@ -5259,7 +5263,7 @@ function animate() {
     }
   }
 
-  if (state !== 'menu') updateSharks(dt);
+  if (state !== 'menu') updateSharks(envDt); // Replik: friert bei Unterlauf mit ein
 
   if (state !== 'menu') {
     if (netRole !== 'client') world.step(1 / 60, dt, 3);
@@ -5268,9 +5272,9 @@ function animate() {
       // world.step es beim Host tut (Formel-Hindernisse setzen x/y vorher absolut)
       for (const o of obstacles) {
         const b = o.body;
-        b.position.x += b.velocity.x * dt;
-        b.position.y += b.velocity.y * dt;
-        b.position.z += b.velocity.z * dt;
+        b.position.x += b.velocity.x * envDt;
+        b.position.y += b.velocity.y * envDt;
+        b.position.z += b.velocity.z * envDt;
       }
     }
   }
@@ -5290,6 +5294,7 @@ function animate() {
     }
   } else {
     netApplyPrediction(dt); // eigene Figur(en) lokal vorausrechnen (siehe netPredictSeat)
+    netCountClips();         // Test-Metrik: Torso-in-Wand-Frames zählen
   }
   checkInvariants();
   // Rauchfahne + Tarnungs-Ablauf-Flanke: läuft zustandsUNabhängig (auch Menü,
@@ -5425,6 +5430,9 @@ const NET_INTERP = 0.12; // s Interpolationspuffer der Replik
 // Test/Diagnose: P2P abschalten -> alles läuft übers Relay (nur so greift die
 // künstliche Server-Latenz LAG, WebRTC ginge direkt an ihr vorbei).
 const netNoP2P = new URLSearchParams(location.search).get('nop2p') === '1';
+// Test/Diagnose: net #1 (Umwelt-Einfrieren bei Unterlauf) abschalten -> A/B-Vergleich
+const netNoFreeze = new URLSearchParams(location.search).get('nofreeze') === '1';
+let netClipFrames = 0; // Test-Metrik: Client-Frames mit Torso IN einem Hindernis
 
 const myP = () => players[netRole ? netMySlot : 0];
 // Sitz i (0/1) -> gesteuerter Spieler. Bei nur 1 Sitz zeigen beide auf denselben,
@@ -5891,6 +5899,35 @@ function netDecodeSnapshot(dv) {
 
 // Pose der Replik: zwischen zwei Snapshots interpolieren, in die Körper schreiben
 // (syncMeshes kopiert sie dann unverändert in die Meshes)
+// net #1 — Unterlauf-Erkennung: TRUE, sobald die Renderzeit über den neuesten
+// Snapshot hinausläuft (Puffer leer). Dann klemmt netApplySnapshots die Posen fest
+// (k = 1), also muss die Umwelt ebenfalls anhalten (envDt=0 in animate). Ohne
+// Snapshots (noch nicht gestartet / Runde neu) ruht die Umwelt ebenfalls.
+function netEnvFrozen() {
+  if (!netSnaps.length) return true;
+  const latest = netSnaps[netSnaps.length - 1];
+  const tRender = latest.tHost - NET_INTERP + (perfNow() - latest.arrived);
+  return tRender > latest.tHost;
+}
+
+// Test-Metrik für net #1: zählt Frames, in denen der Torso einer lebenden Figur
+// SPÜRBAR in einer Hindernis-Box steckt (kleine Marge, damit bloßes Anstehen nicht
+// zählt). Ohne Einfrieren steigt das unter Jitter deutlich (Wände laufen durch die
+// stehenden Figuren); mit net #1 bleibt es gering.
+function netCountClips() {
+  for (const p of players) {
+    if (p.parked || !p.alive) continue;
+    const t = p.torso.position;
+    for (const o of obstacles) {
+      const b = o.body, he = b.shapes[0]?.halfExtents;
+      if (!he) continue;
+      if (Math.abs(t.x - b.position.x) < he.x - 0.2 &&
+          Math.abs(t.y - b.position.y) < he.y - 0.2 &&
+          Math.abs(t.z - b.position.z) < he.z - 0.05) { netClipFrames++; return; }
+    }
+  }
+}
+
 function netApplySnapshots() {
   if (!netSnaps.length) return;
   const latest = netSnaps[netSnaps.length - 1];
@@ -7713,6 +7750,7 @@ window.__game = { players, obstacles, powerups, world, cams, sky, fxRings, laser
   get netRoster() { return netRoster.slice(); }, get netMySlot() { return netMySlot; },
   get netMySeats() { return netMySeats.slice(); }, get netLocalSeats() { return netLocalSeats; }, set netLocalSeats(v) { netLocalSeats = v === 2 ? 2 : 1; },
   get netPing() { return netPing; }, netStat,
+  get netClipFrames() { return netClipFrames; }, resetNetClipFrames: () => { netClipFrames = 0; },
   get netReconnecting() { return !!netReconnect; },
   netDropWs: () => { try { netWs && netWs.close(); } catch { /* egal */ } }, // Test: unerwarteten Abbruch simulieren
   get netSnaps() { return netSnaps.length; }, get netNames() { return { ...netNames }; },

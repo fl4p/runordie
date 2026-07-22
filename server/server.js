@@ -15,6 +15,7 @@ import { userForToken, recordOnline } from './db.js';
 
 const PORT = +(process.env.PORT || 8080);
 const LAG = +(process.env.LAG || 0); // ms künstliche Einweg-Latenz (Latenz-Tests)
+const JITTER = +(process.env.JITTER || 0); // ms zufälliger Zuschlag auf LAG (Jitter-Tests)
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const MAX_PLAYERS = 4;
 const MAX_CONNS = +(process.env.MAX_CONNS || 500); // Gesamt-Verbindungslimit
@@ -169,7 +170,11 @@ function newCode() {
 const send = (ws, data, binary = false) => {
   if (ws?.readyState !== ws?.OPEN) return;
   const doSend = () => { if (ws.readyState === ws.OPEN) ws.send(data, { binary }); };
-  LAG ? setTimeout(doSend, LAG) : doSend();
+  // JITTER (ms): zufälliger Zuschlag auf LAG — variiert die Ankunftszeit, packt
+  // Frames außer der Reihe -> der tHost-Guard verwirft ältere -> Snapshot-Unterlauf.
+  // So lässt sich das Einfrieren der Umwelt (net #1) im Test provozieren.
+  const delay = LAG + (JITTER ? Math.random() * JITTER : 0);
+  delay > 0 ? setTimeout(doSend, delay) : doSend();
 };
 const sendJson = (ws, obj) => send(ws, JSON.stringify(obj));
 
