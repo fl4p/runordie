@@ -65,7 +65,7 @@ const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // ohne I/O/0/1 (Verwe
 const online = new Map();
 
 function presenceList() {
-  return [...online.values()].map((w) => ({
+  return [...online.values()].filter((w) => w.user).map((w) => ({ // Gürtel + Hosenträger: nie an null-user scheitern
     id: w.user.id,
     name: w.user.username,
     busy: !!w.roomCode, // in einem Raum (Lobby oder Partie) -> nicht einladbar
@@ -187,12 +187,17 @@ function handleMessage(ws, data, isBinary) {
     if (msg.t === 'invite') {
       const now = Date.now();
       if (now - (ws.inviteAt || 0) > 10000) { ws.inviteAt = now; ws.inviteCount = 0; }
-      if ((ws.inviteCount = (ws.inviteCount || 0) + 1) > 10) return; // Spam-Bremse
+      if ((ws.inviteCount = (ws.inviteCount || 0) + 1) > 10) return; // Gesamt-Spam-Bremse
       const r = ws.roomCode ? rooms.get(ws.roomCode) : null;
       if (!ws.user || !r || r.locked) return;                    // nur aus einem offenen Raum
       if (r.clients.size >= MAX_PLAYERS - 1) return;             // kein freier Slot
-      const target = online.get(msg.to | 0);
+      const tId = msg.to | 0;
+      const target = online.get(tId);
       if (!target || target === ws || target.roomCode) return;   // offline / man selbst / schon im Raum
+      // Denselben Spieler nicht dauernd zutoasten (max. 1× / 30 s je Ziel)
+      ws.invSeen = ws.invSeen || new Map();
+      if (now - (ws.invSeen.get(tId) || 0) < 30000) return;
+      ws.invSeen.set(tId, now);
       sendJson(target, { t: 'invited', from: ws.user.username, code: ws.roomCode });
       return;
     }
@@ -278,6 +283,13 @@ function handleMessage(ws, data, isBinary) {
 // Schlägt sie fehl, bleibt der Spieler anonym — Online-Spielen geht auch ohne Konto.
 function authWs(ws, token) {
   const u = token ? userForToken(token) : null;
+  // Ändert oder verliert die Verbindung ihre Identität, den alten online-Eintrag
+  // entfernen — nie ein Socket mit user=null in `online` zurücklassen. Sonst
+  // würfe presenceList() für ALLE und der unentfernbare Eintrag (clearOnline
+  // verlangt ws.user) bräche Präsenz/Einladungen bis zum Neustart.
+  if (ws.user && online.get(ws.user.id) === ws && (!u || u.id !== ws.user.id)) {
+    online.delete(ws.user.id);
+  }
   ws.user = u || null;
   ws.name = u ? u.username : null;
 }
