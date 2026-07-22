@@ -195,6 +195,25 @@
   #msg .senslabel input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border: none; border-radius: 50%; background: #4da3ff; }
   #msg .senslabel #sensval { opacity: .7; min-width: 34px; text-align: right; flex: none; margin-left: auto; }
   /* ---- Fußzeile (Tastatur-Hinweise) ---- */
+  #netpause { position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    background: rgba(6,9,13,.55); pointer-events: auto; }
+  #netpause.hidden { display: none; }
+  #netpause .nppanel { width: min(360px, 92vw); max-height: calc(100dvh - 24px); overflow-y: auto; -webkit-overflow-scrolling: touch;
+    display: flex; flex-direction: column; gap: 8px; padding: 18px; border-radius: 16px;
+    background: rgba(13,17,23,.9); border: 1px solid rgba(230,237,243,.14); box-shadow: 0 12px 48px rgba(0,0,0,.5);
+    -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+  #netpause .nptitle { font-weight: 800; font-size: 20px; letter-spacing: 1px; text-align: center; margin-bottom: 2px; }
+  #netpause .npnote { font-size: 12.5px; opacity: .6; text-align: center; margin-bottom: 4px; }
+  #netpause .npsgh { display: block; font-size: 11px; font-weight: 700; letter-spacing: 1.4px; text-transform: uppercase; opacity: .5; margin: 8px 0 2px; }
+  #netpause .npbody > button, #netpause .npbig {
+    display: flex; width: 100%; box-sizing: border-box; align-items: center; gap: 10px; min-height: 44px;
+    text-align: left; font: inherit; font-size: 13px; padding: 9px 12px; margin: 4px 0 0; cursor: pointer;
+    border-radius: 10px; border: 1px solid rgba(230,237,243,.12); background: rgba(230,237,243,.04); color: #e6edf3; }
+  #netpause .npbody > button::after { content: "⇄"; margin-left: auto; opacity: .4; }
+  #netpause .npbody > button:active, #netpause .npbig:active { background: rgba(230,237,243,.12); }
+  #netpause .npbig { justify-content: center; font-size: 14px; font-weight: 700; margin-top: 8px; }
+  #netpause .npdanger { border-color: rgba(255,107,107,.4); color: #ff8f8f; background: rgba(255,107,107,.08); }
   #msg .mver { display: block; font-size: 11px; opacity: .4; margin-top: 4px; letter-spacing: .3px; }
   #msg .mkeys { display: block; font-size: 11.5px; font-weight: 400; opacity: .45; letter-spacing: .3px; margin-top: 10px; }
   /* ---- Tablet/Desktop (und Handy quer ab 640px Breite) ---- */
@@ -335,6 +354,16 @@
   <div class="tbtn" id="btnGhost">🌑</div>
   <div class="tbtn" id="btnExit">✕</div>
 </div>
+<div id="netpause" class="hidden"><div class="nppanel">
+  <div class="nptitle">☰ SPIEL-MENÜ</div>
+  <span class="npnote" id="npnote"></span>
+  <span class="npbody" id="npsettings">
+    <span class="npsgh">🎲 Regeln (ab der nächsten Runde)</span>
+    <button id="npdive"></button><button id="npstun"></button><button id="npsnow"></button>
+  </span>
+  <button id="npresume" class="npbig">▶ Weiter spielen</button>
+  <button id="npleave" class="npbig npdanger">🚪 Raum verlassen</button>
+</div></div>
 <div class="hud" id="msg"><span class="mtitle">RUN <em>OR</em> DIE</span>
   <span class="tagline">Ragdoll-Runner: Hindernisse rollen an — weich aus, spring drüber, überleb!</span>
   <span class="modes">
@@ -3003,7 +3032,7 @@ addEventListener('keydown', (e) => {
     return;
   }
   if (['Space', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
-  if (e.code === 'Escape') { backToMenu(); return; }
+  if (e.code === 'Escape') { netRole ? toggleNetPause() : backToMenu(); return; }
   // Einstellungs-Tasten funktionieren auch im Menü (starten das Spiel nicht)
   if (!e.repeat && e.code === 'KeyR') { toggleRotMode(); return; }
   if (state === 'menu') {
@@ -3371,7 +3400,7 @@ function applyTouchInput() {
   bindBtn('btnPunch', () => tryPunch(netRole ? netSeat(0) : player1));
   bindBtn('btnSlide', () => tryTackle(netRole ? netSeat(0) : player1));
   bindBtn('btnGhost', () => tryGhost(netRole ? netSeat(0) : player1)); // 🌑-Tarnung auch per Touch
-  bindBtn('btnExit', () => { if (!benchRunning) backToMenu(); }); // nicht mitten im Benchmark abbrechen
+  bindBtn('btnExit', () => { if (benchRunning) return; netRole ? toggleNetPause() : backToMenu(); }); // online: Overlay, nicht Raum abreißen
 
   // Geister-Maus-Events der Touch-Bedienung unterdrücken (Scroll/Zoom sowieso)
   el('touchui').addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
@@ -4351,6 +4380,7 @@ function startGame(solo = false, vsBot = false) {
 }
 
 function backToMenu() {
+  $('netpause')?.classList.add('hidden'); // Spiel-Overlay schließen
   if (netWs || netRole || netUiOpen) netLeave(); // Online-Runde/Lobby sauber verlassen
   state = 'menu';
   // botMode bleibt wie soloMode stehen: so rendert der Menü-Hintergrund weiter
@@ -4467,6 +4497,15 @@ document.addEventListener('click', (e) => {
     padCaptureSeed = !!padCapture;
     updateDiveBtn();
   }
+  if (id === 'npresume') toggleNetPause(false);
+  if (id === 'npleave') { toggleNetPause(false); backToMenu(); } // einziger Pfad, der den Raum wirklich verlässt
+  if (netRole === 'host' && (id === 'npdive' || id === 'npstun' || id === 'npsnow')) {
+    if (id === 'npdive') { diveAlways = !diveAlways; localStorage.setItem('runordie_diveAlways', diveAlways ? '1' : '0'); }
+    if (id === 'npstun') { noStun = !noStun; localStorage.setItem('runordie_noStun', noStun ? '1' : '0'); }
+    if (id === 'npsnow') { snowZones = !snowZones; localStorage.setItem('runordie_snow', snowZones ? '1' : '0'); if (!snowZones && snowActive) endSnow(true); }
+    netBroadcastSettings();
+    updateNetPause();
+  }
   if (id === 'padmapreset') {
     padMap = null; padCapture = null;
     localStorage.removeItem('runordie_padMap');
@@ -4521,6 +4560,7 @@ function submitSoloScore() {
 }
 
 function resetRound() {
+  $('netpause')?.classList.add('hidden'); // Spiel-Overlay verdeckt sonst das Sieger-Banner
   clearObstacles(); clearPowerups(); clearLasers(); clearRushTiles(); clearSharks();
   elapsed = 0; spawnTimer = 1.2; puTimer = 4; sharkTimer = 6; firstDeathAt = 0; spawnCount = 0;
   if (snowActive) endSnow(true);
@@ -5965,6 +6005,11 @@ function netApplyEvent(m) {
       return;
     }
     case 'sky': dayMode = !!m.day; return; // Tag/Nacht-Ziel kommt vom Host
+    case 'settings': // Host hat im Spiel-Menü die Regeln angepasst
+      if ('diveAlways' in m) diveAlways = !!m.diveAlways;
+      if ('noStun' in m) noStun = !!m.noStun;
+      if ('snowZones' in m) { snowZones = !!m.snowZones; if (!snowZones && snowActive) endSnow(true); }
+      return;
     case 'breach': { // Sprenghecht: identischer Split wie auf dem Host
       const segs = breachWallAt(m.id, m.hx);
       (m.segIds || []).forEach((sid, i) => { if (segs[i]) segs[i].netId = sid; });
@@ -6042,6 +6087,38 @@ function netHostHoldForReconnect() {
     netHostHoldTimer = 0;
     if (netRole === 'host' && netRoster.length < 2) { flashPad('🌐 Niemand zurückgekehrt — zurück zum Menü', '#ff6b6b'); backToMenu(); }
   }, 16000);
+}
+
+// Spiel-Overlay: Raum bleibt bestehen (kein state-Wechsel) — der Host kann
+// Regeln anpassen, ESC/❌ schließt es wieder. Ersetzt den alten ESC→backToMenu-
+// Pfad online, der über netLeave den ganzen Raum abriss (auch wenn nur der
+// tote Host kurz ins Menü wollte).
+function toggleNetPause(show) {
+  const el = $('netpause'); if (!el) return;
+  const open = show ?? el.classList.contains('hidden');
+  el.classList.toggle('hidden', !open);
+  if (open) {
+    // lokale Figuren nicht mit gehaltener Taste weiterlaufen lassen
+    for (const s of (netMySeats || [0])) { const p = players[s]; if (p) { p.keys.f = p.keys.b = p.keys.l = p.keys.r = false; p.padX = p.padZ = 0; } }
+    updateNetPause();
+  }
+}
+function updateNetPause() {
+  const host = netRole === 'host';
+  const n = $('npnote'); if (n) n.textContent = host
+    ? 'Der Raum läuft weiter. Regeln gelten ab der nächsten Runde.'
+    : 'Der Raum läuft weiter. Die Regeln bestimmt der Host.';
+  const box = $('npsettings'); if (box) box.style.display = host ? '' : 'none';
+  if (host) {
+    const d = $('npdive'); if (d) d.textContent = diveAlways ? '🤸 Hechtsprung: IMMER (klassisch)' : '🤸 Hechtsprung: nur mit 💎';
+    const s = $('npstun'); if (s) s.textContent = noStun ? '💫 Hindernis-Stun: AUS (nur Schieben)' : '💫 Hindernis-Stun: AN';
+    const w = $('npsnow'); if (w) w.textContent = snowZones ? '❄️ Eiszonen: AN' : '🌤️ Eiszonen: AUS';
+  }
+}
+// Host broadcastet geänderte Regeln; die Replik übernimmt sie (greifen ab
+// dem nächsten resetRound bzw. sofort für pro-Frame gelesene Flags)
+function netBroadcastSettings() {
+  if (netRole === 'host') netSendJson({ k: 'settings', diveAlways, noStun, snowZones });
 }
 
 function netResetState() {
