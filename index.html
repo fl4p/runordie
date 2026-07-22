@@ -4978,8 +4978,11 @@ function updatePlayer(p, dt) {
       const len = Math.hypot(dx, dz);
       if (len > 1) { dx /= len; dz /= len; }
 
-      // Dreh-Modus: Eingabe vom Figuren- ins Welt-Koordinatensystem drehen
-      if (rotMode && (dx || dz)) {
+      // Dreh-Modus: Eingabe vom Figuren- ins Welt-Koordinatensystem drehen.
+      // Auf Touch NICHT: dort dreht die freie Kamera nur die Ansicht, die
+      // Steuerung bleibt bildschirmfest — sonst wurde "seitwärts" bei gedrehter
+      // Kamera zu vor/zurück und die Figur klemmte in x (Bug-Report #3)
+      if (rotMode && !isTouch && (dx || dz)) {
         const c = Math.cos(p.yaw), s = Math.sin(p.yaw);
         const wx = dx * c + dz * s;
         const wz = -dx * s + dz * c;
