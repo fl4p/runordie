@@ -863,12 +863,19 @@ function graffitiTex(word) {
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
+// KOSMETISCHER Zufall (Graffiti/Deko): das native Math.random, VOR jedem
+// Spawn-Recording festgehalten. netCall überschreibt für Spawns global Math.random,
+// um jeden Wert aufzuzeichnen (Client spielt sie identisch nach). Rein visuelle
+// Zufälle brauchen das NICHT — sie dürfen auf Host und Client abweichen. Über crand
+// laufen sie am Recorder vorbei: sie landen nicht in r[] (kleinere Spawn-Events) und
+// verbrauchen beim Replay nichts (die Spielzufälle bleiben Byte-genau ausgerichtet).
+const crand = Math.random;
 const graffitiPool = GRAFFITI_WORDS.map(graffitiTex);
-const pickGraffiti = () => graffitiPool[Math.floor(Math.random() * graffitiPool.length)];
+const pickGraffiti = () => graffitiPool[Math.floor(crand() * graffitiPool.length)];
 
 // Auf die Straße gesprühte Tags
 function addStreetGraffiti(parent, x, z) {
-  const w = 2.6 + Math.random() * 1.8;
+  const w = 2.6 + crand() * 1.8; // kosmetisch (nicht aufzeichnen)
   const mat = new THREE.MeshStandardMaterial({
     map: pickGraffiti(), transparent: true, opacity: 0.85, roughness: 1, depthWrite: false,
   });
@@ -876,7 +883,7 @@ function addStreetGraffiti(parent, x, z) {
   const m = new THREE.Mesh(new THREE.PlaneGeometry(w, w * 0.5), mat);
   m.userData.ownedGeo = true;            // Geometrie pro Decal (zufällige Größe)
   m.rotation.x = -Math.PI / 2;
-  m.rotation.z = (Math.random() - 0.5) * 0.9;
+  m.rotation.z = (crand() - 0.5) * 0.9;
   m.position.set(x, 0.045, z);
   m.renderOrder = 1;
   parent.add(m);
@@ -1048,7 +1055,10 @@ function updateRush() {
 
 // Graffiti-Decal an eine Hindernis-Wand hängen (fährt als Kind-Mesh mit)
 function addWallGraffiti(mesh, w, halfH, depth) {
-  if (w < 1.6 || Math.random() > 0.65) return;
+  // crand: rein visuelles Graffiti — NICHT ins Spawn-Replay aufzeichnen. Läuft während
+  // spawnObstacle/spawnWave (die netCall aufzeichnet); über crand bleibt r[] klein und
+  // die Spielzufälle (Wand-/Lücken-Maße davor) exakt ausgerichtet.
+  if (w < 1.6 || crand() > 0.65) return;
   const gw = Math.min(w * 0.85, 4.2);
   const gh = gw * 0.5;
   const yMax = Math.min(halfH - gh / 2, -halfH + 2.4);
@@ -1059,8 +1069,8 @@ function addWallGraffiti(mesh, w, halfH, depth) {
   mat.userData.ownedMat = true; // Material entsorgen, Textur bleibt im Pool
   const plane = new THREE.Mesh(new THREE.PlaneGeometry(gw, gh), mat);
   plane.position.set(
-    (Math.random() - 0.5) * Math.max(0, w - gw - 0.2),
-    -halfH + gh / 2 + 0.15 + Math.random() * Math.max(0, yMax - (-halfH + gh / 2)),
+    (crand() - 0.5) * Math.max(0, w - gw - 0.2),
+    -halfH + gh / 2 + 0.15 + crand() * Math.max(0, yMax - (-halfH + gh / 2)),
     depth + 0.02
   );
   plane.renderOrder = 1;
