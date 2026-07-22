@@ -1342,7 +1342,7 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
     magnetUntil: 0, wasMagnet: false, invulnUntil: 0, wasInvuln: false,
     tackling: false, tackleCd: 0,
     hanging: false, hangCd: 0, hangLift: 0, hangUntil: 0,
-    punchCooldown: 0, arms: [],
+    punchCooldown: 0, breach: 0, arms: [],
     yaw: 0, padYawRate: 0, diving: false,
   };
 
@@ -1407,7 +1407,12 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
   // Treffer durch Hindernisse -> Schild oder kurzer Ragdoll-Stun.
   // An ALLEN Körperteilen, sonst zählen Bein-/Kopftreffer (niedrige Latten!) nicht.
   const onHit = (e) => {
-    if (!p.alive || state !== 'playing' || noStun || perfNow() < p.invulnUntil) return;
+    if (!p.alive || state !== 'playing') return;
+    // 💣 Sprenghecht: Einschlag im Hechtsprung sprengt ein Loch in die Wand —
+    // greift vor noStun/Schild und verbraucht eine Ladung (der Host entscheidet)
+    if (netRole !== 'client' && p.diving && p.breach > 0 && e.body.isObstacle &&
+        Math.abs(e.contact.ni.y) < 0.6 && tryBreach(p, e.body)) return;
+    if (noStun || perfNow() < p.invulnUntil) return;
     if (e.body.isObstacle && perfNow() > p.hitCooldown) {
       // Landung auf einer Oberseite (Kontaktnormale ~vertikal) ist kein Treffer —
       // sonst wäre z.B. das Tunneldach nicht bespielbar
@@ -1463,7 +1468,7 @@ function exitRagdoll(p) {
 
 function resetPlayer(p) {
   p.alive = true; p.jumps = 0; p.jumpLock = 0; p.hitCooldown = 0;
-  p.airCharges = 0; p.shield = 0; p.punchPower = 0; p.punchCooldown = 0; p.yaw = 0; p.diving = false;
+  p.airCharges = 0; p.shield = 0; p.punchPower = 0; p.breach = 0; p.punchCooldown = 0; p.yaw = 0; p.diving = false;
   p.slowUntil = 0; p.wasSlowed = false; p.magnetUntil = 0; p.wasMagnet = false;
   p.invulnUntil = 0; p.wasInvuln = false;
   p.tackling = false; p.tackleCd = 0; p.hanging = false; p.hangCd = 0; p.hangLift = 0;
@@ -1568,7 +1573,10 @@ texConcrete.repeat.set(3, 1.2);
 const tiledTexCache = new Map();
 function tiledTex(baseTex, rx, ry) {
   const qx = Math.round(rx * 4) / 4, qy = Math.round(ry * 4) / 4;
-  const key = `${baseTex.uuid}|${qx}|${qy}`;
+  // source.uuid statt Textur-uuid: Klone teilen die Bildquelle. Sonst zählte
+  // jeder Cache-Klon als eigener Parent (Klon-von-Klon, sobald Sprengloch-
+  // Segmente aus Wand-Klonen entstehen) und der Cache wüchse unbegrenzt.
+  const key = `${baseTex.source.uuid}|${qx}|${qy}`;
   let t = tiledTexCache.get(key);
   if (!t) {
     t = baseTex.clone(); t.needsUpdate = true; t.repeat.set(qx, qy);
@@ -1810,6 +1818,143 @@ function explodeBlock(o) {
   const i = obstacles.indexOf(o);
   if (i >= 0) { removeObstacle(o); obstacles.splice(i, 1); }
   if (netRole === 'host') netSendJson({ k: 'explode', id: o.netId });
+}
+
+// ---------- 💣 Sprenghecht: Loch in die Wand sprengen ----------
+// Nur dünne, wandartige Hindernisse: keine Walzen/Schieber/TNT/Pads/Pendel/
+// Stampfer und keine dicken Tunnelsegmente (he.z > 0.8)
+function breachTarget(body) {
+  const o = obstacles.find((ob) => ob.body === body);
+  if (!o || o.boom || o.sweep || o.spin || o.wreck || o.piston || o.instanced || body.isJumpPad) return null;
+  const he = body.shapes[0]?.halfExtents;
+  if (!he || he.y < 0.5 || he.x < 1.1 || he.z > 0.8) return null;
+  return o;
+}
+
+// Verkohlter, ausgefranster Sprengrand (einmal erzeugt, von allen Löchern geteilt):
+// gezacktes Ruß-Polygon mit freigestelltem Zentrum + Schmauch-Strahlen. Das Decal
+// überlappt die geraden Segmentkanten — dadurch wirkt das rechteckige Loch gezackt.
+const scorchTex = (() => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const g = c.getContext('2d');
+  g.translate(128, 128);
+  const jag = (rBase, rVar, n) => {
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      const r = rBase + Math.random() * rVar;
+      pts.push([Math.cos(a) * r, Math.sin(a) * r]);
+    }
+    return pts;
+  };
+  const poly = (pts) => {
+    g.beginPath(); g.moveTo(...pts[0]);
+    for (const q of pts.slice(1)) g.lineTo(...q);
+    g.closePath();
+  };
+  poly(jag(78, 46, 22)); g.fillStyle = 'rgba(12,9,7,0.88)'; g.fill();   // Ruß außen
+  poly(jag(58, 26, 18)); g.fillStyle = 'rgba(26,15,9,0.96)'; g.fill();  // verkohlter Rand
+  g.globalCompositeOperation = 'destination-out';
+  poly(jag(34, 16, 14)); g.fill();                                      // Loch freistellen
+  g.globalCompositeOperation = 'source-over';
+  for (let i = 0; i < 14; i++) { // Schmauch-Strahlen
+    const a = Math.random() * Math.PI * 2, len = 90 + Math.random() * 36;
+    g.strokeStyle = `rgba(15,10,7,${0.25 + Math.random() * 0.3})`;
+    g.lineWidth = 3 + Math.random() * 7;
+    g.beginPath(); g.moveTo(Math.cos(a) * 40, Math.sin(a) * 40);
+    g.lineTo(Math.cos(a) * len, Math.sin(a) * len); g.stroke();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+})();
+const scorchMat = new THREE.MeshStandardMaterial({
+  map: scorchTex, transparent: true, roughness: 0.95, depthWrite: false,
+});
+
+// Deterministischer Wand-Split — läuft mit denselben Argumenten identisch auf
+// Host und Client-Replik ('breach'-Event), daher hier KEIN Math.random.
+// Loch ab Boden (der Spieler soll durchlaufen), seitlich volle Segmente, über
+// dem Loch bleibt ein Sturz stehen; Ziegel-Dichte der Originalwand übernommen.
+function breachWallAt(netId, hitX) {
+  const idx = obstacles.findIndex((ob) => ob.netId === netId);
+  if (idx < 0) return [];
+  const o = obstacles[idx];
+  const b = o.body, he = b.shapes[0].halfExtents;
+  const cx = b.position.x, cy = b.position.y, cz = b.position.z;
+  const vx = b.velocity.x, vz = b.velocity.z;
+  const bottom = cy - he.y, top = cy + he.y;
+  // holeW 2.0: ergibt für botFindGapX eine 1.3-m-Lücke — 1.8 läge mit
+  // 1.8 − 2×0.35 Pad exakt AUF der 1.1-m-Schwelle (Float-Münzwurf, ob
+  // Bots das Loch sehen) und wäre auch für Menschen unnötig knapp
+  const holeW = 2.0, holeH = Math.min(he.y * 2, 2.3);
+  const hx = Math.max(cx - he.x + holeW / 2, Math.min(cx + he.x - holeW / 2, hitX));
+  const rep = o.mesh.material.map?.repeat;
+  const dxDen = rep ? rep.x / (he.x * 2) : 1, dyDen = rep ? rep.y / (he.y * 2) : 1;
+  const baseTex = o.mesh.material.map, rough = o.mesh.material.roughness;
+  const stun = b.isObstacle;
+  const segs = [];
+  const mk = (w, h, x, y) => {
+    if (w < 0.25 || h < 0.2) return;
+    const seg = addObstBody(
+      new CANNON.Box(new CANNON.Vec3(w / 2, h / 2, he.z)),
+      new CANNON.Vec3(x, y, cz),
+      baseTex
+        ? tiledMat(baseTex, dxDen * w, dyDen * h, { roughness: rough })
+        : (() => { const m = o.mesh.material.clone(); m.userData.ownedMat = true; return m; })(),
+      new THREE.BoxGeometry(w, h, he.z * 2)
+    );
+    seg.body.velocity.set(vx, 0, vz);
+    seg.body.isObstacle = stun;
+    segs.push(seg);
+  };
+  mk((hx - holeW / 2) - (cx - he.x), he.y * 2, ((cx - he.x) + (hx - holeW / 2)) / 2, cy); // links
+  mk((cx + he.x) - (hx + holeW / 2), he.y * 2, ((hx + holeW / 2) + (cx + he.x)) / 2, cy); // rechts
+  const restH = he.y * 2 - holeH;
+  if (restH > 0.2) mk(holeW, restH, hx, top - restH / 2);                                 // Sturz überm Loch
+  if (segs.length) {
+    // Sprengrand vorn und hinten: hängt am ersten Segment und fährt mit
+    const anchor = segs[0];
+    const ax = anchor.body.position.x, ay = anchor.body.position.y;
+    for (const dz of [he.z + 0.03, -(he.z + 0.03)]) {
+      const decal = new THREE.Mesh(
+        new THREE.PlaneGeometry(holeW * 2.1, Math.min(holeH * 1.7, he.y * 2)),
+        scorchMat // geteilt: removeObstacle disposed nur owned/ownedMat, die frische PlaneGeometry schon
+      );
+      decal.position.set(hx - ax, bottom + holeH / 2 - ay, dz);
+      if (dz < 0) decal.rotation.y = Math.PI;
+      decal.renderOrder = 1;
+      anchor.mesh.add(decal);
+    }
+  }
+  spawnFireball({ x: hx, y: bottom + holeH * 0.5, z: cz });
+  spawnShockwave({ x: hx, y: bottom + holeH * 0.6, z: cz }, { x: 0, y: 0, z: 1 }, true);
+  playBoom();
+  const i2 = obstacles.indexOf(o);
+  removeObstacle(o); obstacles.splice(i2, 1);
+  return segs;
+}
+
+// Host-/Offline-Seite: Ladung verbrauchen, Wand teilen, Replik informieren
+function tryBreach(p, body) {
+  const o = breachTarget(body);
+  if (!o) return false;
+  if (netRole === 'host' && !o.netId) return false; // ohne netId keine Replik-Sync
+  p.breach--;
+  updatePowerupHud();
+  const hitX = p.torso.position.x;
+  const id = o.netId ?? (o.netId = netNewId()); // offline: id nur für die lokale Suche
+  const segs = breachWallAt(id, hitX);
+  if (netRole === 'host') {
+    const segIds = segs.map((s) => (s.netId = netNewId()));
+    netSendJson({ k: 'breach', id, hx: hitX, segIds });
+  }
+  // Durchbruch statt Stun: kurz abbremsen und Treffer-Schonfrist, damit die
+  // frischen Randsegmente den Sprenger nicht sofort selbst stunnen
+  p.torso.velocity.z *= 0.4;
+  p.hitCooldown = Math.max(p.hitCooldown, perfNow() + 0.6);
+  return true;
 }
 
 // ---------- Laser: wandern langsam über die Straße, werden mit der Zeit mehr ----------
@@ -2422,6 +2567,7 @@ const puMats = {
   slow: new THREE.MeshStandardMaterial({ color: 0xc86bff, emissive: 0x6a1fa8, roughness: 0.3 }),
   magnet: new THREE.MeshStandardMaterial({ color: 0xe84d4d, emissive: 0x8c1a1a, roughness: 0.35 }),
   invuln: new THREE.MeshStandardMaterial({ color: 0xffd23d, emissive: 0xb8860b, roughness: 0.2, metalness: 0.5 }),
+  breach: new THREE.MeshStandardMaterial({ color: 0x3a3f47, emissive: 0xff5a1f, emissiveIntensity: 0.7, roughness: 0.35, metalness: 0.3 }),
   magnetTip: new THREE.MeshStandardMaterial({ color: 0xd8dde6, emissive: 0x5a6070, roughness: 0.25, metalness: 0.7 }),
 };
 
@@ -2446,9 +2592,11 @@ function spawnPowerup(type, x, z) {
         ? new THREE.Mesh(new THREE.DodecahedronGeometry(0.36), puMats.slow)
         : type === 'magnet'
           ? makeMagnetMesh()
-          : type === 'invuln'
-            ? new THREE.Mesh(new THREE.TorusKnotGeometry(0.24, 0.09, 48, 8), puMats.invuln)
-            : new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.11, 10, 22), puMats.shield);
+          : type === 'breach'
+            ? new THREE.Mesh(new THREE.TetrahedronGeometry(0.42, 1), puMats.breach)
+            : type === 'invuln'
+              ? new THREE.Mesh(new THREE.TorusKnotGeometry(0.24, 0.09, 48, 8), puMats.invuln)
+              : new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.11, 10, 22), puMats.shield);
   mesh.castShadow = true;
   mesh.position.set(x, 1.15, z);
   scene.add(mesh);
@@ -2457,8 +2605,8 @@ function spawnPowerup(type, x, z) {
 
 function spawnRandomPowerup() {
   const r = Math.random();
-  const type = r < 0.3 ? 'jump' : r < 0.48 ? 'punch' : r < 0.63 ? 'slow'
-    : r < 0.76 ? 'magnet' : r < 0.86 ? 'invuln' : 'shield';
+  const type = r < 0.28 ? 'jump' : r < 0.44 ? 'punch' : r < 0.58 ? 'slow'
+    : r < 0.70 ? 'magnet' : r < 0.80 ? 'breach' : r < 0.90 ? 'invuln' : 'shield';
   const x = (Math.random() * 2 - 1) * (PLATFORM_HALF_W - 1.5);
   // leicht versetzt: auf der Spawnlinie steckte das Item sonst in einer im
   // selben Frame gespawnten Mauer (gleiche Geschwindigkeit -> für immer)
@@ -2480,7 +2628,7 @@ function updatePowerupHud() {
     if (p.parked) { $(el).textContent = ''; continue; }
     const slowed = perfNow() < p.slowUntil;
     const invuln = perfNow() < p.invulnUntil;
-    $(el).textContent = '💎'.repeat(p.airCharges) + '🥊'.repeat(p.punchPower)
+    $(el).textContent = '💎'.repeat(p.airCharges) + '🥊'.repeat(p.punchPower) + '💣'.repeat(p.breach || 0)
       + (p.shield > 0 ? ' ' + '🛡'.repeat(p.shield) : '') + (slowed ? ' 🐌' : '')
       + (perfNow() < p.magnetUntil ? ' 🧲' : '') + (invuln ? ' ⭐' : '');
     p.bubble.visible = p.shield > 0;
@@ -2538,6 +2686,7 @@ function updatePowerups(dt) {
           p.magnetUntil = perfNow() + 6; // zieht 6 s lang Power-ups an
           playMagnet();
         }
+        else if (pu.type === 'breach') p.breach = 2; // 💣 2 Sprenghecht-Ladungen
         else if (pu.type === 'invuln') {
           p.invulnUntil = perfNow() + 5; // ⭐ 5 s unverwundbar
           playInvuln();
@@ -4497,7 +4646,7 @@ let netSnapTimer = 0;   // zeitbasierter Snapshot-Takt (20 Hz, unabhängig von d
 let netInputTimer = 0;
 let netStaleWarnAt = 0; // Snapshot-Watchdog: frühester Zeitpunkt der nächsten Warnung
 let netLastSnapAt = 0;  // Watchdog-Basis, solange noch kein Snapshot ankam
-const NET_PROTO = 1;    // bei inkompatiblen Binär-/Event-Änderungen hochzählen
+const NET_PROTO = 2;    // v2: 💣-Byte im Snapshot + 'breach'-Event
 let netRoundNo = 0;      // Runden-Zähler: filtert Snapshots alter Runden aus
 const netInputs = {};    // slot -> { keys, padX, padZ }
 const netActQueue = [];  // [slot, 'jump'|'punch'|'tackle']
@@ -4779,7 +4928,7 @@ function netSendSnapshot() {
   const nOb = Math.min(255, obstacles.length), nLa = Math.min(255, lasers.length);
   const nSh = Math.min(255, sharks.length), nPu = Math.min(255, powerups.length);
   const dv = new DataView(new ArrayBuffer(
-    12 + act.length * (9 + parts * 10) + 4 + nOb * 4 + nLa * 4 + nSh * 14 + nPu * 6));
+    12 + act.length * (10 + parts * 10) + 4 + nOb * 4 + nLa * 4 + nSh * 14 + nPu * 6));
   let o = 0;
   dv.setUint8(o++, 1);
   dv.setUint8(o++, netRoundNo); // veraltete Snapshots einer alten Runde verwerfen
@@ -4792,6 +4941,7 @@ function netSendSnapshot() {
     dv.setUint8(o++, (p.alive ? 1 : 0) | (p.ragdoll ? 2 : 0) | (p.tackling ? 4 : 0) | (p.diving ? 8 : 0) | (p.hanging ? 16 : 0));
     dv.setUint8(o++, Math.min(255, p.score));
     dv.setUint8(o++, p.shield); dv.setUint8(o++, p.airCharges); dv.setUint8(o++, p.punchPower);
+    dv.setUint8(o++, p.breach);
     dv.setUint8(o++, netTimerByte(p.slowUntil));
     dv.setUint8(o++, netTimerByte(p.magnetUntil));
     dv.setUint8(o++, netTimerByte(p.invulnUntil));
@@ -4864,12 +5014,13 @@ function netDecodeSnapshot(dv) {
   const n = dv.getUint8(o++), parts = dv.getUint8(o++);
   // Bounds-Check gegen verkürzte/fremde Frames: Spielerblock nachrechnen
   // statt 20x/s RangeErrors zu werfen (Rest fängt der try/catch am Aufrufer)
-  if (o + n * (9 + parts * 10) > dv.byteLength) return;
+  if (o + n * (10 + parts * 10) > dv.byteLength) return;
   for (let i = 0; i < n; i++) {
     const slot = dv.getUint8(o++);
     const flags = dv.getUint8(o++);
     const score = dv.getUint8(o++);
     const shield = dv.getUint8(o++), air = dv.getUint8(o++), punch = dv.getUint8(o++);
+    const breach = dv.getUint8(o++);
     const slow = dv.getUint8(o++), magnet = dv.getUint8(o++), invuln = dv.getUint8(o++);
     const pose = new Float32Array(parts * 7);
     for (let k = 0; k < parts; k++) {
@@ -4886,7 +5037,7 @@ function netDecodeSnapshot(dv) {
     const p = players[slot];
     if (p) {
       p.alive = !!(flags & 1); p.ragdoll = !!(flags & 2);
-      p.score = score; p.shield = shield; p.airCharges = air; p.punchPower = punch;
+      p.score = score; p.shield = shield; p.airCharges = air; p.punchPower = punch; p.breach = breach;
       p.slowUntil = slow ? perfNow() + slow / 10 : 0;
       p.magnetUntil = magnet ? perfNow() + magnet / 10 : 0;
       p.invulnUntil = invuln ? perfNow() + invuln / 10 : 0;
@@ -5193,6 +5344,11 @@ function netApplyEvent(m) {
       return;
     }
     case 'sky': dayMode = !!m.day; return; // Tag/Nacht-Ziel kommt vom Host
+    case 'breach': { // Sprenghecht: identischer Split wie auf dem Host
+      const segs = breachWallAt(m.id, m.hx);
+      (m.segIds || []).forEach((sid, i) => { if (segs[i]) segs[i].netId = sid; });
+      return;
+    }
     case 'snow': m.on ? startSnow() : endSnow(!!m.silent); return;
     case 'fx': netApplyFx(m); return;
   }
