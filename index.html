@@ -5419,6 +5419,9 @@ function netActPush(slot, a) {
 }
 const netSnaps = [];     // decodierte Snapshots für die Interpolation
 const NET_INTERP = 0.12; // s Interpolationspuffer der Replik
+// Test/Diagnose: P2P abschalten -> alles läuft übers Relay (nur so greift die
+// künstliche Server-Latenz LAG, WebRTC ginge direkt an ihr vorbei).
+const netNoP2P = new URLSearchParams(location.search).get('nop2p') === '1';
 
 const myP = () => players[netRole ? netMySlot : 0];
 // Sitz i (0/1) -> gesteuerter Spieler. Bei nur 1 Sitz zeigen beide auf denselben,
@@ -5474,6 +5477,7 @@ function netRtcWireHost(slot, peer) {
 
 // Host: baut die P2P-Verbindung zu einem frisch gejointen Client auf (slots = dessen Sitze)
 async function netRtcOffer(slot, slots) {
+  if (netNoP2P) return; // Relay-only-Testmodus
   try {
     const pc = new RTCPeerConnection(NET_RTC_CFG);
     const peer = {
@@ -5502,6 +5506,7 @@ async function netRtcOffer(slot, slots) {
 // setRemoteDescription noch awaitet — deshalb auf peer.remoteReady warten,
 // sonst verwirft addIceCandidate die ersten Kandidaten kommentarlos.
 async function netRtcAnswer(m) {
+  if (netNoP2P) return; // Relay-only-Testmodus
   try {
     if (m.sdp?.type === 'offer') {
       const pc = new RTCPeerConnection(NET_RTC_CFG);
@@ -6676,10 +6681,13 @@ function netReport(ev, data) {
 function netStat() {
   const p2p = netPeer ? (netPeer.fast?.readyState === 'open' ? 'p2p' : 'relay')
     : (netRole === 'host' && Object.values(netPeers).some((p) => p.fast?.readyState === 'open') ? 'p2p' : 'relay');
+  // Snapshot-Alter aus dem TATSÄCHLICH letzten Snapshot (netLastSnapAt ist nur die
+  // Watchdog-Basis bis zum ersten Snapshot und wird danach nicht mehr gepflegt)
+  const lastSnap = netSnaps.length ? netSnaps[netSnaps.length - 1].arrived : 0;
   return {
     role: netRole || (netCode ? 'lobby' : null), slot: netMySlot, ingame: state === 'playing',
     ping: netPing, path: p2p, snaps: netSnaps.length,
-    snapAge: netLastSnapAt ? Math.round((perfNow() - netLastSnapAt) * 1000) : -1,
+    snapAge: lastSnap ? Math.round((perfNow() - lastSnap) * 1000) : -1,
   };
 }
 

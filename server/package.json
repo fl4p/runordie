@@ -10,7 +10,8 @@
     "errors": "node errors.js",
     "bugreports": "node bugreports.js",
     "netlog": "node netlog.js",
-    "test:e2e": "node test/reconnect.e2e.mjs"
+    "test:e2e": "node test/reconnect.e2e.mjs",
+    "test:latency": "node test/latency.e2e.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
