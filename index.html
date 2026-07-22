@@ -4547,6 +4547,11 @@ document.addEventListener('click', (e) => {
     if (id === 'authlogout2') authLogout2().then(() => netShowOnlineMenu());
     if (id === 'authboard') netShowLeaderboard();
     if (id === 'authstats') netShowStats();
+    // Öffentliche Räume
+    if (id === 'netpublicshow') netShowPublicRooms();
+    if (id === 'roomsrefresh') netSendJson({ t: 'rooms' });
+    if (id === 'netpublictoggle') netSendJson({ t: 'setpublic', on: !netIsPublic });
+    if (id.startsWith('joinpub_')) { netBrowsingRooms = false; netJoinRoom(id.slice(8)); }
     // Online-Spieler einladen (Knopf-ID inv_<userid>)
     if (id.startsWith('inv_')) netInvite(+id.slice(4));
     if (id.startsWith('kick_')) netSendJson({ t: 'kick', slot: +id.slice(5) });
@@ -5119,6 +5124,9 @@ let netLocalSeats = +localStorage.getItem('runordie_localseats') === 2 ? 2 : 1; 
 let netRoster = [0];     // Slots im Raum (Host pflegt, Clients per 'lobby'-Event)
 let netNames = {};       // slot -> Anzeigename (angemeldete Spieler) oder undefined
 let netOnlineUsers = []; // [{id,name,busy}] — angemeldete Spieler im Online-Bereich
+let netPublicRooms = []; // [{code,host,count,max}] — öffentliche, offene Räume
+let netBrowsingRooms = false; // Ist der „Öffentliche Räume"-Bildschirm gerade offen?
+let netIsPublic = false; // Ist MEIN Raum (als Host) öffentlich geschaltet?
 let netHelloSent = false; // Präsenz-hello nur einmal je Verbindung senden
 const netInvitedIds = new Set(); // wen ich in diesem Raum schon eingeladen habe
 let netCode = null;
@@ -5987,6 +5995,16 @@ function netSanitizePresence(arr) {
     busy: !!(u && u.busy),
   })).filter((u) => u.id >= 0 && u.name);
 }
+// Öffentliche Raumliste vom Server säubern (Code/Name werden beim Rendern escaped)
+function netSanitizeRooms(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr.slice(0, 50).map((r) => ({
+    code: netValidCode(r && r.code),
+    host: netValidName(r && r.host),
+    count: r && Number.isInteger(r.count) ? Math.max(0, Math.min(4, r.count)) : 0,
+    max: 4,
+  })).filter((r) => r.code);
+}
 function netSanitizeNames(obj) {
   const out = {};
   if (obj && typeof obj === 'object') for (let s = 0; s < 4; s++) {
@@ -6088,6 +6106,14 @@ function netOnMessage(ev) {
       return;
     case 'invited':
       showInviteToast(netValidName(m.from) || 'Jemand', netValidCode(m.code));
+      return;
+    case 'rooms': // öffentliche Raumliste (Antwort oder Live-Update)
+      netPublicRooms = netSanitizeRooms(m.rooms);
+      if (netBrowsingRooms) netRenderPublicRooms();
+      return;
+    case 'public': // Bestätigung des Öffentlich-Schalters für den eigenen Raum
+      netIsPublic = !!m.on;
+      if (netUiOpen && netCode) netRenderLobby();
       return;
   }
   if (netMySlot === 0) {
@@ -6281,6 +6307,7 @@ function netResetState() {
   netRtcCloseAll();
   netRole = null; netUiOpen = false; netMySlot = 0; netMySeats = [0]; netCode = null;
   netRoster = [0]; netNames = {}; netOnlineUsers = []; netHelloSent = false; netInvitedIds.clear(); netRoomWaitAt = 0; netPing = 0;
+  netIsPublic = false; netBrowsingRooms = false;
   netSnaps.length = 0; netActQueue.length = 0; netInputSeq = 0; netRoundNo = 0; netNextId = 1;
   netLastSnapAt = 0; netStaleWarnAt = 0;
   for (const k of Object.keys(netInputs)) delete netInputs[k];
@@ -6635,6 +6662,27 @@ async function netShowStats() {
   $('msg').classList.remove('hidden');
 }
 
+// „Öffentliche Räume" durchstöbern: Liste beim Server anfragen, dann anzeigen.
+// Der Server schickt Aktualisierungen (t:'rooms') von selbst nach, solange man
+// angemeldet ist — netBrowsingRooms sorgt fürs Neuzeichnen.
+function netShowPublicRooms() {
+  netUiOpen = true; netBrowsingRooms = true;
+  netConnect(() => netSendJson({ t: 'rooms' }));
+  netRenderPublicRooms(true);
+}
+function netRenderPublicRooms(loading) {
+  const list = netPublicRooms.length
+    ? netPublicRooms.map((r) => `<span class="menurow" style="justify-content:space-between;gap:10px">` +
+        `<span>🚪 <b>${netEsc(r.code)}</b> · ${r.host ? netEsc(r.host) : 'anonym'} · ${r.count}/${r.max}</span>` +
+        `<button id="joinpub_${netEsc(r.code)}">Beitreten</button></span>`).join('')
+    : `<span style="opacity:.6">${loading ? 'Lade …' : 'Gerade keine offenen öffentlichen Räume.'}</span>`;
+  $('msg').innerHTML = netMenuShell(
+    `<b class="mh">🌐 ÖFFENTLICHE RÄUME</b><br>${list}` +
+    `<span class="menurow"><button id="roomsrefresh">↻ Aktualisieren</button><button id="netonlineback">← Online-Menü</button></span>`
+  );
+  $('msg').classList.remove('hidden');
+}
+
 async function netShowLeaderboard() {
   netUiOpen = true;
   $('msg').innerHTML = netMenuShell('<span style="opacity:.7">Lade Bestenliste …</span>');
@@ -6657,6 +6705,7 @@ async function netShowLeaderboard() {
 
 function netShowOnlineMenu() {
   netUiOpen = true;
+  netBrowsingRooms = false; // ein anderer Bildschirm -> Live-Rooms-Rerender aus
   netRenderOnlineMenu();
   netPresenceConnect(); // angemeldet: in die Online-Liste eintragen
   // Frische Statistik EINMAL nachladen (Online-Siege ändern sich serverseitig)
@@ -6681,6 +6730,7 @@ function netRenderOnlineMenu() {
     `<button id="nethostgo" class="bigbtn online">🏠 RAUM ERSTELLEN<span>Du bist der Host — Freunde joinen per Code</span></button>` +
     `<button id="netjoinshow" class="bigbtn solo">🔑 RAUM BEITRETEN<span>Mit einem 4-stelligen Code</span></button>` +
     `</span>` +
+    `<span class="menurow"><button id="netpublicshow">🌐 Öffentliche Räume durchstöbern</button></span>` +
     (authToken ? `<span style="display:block;margin:6px 0">${netOnlineListHtml(false)}</span>` : '') +
     `<span style="opacity:.6">Der Host simuliert das Spiel — am besten hostet, wer die beste Verbindung hat.` +
     (netLocalSeats === 2 ? ` Zwei Spieler teilen sich dieses Gerät (Splitscreen): W A S D + Pfeiltasten.` : '') +
@@ -6725,10 +6775,14 @@ function netRenderLobby() {
   // Einladen: nur solange die Runde noch nicht läuft und Slots frei sind
   const invite = (authToken && netRoster.length < 4)
     ? `<span style="display:block;margin:10px 0 2px">${netOnlineListHtml(true)}</span>` : '';
+  // Host kann den Raum öffentlich schalten -> erscheint in der öffentlichen Liste
+  const pub = netMySlot === 0
+    ? `<span class="menurow"><button id="netpublictoggle">${netIsPublic ? '🌐 Öffentlich: AN — für alle sichtbar' : '🔒 Nur per Code (privat)'}</button></span>`
+    : '';
   $('msg').innerHTML = netMenuShell(
     `Raum-Code:<span class="roomcode">${netCode}</span>` +
     `<span style="opacity:.6;font-size:12px">${joinUrl}</span><br>` +
-    `<span class="lobbylist">${rows}</span>${info}${invite}`
+    `<span class="lobbylist">${rows}</span>${info}${pub}${invite}`
   );
   $('msg').classList.remove('hidden');
 }
@@ -6738,7 +6792,7 @@ function netRenderLobby() {
 // und einen Wächter starten, falls der Server nie antwortet.
 let netRoomWaitAt = 0;
 function netBeginRoom() {
-  netUiOpen = true;
+  netUiOpen = true; netBrowsingRooms = false; netIsPublic = false;
   netCode = null; netMySlot = 0; netRoster = [0]; netNames = {};
   $('msg').innerHTML = netMenuShell('<span style="opacity:.7">Verbinde mit dem Server …</span>');
   netRoomWaitAt = perfNow();
@@ -7325,7 +7379,9 @@ window.__game = { players, obstacles, powerups, world, cams, sky, fxRings, laser
   get snowActive() { return snowActive; }, get snowLevel() { return snowLevel; }, get iceLevel() { return iceLevel; },
   get snowZones() { return snowZones; },
   // Online-Modus (Test-Harness): Lobby steuern und Netz-Zustand einsehen
-  netShowOnlineMenu, netCreateRoom, netJoinRoom, netStartOnline, netLeave, netShowStats,
+  netShowOnlineMenu, netCreateRoom, netJoinRoom, netStartOnline, netLeave, netShowStats, netShowPublicRooms,
+  get netPublicRooms() { return netPublicRooms.slice(); }, get netIsPublic() { return netIsPublic; },
+  netSetPublic: (on) => netSendJson({ t: 'setpublic', on: !!on }),
   get netFallback() { return NET_FALLBACK_WS; }, set netFallback(v) { NET_FALLBACK_WS = v; },
   get netRole() { return netRole; }, get netCode() { return netCode; },
   get netRoster() { return netRoster.slice(); }, get netMySlot() { return netMySlot; },

@@ -82,6 +82,30 @@ function presenceList() {
     busy: !!w.roomCode, // in einem Raum (Lobby oder Partie) -> nicht einladbar
   }));
 }
+
+// ---------- Öffentliche Räume (Browser) ----------
+// Ein Host kann seinen Raum "öffentlich" schalten; dann taucht er in einer für alle
+// abrufbaren Liste auf. Gelistet werden nur offene (nicht gestartete, nicht volle)
+// öffentliche Räume. Beitreten geht wie bei einem eingetippten Code — auch anonym.
+function publicRoomList() {
+  const out = [];
+  for (const [code, r] of rooms) {
+    if (!r.public || r.locked) continue;
+    const used = usedSlots(r).size;
+    if (used >= MAX_PLAYERS) continue; // voll -> nicht anzeigen
+    out.push({ code, host: r.host?.user?.username || null, count: used, max: MAX_PLAYERS });
+  }
+  return out.slice(0, 50); // Deckel gegen Übergröße
+}
+// Wer die öffentliche Liste angefragt hat, bekommt Live-Updates — AUCH anonym
+// (die Präsenz-Liste `online` führt nur Angemeldete). Aufräumen beim Close.
+const browsers = new Set();
+function broadcastRooms() {
+  const payload = JSON.stringify({ t: 'rooms', rooms: publicRoomList() });
+  const seen = new Set();
+  for (const w of online.values()) { if (!seen.has(w)) { seen.add(w); send(w, payload); } }
+  for (const w of browsers) { if (w.readyState === 1 && !seen.has(w)) { seen.add(w); send(w, payload); } }
+}
 function broadcastPresence() {
   const payload = JSON.stringify({ t: 'presence', users: presenceList() });
   for (const w of online.values()) send(w, payload);
@@ -196,6 +220,7 @@ wss.on('connection', (ws, req) => {
   ws.on('close', () => {
     const c = (ipConns.get(ws.ip) || 1) - 1;
     c > 0 ? ipConns.set(ws.ip, c) : ipConns.delete(ws.ip);
+    browsers.delete(ws);
     try {
       const wasOnline = clearOnline(ws);
       const wasInRoom = !!ws.roomCode; // vor leaveRoom merken (danach null)
@@ -203,10 +228,12 @@ wss.on('connection', (ws, req) => {
       // (nur Clients, nicht der Host — ohne Host ist der Raum ohnehin weg).
       const rm = ws.roomCode ? rooms.get(ws.roomCode) : null;
       if (rm?.locked && ws.slot !== 0 && ws.rkey) { rejoinGrace.set(ws.rkey, { code: ws.roomCode, at: Date.now(), slots: ws.slots }); ws.graced = true; }
+      const wasPublic = !!rm?.public;
       leaveRoom(ws);
       // Präsenz auffrischen, wenn die Liste sich ändert ODER Mitspieler durch das
       // Verlassen wieder frei/einladbar werden (auch bei anonymem Host)
       if (wasOnline || wasInRoom) broadcastPresence();
+      if (wasPublic) broadcastRooms(); // öffentlicher Raum wurde kleiner oder ist weg
     } catch (err) { console.error('close:', err); }
   });
   ws.on('error', () => { /* close folgt */ });
@@ -288,7 +315,7 @@ function handleMessage(ws, data, isBinary) {
       const slots = seats === 2 ? [0, 1] : [0]; // Host nimmt die untersten Slots
       const names = {};
       slots.forEach((s, i) => { names[s] = seatName(ws, i); });
-      rooms.set(code, { host: ws, clients: new Map(), locked: false, names });
+      rooms.set(code, { host: ws, clients: new Map(), locked: false, public: false, names });
       ws.roomCode = code; ws.slots = slots; ws.slot = 0; ws.rkey = randomUUID();
       setOnline(ws);
       sendJson(ws, { t: 'created', code, name: ws.name, slots, names, rk: ws.rkey });
@@ -329,13 +356,25 @@ function handleMessage(ws, data, isBinary) {
       sendJson(ws, { t: 'joined', code, slots, names: { ...r.names }, rk: ws.rkey }); // bekannte Namen mitschicken
       sendJson(r.host, { t: 'peer', slots, names }); // Host lernt die neuen Slots + Namen
       broadcastPresence();
+      if (r.public) broadcastRooms(); // Belegung geändert -> Liste auffrischen
       return;
     }
 
+    // Öffentliche Raumliste abrufen (auch anonym; braucht keinen eigenen Raum).
+    // Anfrager merken, damit sie Live-Updates bekommen (bis die Verbindung endet).
+    if (msg.t === 'rooms') { browsers.add(ws); sendJson(ws, { t: 'rooms', rooms: publicRoomList() }); return; }
+
     if (!room) return;
 
-    if (msg.t === 'lock' && ws.slot === 0) { room.locked = true; broadcastPresence(); return; } // jetzt "busy"
-    if (msg.t === 'leave') { leaveRoom(ws); broadcastPresence(); return; }
+    // Host schaltet den Raum öffentlich/privat (nur vor dem Start sinnvoll listbar)
+    if (msg.t === 'setpublic' && ws.slot === 0) {
+      room.public = !!msg.on;
+      sendJson(ws, { t: 'public', on: room.public });
+      broadcastRooms();
+      return;
+    }
+    if (msg.t === 'lock' && ws.slot === 0) { room.locked = true; broadcastPresence(); broadcastRooms(); return; } // jetzt "busy", aus der Liste
+    if (msg.t === 'leave') { leaveRoom(ws); broadcastPresence(); broadcastRooms(); return; }
 
     // Nur der Host kann Mitspieler aus dem Raum werfen — und nur VOR Spielstart
     // (nach dem Lock würde ein Rauswurf eine laufende Partie desynchronisieren)
@@ -350,6 +389,7 @@ function handleMessage(ws, data, isBinary) {
       sendJson(target, { t: 'kicked' });         // der Geworfene fällt ins Menü
       sendJson(ws, { t: 'left', slots: gone });   // der Host aktualisiert seine Lobby wie bei 'left'
       broadcastPresence();                        // der Geworfene ist wieder frei/einladbar
+      if (room.public) broadcastRooms();
       return;
     }
 
