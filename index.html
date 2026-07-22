@@ -2468,7 +2468,9 @@ function updateLasers(dt) {
 
     for (const p of players) {
       if (netRole === 'client') break; // Replik: Treffer entscheidet der Host
-      if (!p.alive || noStun || perfNow() < p.hitCooldown || perfNow() < p.invulnUntil) continue;
+      // Laser treffen IMMER — auch im "nur Schieben"-Modus (noStun), der nur
+      // normale Hindernisse entschärft; Laser sind eine tödliche Sondergefahr
+      if (!p.alive || perfNow() < p.hitCooldown || perfNow() < p.invulnUntil) continue;
       const t = p.torso.position;
       if (Math.abs(t.z - L.z) < 0.3 && LASER_HIT[L.type](L, t)) {
         p.hitCooldown = perfNow() + 1.2;
