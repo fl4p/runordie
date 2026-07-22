@@ -4074,9 +4074,25 @@ function botThink(p, bot) {
   // unterbrechen — wer jagt, nimmt Risiko in Kauf. Ohne Jagd gilt der volle
   // Vorsichts-Horizont.
   const foe = nearestFoe(p);
-  const chasing = foe && now < bot.chaseUntil;
+  let chasing = foe && now < bot.chaseUntil;
+  // Aggression AUFRECHTERHALTEN: der Jagd-Einstieg würfelt auch, wenn gerade
+  // Gefahren im Vorsichts-Horizont liegen — sonst kämpft der Bot nur in den
+  // (ab ~20 s seltenen) gefahrenfreien Momenten: stark am Rundenstart, zahm
+  // danach. Nur bei nahem Gegner (<12 m); Sicherheit regelt der Risiko-Horizont.
+  if (foe && !chasing && Math.random() < d.aggro &&
+      foe.torso.position.vsub(t.position).length() < 12) {
+    bot.chaseUntil = now + d.chase;
+    chasing = true;
+  }
   const threat = now < bot.blunderUntil ? null : botScanThreat(p, bot, chasing ? 1.0 : undefined);
-  if (threat) { botHandleThreat(p, bot, threat); botSecondaryJump(p, bot); return; }
+  if (threat) {
+    botHandleThreat(p, bot, threat);
+    botSecondaryJump(p, bot);
+    // Gelegenheits-Jab: steht der Gegner in Schlagweite, kommt der Punch auch
+    // MITTEN im Ausweichen — er kostet weder Steuerung noch den Sprungplan
+    if (foe && foe.alive && foe.torso.position.vsub(t.position).length() < PUNCH_RANGE * 0.85) tryPunch(p);
+    return;
+  }
 
   if (foe && (chasing || Math.random() < d.aggro)) {
     if (!chasing) bot.chaseUntil = now + d.chase;
