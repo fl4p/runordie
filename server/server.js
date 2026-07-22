@@ -9,6 +9,8 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { WebSocketServer } from 'ws';
+import { handleApi } from './api.js';
+import { userForToken, recordOnline } from './db.js';
 
 const PORT = +(process.env.PORT || 8080);
 const LAG = +(process.env.LAG || 0); // ms künstliche Einweg-Latenz (Latenz-Tests)
@@ -39,6 +41,8 @@ const STATIC = {
 
 const http = createServer(async (req, res) => {
   const path = req.url.split('?')[0];
+  // Konten-API (/api/…) vor der statischen Whitelist
+  if (path.startsWith('/api/')) { await handleApi(req, res, path, clientIp(req)); return; }
   const entry = STATIC[path];
   if (!entry) { res.writeHead(404); res.end('not found'); return; }
   try {
@@ -152,9 +156,10 @@ function handleMessage(ws, data, isBinary) {
       if (ws.roomCode) { sendJson(ws, { t: 'err', msg: 'Schon in einem Raum' }); return; }
       const code = newCode();
       if (!code) { sendJson(ws, { t: 'err', msg: 'Server voll' }); return; }
-      rooms.set(code, { host: ws, clients: new Map(), locked: false });
+      authWs(ws, msg.token); // optionale Anmeldung -> ws.user / ws.name
+      rooms.set(code, { host: ws, clients: new Map(), locked: false, names: { 0: ws.name } });
       ws.roomCode = code; ws.slot = 0;
-      sendJson(ws, { t: 'created', code });
+      sendJson(ws, { t: 'created', code, name: ws.name });
       return;
     }
 
@@ -167,10 +172,12 @@ function handleMessage(ws, data, isBinary) {
       let slot = -1; // kleinster freier Slot 1..3
       for (let s = 1; s < MAX_PLAYERS; s++) if (!r.clients.has(s)) { slot = s; break; }
       if (slot < 0) { sendJson(ws, { t: 'err', msg: 'Raum ist voll (4 Spieler)' }); return; }
+      authWs(ws, msg.token);
       r.clients.set(slot, ws);
+      r.names[slot] = ws.name;
       ws.roomCode = code; ws.slot = slot;
-      sendJson(ws, { t: 'joined', code, slot });
-      sendJson(r.host, { t: 'peer', slot });
+      sendJson(ws, { t: 'joined', code, slot, names: { ...r.names } }); // bekannte Namen mitschicken
+      sendJson(r.host, { t: 'peer', slot, name: ws.name });
       return;
     }
 
@@ -181,6 +188,9 @@ function handleMessage(ws, data, isBinary) {
 
     // Alles andere: JSON-Relay (Events vom Host, Aktionen von Clients)
     if (ws.slot === 0) {
+      // Rundenende: Statistik für angemeldete Spieler buchen. Der Host meldet den
+      // Sieger-Slot (w); er ist die einzige Vertrauensstelle (Party-Spiel).
+      if (msg.k === 'end') tallyRound(room, msg.w);
       const s = JSON.stringify(msg);
       for (const c of room.clients.values()) send(c, s);
     } else {
@@ -194,6 +204,25 @@ function handleMessage(ws, data, isBinary) {
     }
 }
 
+// Optionale Anmeldung einer WS-Verbindung über ein Session-Token: setzt den
+// angezeigten Namen (für Lobby/Scorebar) und die Nutzer-ID (für die Statistik).
+// Schlägt sie fehl, bleibt der Spieler anonym — Online-Spielen geht auch ohne Konto.
+function authWs(ws, token) {
+  const u = token ? userForToken(token) : null;
+  ws.user = u || null;
+  ws.name = u ? u.username : null;
+}
+
+// Rundenergebnis buchen: jede/r angemeldete aktive Spieler/in bekommt eine
+// gespielte Runde, der Sieger-Slot zusätzlich einen Sieg.
+function tallyRound(room, winnerSlot) {
+  const members = [room.host, ...room.clients.values()];
+  for (const c of members) {
+    if (!c?.user) continue;
+    try { recordOnline(c.user.id, c.slot === winnerSlot); } catch (err) { console.error('stats:', err); }
+  }
+}
+
 function leaveRoom(ws) {
   const room = ws.roomCode ? rooms.get(ws.roomCode) : null;
   if (!room) return;
@@ -203,6 +232,7 @@ function leaveRoom(ws) {
     rooms.delete(ws.roomCode);
   } else {
     room.clients.delete(ws.slot);
+    if (room.names) delete room.names[ws.slot];
     sendJson(room.host, { t: 'left', slot: ws.slot });
   }
   ws.roomCode = null; ws.slot = null;

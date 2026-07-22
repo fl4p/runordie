@@ -3619,6 +3619,10 @@ function botThink(p, bot) {
   bot.noiseZ = (Math.random() * 2 - 1) * d.aimErr;
 
   if (p.hanging || p.ragdoll) { bot.plan = null; return; } // botAct/Physik regeln das
+  // Laufende Sprungkette (Doppelsprung → Hechtsprung) nicht zerdenken: jeder
+  // Denk-Takt (hard: alle ~0.1 s) würde den Plan sonst überschreiben, bevor
+  // der zweite/dritte Sprung (0.28 s Abstand) je gezündet hat
+  if (bot.plan?.type === 'jump' && !p.grounded) return;
   // Ballistischer Flug (Pad-Katapult, Explosions-Schleuder — deutlich über
   // normaler Sprunghöhe): die ganze Flugzeit hart nach vorn steuern — wo man
   // LANDET, entscheidet über Leben und Tod, und 2-3 s Flug reichen, um jede
@@ -3634,7 +3638,7 @@ function botThink(p, bot) {
   const px = t.position.x + t.velocity.x * 0.25, pz = t.position.z + t.velocity.z * 0.25;
   if (Math.abs(px) > PLATFORM_HALF_W - 0.9 || pz > PLATFORM_Z_MAX - 1.2 || t.position.y < -0.2) {
     bot.targetX = Math.abs(px) > PLATFORM_HALF_W - 0.9 ? Math.sign(t.position.x || 1) * 4 : t.position.x;
-    bot.targetZ = Math.min(Math.max(t.position.z, 0), 2.5);
+    bot.targetZ = rushMode ? t.position.z : Math.min(Math.max(t.position.z, 0), 2.5);
     bot.plan = null;
     // Drückt gerade ein Hindernis von vorn? Dann ist Wegsteuern aussichtslos —
     // draufspringen (niedrig) bzw. per Doppelsprung drüber
@@ -3682,6 +3686,7 @@ function botThink(p, bot) {
       bot.plan = (Math.abs(lx) < PLATFORM_HALF_W - 0.8 && lz < PLATFORM_Z_MAX - 0.8) ? { type: 'tackle' } : null;
     }
     else bot.plan = null;
+    botCatchupDive(p, bot, now); // weit entfernten Gegner per Hechtsprung einholen
     return;
   }
   if (powerups.length && Math.random() < d.puWant) {
@@ -3704,8 +3709,22 @@ function botThink(p, bot) {
     }
   }
   bot.targetX = t.position.x * 0.5;
-  bot.targetZ = iceLevel > 0.3 ? 0 : 1; // weit vorn lauern: +z-Schleudertreffer haben dann Auslauf
+  // Rush: dem Führenden hinterher (knapp dahinter lauern) — die Heimposition
+  // der festen Arena wäre sonst ein Rückwärtsmarsch quer über die halbe Bahn
+  bot.targetZ = rushMode ? aliveMinZ() + 3 : (iceLevel > 0.3 ? 0 : 1); // weit vorn lauern: +z-Schleudertreffer haben dann Auslauf
   bot.plan = null;
+  botCatchupDive(p, bot, now); // dem Rush-Führenden per Hechtsprung hinterher
+}
+
+// Hechtsprung zum Aufholen: weit hinter dem Vorwärts-Ziel (Rush-Führender,
+// gejagter Gegner) und ein Dive verfügbar (💎-Ladung bzw. Klassik-Modus) →
+// Sprungkette, deren letzter Sprung der Hechtsprung ist. Der Dive schiebt
+// +7.5 m/s in Pad-Richtung — laufen allein schafft nur 8 m/s.
+function botCatchupDive(p, bot, now) {
+  if (bot.plan || !p.grounded) return;
+  if (p.torso.position.z - bot.targetZ <= 9) return;
+  if (diveAlways) bot.plan = { type: 'jump', at: now, hops: 1 };       // Boden → Dive
+  else if (p.airCharges > 0) bot.plan = { type: 'jump', at: now, hops: 2 }; // Boden → Doppel → Dive
 }
 
 // Handeln — läuft jeden Frame: Steuerknüppel Richtung Ziel, geplante Aktionen zünden
@@ -3722,7 +3741,12 @@ function botAct(p, bot) {
 
   const maxX = PLATFORM_HALF_W - d.edgeMargin;
   const tx = Math.max(-maxX, Math.min(maxX, bot.targetX + bot.noiseX));
-  const tz = Math.max(-4, Math.min(PLATFORM_Z_MAX - 1.2, bot.targetZ + bot.noiseZ * 0.4));
+  // Untergrenze im Rush frontierZ statt fix -4: die Bahn wächst nach VORN
+  // (negatives z) — mit der alten Klemme blieb der Bot am Rand der Start-Arena
+  // stehen, statt einem vorstürmenden Gegner zu folgen. Im Duell bleibt -4:
+  // tiefer liegt nur die Spawn-Linie (-44), wo Hindernisse aus dem Nichts
+  // materialisieren und die vordere Kante keinerlei Rettung kennt.
+  const tz = Math.max(rushMode ? frontierZ + 2 : -4, Math.min(PLATFORM_Z_MAX - 1.2, bot.targetZ + bot.noiseZ * 0.4));
   let ex = tx - t.position.x, ez = tz - t.position.z;
   // Geschwindigkeits-Vorhalt (PD statt reinem P): bremst vor dem Ziel statt
   // drüber hinauszuschießen — in der Luft (wenig Grip) und auf Eis stärker
@@ -3743,8 +3767,10 @@ function botAct(p, bot) {
         p.padZ = -0.5;
       }
       tryJump(p);
-      // Doppelsprung: kurz nach dem Absprung nachschieben
-      bot.plan = plan.dbl ? { type: 'jump', at: now + 0.28 } : null;
+      // Sprungkette: dbl = ein Nachschub (Doppelsprung), hops = längere Kette
+      // (z.B. Boden→Doppel→Hechtsprung beim Aufholen)
+      const hops = plan.hops ?? (plan.dbl ? 1 : 0);
+      bot.plan = hops > 0 ? { type: 'jump', at: now + 0.28, hops: hops - 1 } : null;
     }
   } else if (plan.type === 'punch') { bot.plan = null; tryPunch(p); }
   else if (plan.type === 'tackle') { bot.plan = null; tryTackle(p); } // Richtung kommt aus den eben gesetzten Pads
