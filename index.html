@@ -4939,6 +4939,7 @@ function animate() {
       // Online-Client: Ping (Rundlaufzeit zum Host) mit anzeigen
       const ping = netRole === 'client' ? ` · 📶 ${netPing || '…'} ms` : '';
       $('speed').textContent = `Tempo ${baseSpeed().toFixed(1)} m/s · ${elapsed.toFixed(0)} s${ping}`;
+      if (netDebugOn) netDebugRender();
     }
     if (soloMode) { const st = $('solotime'); if (st) st.textContent = Math.floor(elapsed); }
   }
@@ -5111,7 +5112,8 @@ let netHelloSent = false; // Präsenz-hello nur einmal je Verbindung senden
 const netInvitedIds = new Set(); // wen ich in diesem Raum schon eingeladen habe
 let netCode = null;
 let netRkey = null;      // opaker Reconnect-Schlüssel vom Server (created/joined) — Wiedereintritt in laufenden Raum
-let netReconnect = null; // { until, timer } während eines Reconnect-Versuchs, sonst null
+let netReconnect = null; // { until, timer, startedAt, tries } während eines Reconnect-Versuchs, sonst null
+let netWsOpenedAt = 0;   // perfNow() beim letzten onopen — für die Verbindungsdauer in der Telemetrie
 let netUiOpen = false;   // Online-Menü sichtbar -> keine "Taste startet Spiel"-Pfade
 let netReplaying = false;
 let netApplyingFx = false;
@@ -5647,11 +5649,20 @@ function netApplySnapshots() {
 // mehr — erst warnen, nach 15 s zurück ins Menü statt Standbild
 function netWatchdog() {
   if (state !== 'playing') return;
+  if (netReconnect) return; // der Reconnect-Ablauf kümmert sich schon
   // Basis ist der Rundenstart, bis der erste Snapshot da ist — sonst wäre der
   // Watchdog blind, wenn der Host direkt nach dem Start-Klick einfriert
   const last = netSnaps.length ? netSnaps[netSnaps.length - 1].arrived : netLastSnapAt;
   if (!last) return;
   const stale = perfNow() - last;
+  // Client, dem seit >7 s keine Snapshots mehr kamen: oft ein STILLER Abriss
+  // (Mobilfunk-Handover, NAT-Timeout) ohne prompten onclose. Aktiv den Socket
+  // kappen -> das löst den normalen Reconnect-Ablauf aus (statt 15 s Standbild).
+  if (netMySlot !== 0 && netCode && stale > 7 && netWs) {
+    netReport('stale', { staleMs: Math.round(stale * 1000), ...netStat() });
+    try { netWs.close(); } catch { /* egal */ } // onclose -> netPrimaryClose -> netStartReconnect
+    return;
+  }
   if (stale > 15) { backToMenu(); flashPad('🌐 Verbindung zum Host verloren', '#ff6b6b'); return; }
   if (stale > 5 && perfNow() > netStaleWarnAt) {
     flashPad('🌐 Host reagiert nicht …', '#ffd23d');
@@ -5733,24 +5744,35 @@ function netConnectTo(url, onReady, allowFallback) {
   ws.binaryType = 'arraybuffer';
   netWs = ws;
   let opened = false;
-  ws.onopen = () => { opened = true; onReady?.(); };
+  ws.onopen = () => { opened = true; netWsOpenedAt = perfNow(); onReady?.(); };
   ws.onmessage = netOnMessage;
-  ws.onclose = () => {
-    if (netWs !== ws) return; // bereits aufgeräumt (netLeave)
+  ws.onclose = (ev) => {
+    if (netWs !== ws) return; // bereits aufgeräumt (netLeave) — kein unerwarteter Abbruch
     if (!opened && allowFallback && url !== NET_FALLBACK_WS) {
       netWs = null;
       netConnectTo(NET_FALLBACK_WS, onReady, false); // Origin ohne Relay -> öffentliches
       return;
     }
-    // Client mitten in einem Raum unerwartet getrennt: nicht sofort ins Menü,
-    // sondern bis zu 10 s mit Backoff neu verbinden (Host = Slot 0 ausgenommen,
-    // ohne Host ist der Raum ohnehin verloren).
-    if (netCode && netMySlot !== 0 && !netReconnect) { netWs = null; netStartReconnect(); return; }
-    const active = netRole || netUiOpen;
-    netResetState();
-    if (active) { backToMenu(); flashPad('🌐 Verbindung zum Server getrennt', '#ff6b6b'); }
+    netPrimaryClose(ws, ev);
   };
   ws.onerror = () => { /* onclose folgt */ };
+}
+
+// Behandlung eines UNERWARTETEN Close auf dem aktiven Socket (kein netLeave). Als
+// eigene Funktion, damit sie auch nach einem geglückten Reconnect wieder an den
+// neuen Socket gehängt werden kann — sonst zöge ein zweiter Abbruch nicht mehr.
+function netPrimaryClose(ws, ev) {
+  if (netWs !== ws) return;
+  netLastClose = String(ev.code || '?');
+  // Unerwarteter Abbruch mit aktiver Sitzung: Close-Code fürs Ferndebugging melden.
+  if (netCode) netReport('ws-close', { code: ev.code, reason: String(ev.reason || '').slice(0, 40), openMs: Math.round((perfNow() - netWsOpenedAt) * 1000), ...netStat() });
+  // Client mitten in einem Raum getrennt: nicht sofort ins Menü, sondern bis zu
+  // 10 s mit Backoff neu verbinden (Host = Slot 0 ausgenommen — ohne Host ist der
+  // Raum ohnehin verloren).
+  if (netCode && netMySlot !== 0 && !netReconnect) { netWs = null; netStartReconnect(); return; }
+  const active = netRole || netUiOpen;
+  netResetState();
+  if (active) { backToMenu(); flashPad('🌐 Verbindung zum Server getrennt', '#ff6b6b'); }
 }
 
 // URL des Relays auflösen (wie netConnect, aber ohne Fallback-Kette — für Reconnect)
@@ -5780,7 +5802,7 @@ function netShowReconnect(on) {
 }
 function netStartReconnect() {
   if (netReconnect) return;
-  netReconnect = { until: perfNow() + 10, timer: 0 };
+  netReconnect = { until: perfNow() + 10, timer: 0, startedAt: perfNow(), tries: 0 };
   netRtcCloseAll(); // die tote P2P-Verbindung aufräumen; sie wird beim Wiedereintritt neu aufgebaut
   netShowReconnect(true);
   netReconnectAttempt(0.4);
@@ -5788,17 +5810,19 @@ function netStartReconnect() {
 function netReconnectAttempt(delay) {
   if (!netReconnect) return;                                   // abgebrochen (netResetState)
   if (perfNow() >= netReconnect.until) return netReconnectGiveUp();
+  netReconnect.tries++;
   let ws;
   try { ws = new WebSocket(netWsUrl()); } catch { return netReconnectRetry(delay); }
   ws.binaryType = 'arraybuffer';
   netWs = ws;
   ws.onopen = () => {
+    netWsOpenedAt = perfNow();
     // Wiedereintritt in den laufenden Raum (rk umgeht den Lock beim Server)
     try { ws.send(JSON.stringify({ t: 'join', code: netCode, token: authToken || undefined, seats: netMySeats.length, rk: netRkey || undefined })); }
     catch { try { ws.close(); } catch { /* egal */ } }
   };
   ws.onmessage = netOnMessage;
-  ws.onclose = () => { if (netWs !== ws) return; netWs = null; netReconnectRetry(delay); };
+  ws.onclose = (ev) => { if (netWs !== ws) return; netLastClose = String(ev.code || '?'); netWs = null; netReconnectRetry(delay); };
   ws.onerror = () => { /* onclose folgt */ };
 }
 function netReconnectRetry(delay) {
@@ -5807,16 +5831,24 @@ function netReconnectRetry(delay) {
   netReconnect.timer = setTimeout(() => netReconnectAttempt(Math.min(2, delay * 1.6)), Math.max(0, delay) * 1000);
 }
 function netReconnectGiveUp() {
+  const tries = netReconnect?.tries || 0, ms = netReconnect ? Math.round((perfNow() - netReconnect.startedAt) * 1000) : 0;
   netReconnect = null;
   netShowReconnect(false);
+  netReport('reconnect', { ok: false, tries, ms });
   netResetState(); backToMenu();
   flashPad('🌐 Verbindung verloren', '#ff6b6b');
 }
 function netReconnectSucceeded() {
   if (!netReconnect) return;
   if (netReconnect.timer) clearTimeout(netReconnect.timer);
+  netReport('reconnect', { ok: true, tries: netReconnect.tries, ms: Math.round((perfNow() - netReconnect.startedAt) * 1000) });
   netReconnect = null;
   netShowReconnect(false);
+  // WICHTIG: den frisch verbundenen Socket wieder mit dem Normal-Handler versehen,
+  // sonst zöge ein ZWEITER Abbruch keinen erneuten Reconnect (onclose zeigte noch
+  // auf die Retry-Closure des letzten Versuchs).
+  const ws = netWs;
+  if (ws) ws.onclose = (ev) => netPrimaryClose(ws, ev);
   flashPad('🌐 Wieder verbunden', '#6ee75c');
 }
 
@@ -6173,6 +6205,65 @@ function netApiBase() {
   // (aus der Relay-URL abgeleitet: wss://host/…/ws -> https://host/…/api)
   if (netIsLocal()) return new URL('api', location.href).href.replace(/\/$/, '');
   return NET_FALLBACK_WS.replace(/^ws/, 'http').replace(/\/ws$/, '') + '/api';
+}
+
+// ---- Netz-Telemetrie (Ferndiagnose der Verbindungsabbrüche) ----
+// Meldet Verbindungsereignisse (WS-Close-Code, Reconnect-Ergebnis) an dasselbe
+// /error-Backend wie der Fehler-Reporter, aber mit kind='net' und OHNE Dedup
+// (jeder Abbruch ist ein eigenes Ereignis, das wir zählen wollen). Der Close-Code
+// verrät das WARUM: 1006 = abrupt (Netz/NAT/Radio), 1001 = Tab weg/Hintergrund,
+// 1013 = Server voll, 1000 = normal. Auswertung: `npm run netlog` am Server.
+let netReportCount = 0;
+function netReport(ev, data) {
+  try {
+    if (netReportCount >= 60) return; // Sitzungslimit, damit ein Dauerfehler nicht flutet
+    netReportCount++;
+    const base = netApiBase();
+    const h = { 'content-type': 'application/json' };
+    // Token NUR ans vertrauenswürdige Backend (nicht an ein ?server=-Ziel)
+    if (/^https:\/\/hdd\.fabi\.me\//.test(base) || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(base)) {
+      if (authToken) h.authorization = 'Bearer ' + authToken;
+    }
+    fetch(base + '/error', {
+      method: 'POST', keepalive: true, headers: h,
+      body: JSON.stringify({
+        kind: 'net', message: String(ev).slice(0, 60),
+        stack: JSON.stringify(data || {}).slice(0, 1200),
+        url: String(location.href).slice(0, 300), ua: navigator.userAgent.slice(0, 200),
+      }),
+    }).catch(() => { /* Telemetrie darf nie stören */ });
+  } catch { /* nie crashen */ }
+}
+// Momentaufnahme des Netz-Zustands für einen Report / das Debug-Overlay
+function netStat() {
+  const p2p = netPeer ? (netPeer.fast?.readyState === 'open' ? 'p2p' : 'relay')
+    : (netRole === 'host' && Object.values(netPeers).some((p) => p.fast?.readyState === 'open') ? 'p2p' : 'relay');
+  return {
+    role: netRole || (netCode ? 'lobby' : null), slot: netMySlot, ingame: state === 'playing',
+    ping: netPing, path: p2p, snaps: netSnaps.length,
+    snapAge: netLastSnapAt ? Math.round((perfNow() - netLastSnapAt) * 1000) : -1,
+  };
+}
+
+// Live-Netz-Overlay auf dem Gerät (URL: ?netdebug=1) — RTT, Snapshot-Alter, Pfad,
+// Reconnects und der letzte Close-Code, direkt im Spiel ablesbar für Ferndiagnose.
+const netDebugOn = new URLSearchParams(location.search).get('netdebug') === '1';
+let netLastClose = '–';
+function netDebugRender() {
+  let el = document.getElementById('netdbg');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'netdbg';
+    el.style.cssText = 'position:fixed;left:6px;bottom:6px;z-index:9998;pointer-events:none;background:rgba(6,10,20,.7);color:#8fe;font:600 11px/1.45 ui-monospace,Menlo,monospace;padding:5px 8px;border-radius:6px;white-space:pre;max-width:60vw';
+    document.body.appendChild(el);
+  }
+  const s = netStat();
+  el.textContent = [
+    `net  ${s.role || 'offline'}${s.role && s.role !== 'lobby' ? ' slot ' + s.slot : ''}`,
+    `ping ${s.ping || '–'} ms   path ${s.path}`,
+    `snap age ${s.snapAge < 0 ? '–' : s.snapAge + ' ms'}   buf ${s.snaps}`,
+    `reconnect ${netReconnect ? 'AKTIV (' + netReconnect.tries + ')' : 'nein'}   last close ${netLastClose}`,
+  ].join('\n');
 }
 
 async function authApi(method, path, body) {
@@ -7031,7 +7122,7 @@ window.__game = { players, obstacles, powerups, world, cams, sky, fxRings, laser
   get netRole() { return netRole; }, get netCode() { return netCode; },
   get netRoster() { return netRoster.slice(); }, get netMySlot() { return netMySlot; },
   get netMySeats() { return netMySeats.slice(); }, get netLocalSeats() { return netLocalSeats; }, set netLocalSeats(v) { netLocalSeats = v === 2 ? 2 : 1; },
-  get netPing() { return netPing; },
+  get netPing() { return netPing; }, netStat,
   get netReconnecting() { return !!netReconnect; },
   netDropWs: () => { try { netWs && netWs.close(); } catch { /* egal */ } }, // Test: unerwarteten Abbruch simulieren
   get netSnaps() { return netSnaps.length; }, get netNames() { return { ...netNames }; },

@@ -197,7 +197,7 @@ wss.on('connection', (ws, req) => {
       // Abbruch mitten im laufenden Spiel: Reconnect-Fenster für diesen Client öffnen
       // (nur Clients, nicht der Host — ohne Host ist der Raum ohnehin weg).
       const rm = ws.roomCode ? rooms.get(ws.roomCode) : null;
-      if (rm?.locked && ws.slot !== 0 && ws.rkey) { rejoinGrace.set(ws.rkey, { code: ws.roomCode, at: Date.now() }); ws.graced = true; }
+      if (rm?.locked && ws.slot !== 0 && ws.rkey) { rejoinGrace.set(ws.rkey, { code: ws.roomCode, at: Date.now(), slots: ws.slots }); ws.graced = true; }
       leaveRoom(ws);
       // Präsenz auffrischen, wenn die Liste sich ändert ODER Mitspieler durch das
       // Verlassen wieder frei/einladbar werden (auch bei anonymem Host)
@@ -296,11 +296,12 @@ function handleMessage(ws, data, isBinary) {
       const code = String(msg.code || '').toUpperCase().trim();
       const r = rooms.get(code);
       if (!r) { sendJson(ws, { t: 'err', msg: 'Raum nicht gefunden' }); return; }
+      let preferSlots = null; // beim Reconnect möglichst die alten Slots zurückgeben
       if (r.locked) {
         // Laufendes Spiel: normalerweise gesperrt. Ausnahme: ein Client, der eben
         // die Verbindung verloren hat, darf mit gültigem Reconnect-Schlüssel zurück.
         const g = msg.rk ? rejoinGrace.get(String(msg.rk)) : null;
-        if (g && g.code === code && Date.now() - g.at < GRACE_MS) rejoinGrace.delete(String(msg.rk));
+        if (g && g.code === code && Date.now() - g.at < GRACE_MS) { preferSlots = g.slots || null; rejoinGrace.delete(String(msg.rk)); }
         else { sendJson(ws, { t: 'err', msg: 'Spiel läuft schon' }); return; }
       }
       authWs(ws, msg.token);
@@ -310,7 +311,11 @@ function handleMessage(ws, data, isBinary) {
         sendJson(ws, { t: 'err', msg: 'Du hostest diesen Raum bereits' }); return;
       }
       const seats = seatCount(msg);
-      const slots = freeSlots(r, seats);
+      // Reconnect: die zuvor belegten Slots bevorzugen, falls noch frei (stabile
+      // Identität/Farbe). Sonst normale Vergabe (niedrigste freie Slots).
+      const used = usedSlots(r);
+      const slots = (preferSlots && preferSlots.length === seats && preferSlots.every((s) => !used.has(s)))
+        ? preferSlots : freeSlots(r, seats);
       if (!slots) { sendJson(ws, { t: 'err', msg: seats === 2 ? 'Nicht genug Platz für 2 Spieler' : 'Raum ist voll (4 Spieler)' }); return; }
       const names = {};
       slots.forEach((s, i) => { r.clients.set(s, ws); r.names[s] = seatName(ws.name, i); names[s] = seatName(ws.name, i); });
