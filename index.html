@@ -1913,6 +1913,21 @@ function clearLasers() {
   lasers.length = 0;
 }
 
+// Treffer-Tests ohne pro-Frame-Closures (bis 5 Laser x 60 fps): die Formeln
+// lesen die im Transform-Schritt am Laser abgelegten Werte (L._hy, L._c, …)
+const LASER_HIT = {
+  line: (L, t) => Math.abs(t.y - L._hy) < 0.45 && Math.abs(t.x) < PLATFORM_HALF_W,
+  spin: (L, t) => {
+    const dx = t.x, dy = t.y - L.hubY;
+    const proj = Math.max(-L.len / 2, Math.min(L.len / 2, dx * L._c + dy * L._s));
+    return Math.hypot(dx - proj * L._c, dy - proj * L._s) < 0.45;
+  },
+  wiper: (L, t) => {
+    const vx = t.x - L._px, vy = t.y - L._py;
+    const proj = Math.max(0, Math.min(L.len, vx * L._dx + vy * L._dy));
+    return Math.hypot(vx - proj * L._dx, vy - proj * L._dy) < 0.45;
+  },
+};
 function updateLasers(dt) {
   // Ab ~8 s der erste Laser, danach alle 16 s einer mehr (max. 4).
   // Takt entschärft (war: alle 12 s, max 5): Laser-/Hai-Treffer
@@ -1928,12 +1943,12 @@ function updateLasers(dt) {
     L.z += L.speed * dt;
     if (L.z > despawnBehindZ()) { removeLaser(L); lasers.splice(i, 1); continue; }
 
-    // Transform + Treffer-Test je Typ (Test in der x/y-Ebene bei L.z)
-    let hitTest;
+    // Transform je Typ; die Treffer-Werte landen am Laser, LASER_HIT liest sie
+    // (Test in der x/y-Ebene bei L.z)
     if (L.type === 'line') {
       const y = L.y0 + (L.amp ? Math.sin(elapsed * 0.8 + L.phase) * L.amp : 0);
       L.grp.position.set(0, y, L.z);
-      hitTest = (t) => Math.abs(t.y - y) < 0.45 && Math.abs(t.x) < PLATFORM_HALF_W;
+      L._hy = y;
       // Schein: je tiefer der Strahl, desto heller glüht die Straße darunter
       if (L.light) {
         L.light.position.set(0, Math.max(0.25, y * 0.7), L.z);
@@ -1944,11 +1959,7 @@ function updateLasers(dt) {
       L.grp.position.set(0, L.hubY, L.z);
       L.grp.rotation.z = L.angle;
       const c = Math.cos(L.angle), s = Math.sin(L.angle);
-      hitTest = (t) => {
-        const dx = t.x, dy = t.y - L.hubY;
-        const proj = Math.max(-L.len / 2, Math.min(L.len / 2, dx * c + dy * s));
-        return Math.hypot(dx - proj * c, dy - proj * s) < 0.45;
-      };
+      L._c = c; L._s = s;
       // Schein: je ein Licht pro Balkenspitze, hell wenn die Spitze der Straße nahekommt
       const r = L.len / 2;
       for (const [light, sgn] of [[L.light, 1], [L.light2, -1]]) {
@@ -1963,11 +1974,7 @@ function updateLasers(dt) {
       L.grp.position.set(px, py, L.z);
       L.grp.rotation.z = -L.side * a;
       const ddx = -L.side * Math.cos(a), ddy = Math.sin(a);
-      hitTest = (t) => {
-        const vx = t.x - px, vy = t.y - py;
-        const proj = Math.max(0, Math.min(L.len, vx * ddx + vy * ddy));
-        return Math.hypot(vx - proj * ddx, vy - proj * ddy) < 0.45;
-      };
+      L._px = px; L._py = py; L._dx = ddx; L._dy = ddy;
       // Schein: Licht wandert mit dem Strahl, hell wenn er tief über die Bahn fegt
       if (L.light) {
         const mx = px + ddx * L.len * 0.55, my = py + ddy * L.len * 0.55;
@@ -1980,7 +1987,7 @@ function updateLasers(dt) {
       if (netRole === 'client') break; // Replik: Treffer entscheidet der Host
       if (!p.alive || noStun || perfNow() < p.hitCooldown || perfNow() < p.invulnUntil) continue;
       const t = p.torso.position;
-      if (Math.abs(t.z - L.z) < 0.3 && hitTest(t)) {
+      if (Math.abs(t.z - L.z) < 0.3 && LASER_HIT[L.type](L, t)) {
         p.hitCooldown = perfNow() + 1.2;
         if (p.shield > 0) {
           p.shield--;
@@ -4816,6 +4823,15 @@ function netSendSnapshot() {
 }
 
 let netScoreKey = '';
+// Eine wiederverwendete id->Objekt-Map für alle vier Listen (sie werden
+// strikt nacheinander benutzt): vorher entstanden pro Snapshot (20 Hz) vier
+// frische Maps samt map()-Zwischen-Arrays — unnötiger GC-Druck am Client
+const _netIdMap = new Map();
+function netIdMap(list) {
+  _netIdMap.clear();
+  for (const x of list) _netIdMap.set(x.netId, x);
+  return _netIdMap;
+}
 function netDecodeSnapshot(dv) {
   let o = 1;
   if (dv.getUint8(o++) !== netRoundNo) return; // Snapshot aus einer anderen Runde
@@ -4855,21 +4871,21 @@ function netDecodeSnapshot(dv) {
     }
   }
   // Umwelt-Korrekturen (nur bekannte netIds; Spawn-Events kommen per TCP vorher an)
-  const obMap = new Map(obstacles.map((ob) => [ob.netId, ob]));
+  const obMap = netIdMap(obstacles);
   let cnt = dv.getUint8(o++);
   for (let i = 0; i < cnt; i++) {
     const ob = obMap.get(dv.getUint16(o)); o += 2;
     const z = dv.getInt16(o) / 100; o += 2;
     if (ob) ob.body.position.z = z;
   }
-  const laMap = new Map(lasers.map((L) => [L.netId, L]));
+  const laMap = netIdMap(lasers);
   cnt = dv.getUint8(o++);
   for (let i = 0; i < cnt; i++) {
     const L = laMap.get(dv.getUint16(o)); o += 2;
     const z = dv.getInt16(o) / 100; o += 2;
     if (L) L.z = z;
   }
-  const shMap = new Map(sharks.map((S) => [S.netId, S]));
+  const shMap = netIdMap(sharks);
   cnt = dv.getUint8(o++);
   for (let i = 0; i < cnt; i++) {
     const S = shMap.get(dv.getUint16(o)); o += 2;
@@ -4878,7 +4894,7 @@ function netDecodeSnapshot(dv) {
     o += 12;
     if (S) { S.body.position.set(px, py, pz); S.body.velocity.set(vx, vy, vz); }
   }
-  const puMap = new Map(powerups.map((pu) => [pu.netId, pu]));
+  const puMap = netIdMap(powerups);
   cnt = dv.getUint8(o++);
   for (let i = 0; i < cnt; i++) {
     const pu = puMap.get(dv.getUint16(o)); o += 2;
