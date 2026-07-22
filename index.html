@@ -1833,8 +1833,11 @@ function clearLasers() {
 }
 
 function updateLasers(dt) {
-  // Ab ~8 s der erste Laser, danach alle 12 s einer mehr (max. 5)
-  const target = elapsed < 8 ? 0 : Math.min(5, 1 + Math.floor((elapsed - 8) / 12));
+  // Ab ~8 s der erste Laser, danach alle 16 s einer mehr (max. 4).
+  // Takt entschärft (war: alle 12 s, max 5): Laser-/Hai-Treffer
+  // sind laut Soak-Messung die dominante Todesursache — ihre Dichte hing an
+  // dieser eigenen Rampe, unabhängig von Spawn-Timer und Tempo-Kurve
+  const target = elapsed < 8 ? 0 : Math.min(4, 1 + Math.floor((elapsed - 8) / 16));
   if (netRole !== 'client' && lasers.length < target) netCall('spawnLaser');
 
   laserGlowMat.opacity = 0.14 + 0.09 * Math.sin(elapsed * 9); // Flackern
@@ -3575,7 +3578,7 @@ function checkInvariants() {
   }
   if (state === 'roundEnd' && roundEndAt !== Infinity && now > roundEndAt + 10) invFire('round-stuck', `roundEndAt=${roundEndAt.toFixed(1)}`);
   if (obstacles.length > 200) invFire('leak-obstacles', `${obstacles.length}`);
-  if (lasers.length > 6) invFire('leak-lasers', `${lasers.length}`);
+  if (lasers.length > 5) invFire('leak-lasers', `${lasers.length}`);
   if (powerups.length > 60) invFire('leak-powerups', `${powerups.length}`);
   if (sharks.length > 12) invFire('leak-sharks', `${sharks.length}`);
   if (invBase.bodies && world.bodies.length > invBase.bodies + 250) invFire('leak-bodies', `${world.bodies.length} (Basis ${invBase.bodies})`);
@@ -3605,17 +3608,22 @@ let punchStun = localStorage.getItem('runordie_punchStun') === '1';
 let padSens = Math.min(2, Math.max(0.5, parseFloat(localStorage.getItem('runordie_padSens')) || 1));
 
 // ---------- Solo-Highscores (Top 8, mit Namen) ----------
+// Versioniert: Balance-Änderungen (Tempo-Rampe, Spawn-Dichte, Laser-Takt) machen
+// Überlebenszeiten zwischen Ären unvergleichbar — jede Balance-Ära bekommt ein
+// frisches Board. Alte Boards bleiben unter ihrem bisherigen Key im Browser
+// erhalten (v1 = 'runordie_scores'), werden aber nicht mehr angezeigt.
+const BOARD_VERSION = 2; // v2 ab 2026-07-22: sanftere Endgame-Kurve + Laser-Takt
+const BOARD_KEY = `runordie_scores_v${BOARD_VERSION}`;
 let soloScores = [];
-try { soloScores = JSON.parse(localStorage.getItem('runordie_scores') || '[]'); } catch { /* egal */ }
-let bestSolo = soloScores[0]?.t ?? +(localStorage.getItem('runordie_best') || 0);
+try { soloScores = JSON.parse(localStorage.getItem(BOARD_KEY) || '[]'); } catch { /* egal */ }
+let bestSolo = soloScores[0]?.t ?? 0;
 
 function saveSoloScore(name, t) {
   soloScores.push({ n: (name || 'ANONYM').slice(0, 12).toUpperCase(), t });
   soloScores.sort((a, b) => b.t - a.t);
   soloScores = soloScores.slice(0, 8);
   bestSolo = soloScores[0].t;
-  localStorage.setItem('runordie_scores', JSON.stringify(soloScores));
-  localStorage.setItem('runordie_best', bestSolo);
+  localStorage.setItem(BOARD_KEY, JSON.stringify(soloScores));
 }
 
 function scoreboardHtml(highlightTime) {
@@ -3627,7 +3635,7 @@ function scoreboardHtml(highlightTime) {
     `<td style="padding:1px 10px;text-align:right">${s.t} s</td></tr>`
   ).join('');
   return `<table style="margin:10px auto 0;border-collapse:collapse;font-size:16px">` +
-    `<tr style="opacity:.6"><td></td><td style="padding:1px 10px">HIGHSCORES</td><td></td></tr>${rows}</table>`;
+    `<tr style="opacity:.6"><td></td><td style="padding:1px 10px">HIGHSCORES · SAISON ${BOARD_VERSION}</td><td></td></tr>${rows}</table>`;
 }
 const clock = new THREE.Clock();
 const perfNow = () => performance.now() / 1000;

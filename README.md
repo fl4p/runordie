@@ -240,8 +240,8 @@ wieder in die Straße ab.
 ## Laser
 
 Ab ca. 8 Sekunden wandern rote **Laserstrahlen** langsam über die Straße.
-Berührung zappt: Ragdoll + Schleuder (ein 🛡 blockt). Alle 12 Sekunden kommt
-ein weiterer Laser dazu (max. 5 gleichzeitig). Drei Typen:
+Berührung zappt: Ragdoll + Schleuder (ein 🛡 blockt). Alle 16 Sekunden kommt
+ein weiterer Laser dazu (max. 4 gleichzeitig). Drei Typen:
 
 - **Querstrahl:** volle Breite in Sprunghöhe, manche pendeln auf und ab
 - **Rotierend:** ein Propeller-Balken kreist um eine schwebende Nabe —
