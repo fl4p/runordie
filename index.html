@@ -117,6 +117,13 @@
   #msg .modes button { margin-top: 0; }
   #msg .menurow { display: flex; gap: 10px; justify-content: center; align-items: center; flex-wrap: wrap; margin: 14px 0 4px; }
   #msg .menurow button { margin-top: 0; }
+  /* Live-Panel: online-Spieler + öffentliche Räume direkt im Hauptmenü */
+  #msg .menulive { margin: 4px auto 2px; font-size: 13px; opacity: .9; max-width: 34em; }
+  #msg .menulive.hidden { display: none; }
+  #msg .mlrow { margin: 3px 0; }
+  #msg .mlrooms { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 2px; }
+  #msg .mljoin { font-size: 12.5px; padding: 3px 10px; border-radius: 7px; border: 1px solid #6ee75c55; background: #16241a; color: #6ee75c; cursor: pointer; margin: 0; }
+  #msg .mljoin:hover { background: #1d3324; }
   #msg .bigbtn {
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
     min-height: 60px; /* großzügiges Touch-Ziel */
@@ -403,6 +410,7 @@
     <button id="startduo" class="bigbtn duo"><span class="ico">🤼</span>2 SPIELER<span>Splitscreen-Duell an einer Tastatur</span></button>
     <button id="startonline" class="bigbtn online"><span class="ico">🌐</span>ONLINE<span>Übers Internet · 2–4 Spieler</span></button>
   </span>
+  <div id="menulive" class="menulive hidden"></div>
   <details class="mpanel"><summary>🎮 Steuerung &amp; Tipps</summary>
     <span class="pbody">
       <span class="menucols">
@@ -4724,6 +4732,7 @@ document.addEventListener('click', (e) => {
     if (id === 'roomsrefresh') netSendJson({ t: 'rooms' });
     if (id === 'netpublictoggle') netSendJson({ t: 'setpublic', on: !netIsPublic });
     if (id.startsWith('joinpub_')) { netBrowsingRooms = false; netJoinRoom(id.slice(8)); }
+    if (id.startsWith('mjoin_')) { ensureAudio(); netShowOnlineMenu(); netJoinRoom(id.slice(6)); } // Menü-Panel: öffentlichem Raum beitreten
     if (id.startsWith('lset_')) netToggleLobbySetting(id.slice(5)); // Host stellt eine Regel um
     // Online-Spieler einladen (Knopf-ID inv_<userid>)
     if (id.startsWith('inv_')) netInvite(+id.slice(4));
@@ -5234,7 +5243,7 @@ function animate() {
     if (o.piston) {
       // Zyklus: schweben (1,2s) -> rammen (0,15s) -> liegen (0,6s) -> heben (0,8s)
       const P = o.piston;
-      P.t += dt;
+      P.t += envDt; // net #1: bei Client-Unterlauf mitfrieren (sonst rammt der Kolben durch stehende Figuren)
       const cyc = P.t % 2.75;
       let y, vy;
       if (cyc < 1.2) { y = 4.2; vy = 0; }
@@ -6403,6 +6412,7 @@ function netOnMessage(ev) {
     case 'presence':
       netOnlineUsers = netSanitizePresence(m.users);
       if (netUiOpen) { netCode ? netRenderLobby() : netRenderOnlineMenu(); }
+      else renderMenuLive(); // Hauptmenü-Panel aktualisieren
       return;
     case 'invited':
       showInviteToast(netValidName(m.from) || 'Jemand', netValidCode(m.code));
@@ -6410,6 +6420,7 @@ function netOnMessage(ev) {
     case 'rooms': // öffentliche Raumliste (Antwort oder Live-Update)
       netPublicRooms = netSanitizeRooms(m.rooms);
       if (netBrowsingRooms) netRenderPublicRooms();
+      else renderMenuLive(); // Hauptmenü-Panel aktualisieren
       return;
     case 'public': // Bestätigung des Öffentlich-Schalters für den eigenen Raum
       netIsPublic = !!m.on;
@@ -6835,12 +6846,38 @@ function netPresenceConnect() {
   if (netWs && netWs.readyState === 1 && netHelloSent) return; // schon präsent -> kein zweites hello
   netConnect(() => { if (!netHelloSent) { netHelloSent = true; netSendJson({ t: 'hello', token: authToken }); } });
 }
-// Präsenz schon im HAUPTMENÜ halten (nicht erst im Online-Menü): ein angemeldeter
-// Spieler erscheint sofort online und kann eingeladen werden. Nur wenn wir NICHT
-// gerade in einem Raum/Spiel sind (dort ist die Verbindung anderweitig belegt).
+// Verbindung schon im HAUPTMENÜ halten (nicht erst im Online-Menü):
+//  • angemeldet -> 'hello' schickt Präsenz, man erscheint sofort online/einladbar
+//  • immer -> 'rooms' abonniert die öffentliche Raumliste fürs Menü (auch anonym)
+// Nur wenn wir NICHT in einem Raum/Spiel sind (dort ist die Verbindung belegt).
 function netEnsurePresence() {
-  if (!authToken || netRole || netCode) return;
-  netPresenceConnect();
+  if (netRole || netCode) return;
+  netConnect(() => {
+    if (authToken && !netHelloSent) { netHelloSent = true; netSendJson({ t: 'hello', token: authToken }); }
+    netSendJson({ t: 'rooms' }); // öffentliche Räume fürs Menü
+  });
+  renderMenuLive();
+}
+
+// Live-Panel im Hauptmenü: wer ist online + welche öffentlichen Räume sind offen.
+// Selbst-abgesichert: rendert nur, wenn das Hauptmenü (mit #menulive) sichtbar ist.
+function renderMenuLive() {
+  const el = document.getElementById('menulive');
+  if (!el || state !== 'menu' || netUiOpen) return;
+  const others = netOtherOnline();
+  const rooms = netPublicRooms;
+  let html = '';
+  if (others.length) {
+    const names = others.slice(0, 8).map((u) => netEsc(u.name)).join(', ');
+    html += `<div class="mlrow">🟢 <b>${others.length}</b> online: ${names}${others.length > 8 ? ' …' : ''}</div>`;
+  }
+  if (rooms.length) {
+    html += `<div class="mlrow">🚪 Öffentliche Räume:</div><div class="mlrooms">` +
+      rooms.slice(0, 8).map((r) => `<button id="mjoin_${netEsc(r.code)}" class="mljoin">${netEsc(r.code)} · ${r.host ? netEsc(r.host) : 'anonym'} · ${r.count}/${r.max}</button>`).join('') +
+      `</div>`;
+  }
+  el.innerHTML = html;
+  el.classList.toggle('hidden', !html);
 }
 
 // Andere Online-Spieler (nicht man selbst, nicht schon im eigenen Raum)
@@ -7235,6 +7272,7 @@ parkPlayer(player3); parkPlayer(player4);
 if (localStorage.getItem('runordie_rotMode') === '1') toggleRotMode();
 authRestore(); // gespeicherte Anmeldung still prüfen (Konto-Header im Online-Menü)
 authRestore2(); // ebenso das Konto des zweiten lokalen Spielers (Splitscreen)
+netEnsurePresence(); // beim Laden schon verbinden: online zeigen (angemeldet) + öffentliche Räume ins Menü
 animate();
 
 // Einmaliger Geräte-Benchmark beim allerersten Start: kurz warten (Menü sichtbar, Nutzer nicht
