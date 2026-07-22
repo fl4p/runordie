@@ -3108,9 +3108,11 @@ if (_touchQ.has('notouch')) localStorage.setItem('runordie_touch', '0');
 if (_touchQ.has('touch')) localStorage.setItem('runordie_touch', _touchQ.get('touch') === '1' ? '1' : '0');
 // Automatisch erkannt (Touch-Gerät = grobe Zeiger oder Touchpoints);
 // das gemerkte Flag aus ?touch=1/0 überstimmt die Erkennung in beide Richtungen
+// maxTouchPoints allein reicht NICHT (Touch-Laptops mit Maus melden >0 und
+// bekämen das Overlay dauerhaft): zusätzlich muss ein grober Zeiger existieren
 let isTouch = localStorage.getItem('runordie_touch') === '1'
   || (localStorage.getItem('runordie_touch') !== '0'
-      && (navigator.maxTouchPoints > 0 || matchMedia('(pointer: coarse)').matches));
+      && navigator.maxTouchPoints > 0 && matchMedia('(any-pointer: coarse)').matches);
 const touchVec = { x: 0, z: 0 };
 
 // Wird pro Frame nach pollGamepads() addiert — Touch nutzt denselben Analog-Pfad
