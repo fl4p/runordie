@@ -4,7 +4,7 @@
 // Standard das GitHub-Pages-Frontend; localhost ist für Entwicklung immer erlaubt.
 import {
   createUser, findUser, verifyPassword, newSession, userForToken, endSession,
-  recordSolo, leaderboard, publicUser, validUsername, validPassword,
+  recordSolo, leaderboard, publicUser, validUsername, validPassword, recordError,
 } from './db.js';
 
 const MAX_BODY = 4 * 1024;
@@ -43,20 +43,33 @@ function regBlocked(ip) {
   return b.n > REG_MAX;
 }
 
+// Fehler-Reports pro IP drosseln: ein kaputter Build könnte sonst je Client
+// eine Flut auslösen (Client cappt zwar selbst, aber doppelt hält besser).
+const errHits = new Map(); // ip -> { n, at }
+const ERR_MAX = 40, ERR_WINDOW_MS = 60 * 1000;
+function errBlocked(ip) {
+  const now = Date.now();
+  const b = errHits.get(ip) || { n: 0, at: now };
+  if (now - b.at > ERR_WINDOW_MS) { b.n = 0; b.at = now; }
+  b.n++; errHits.set(ip, b);
+  return b.n > ERR_MAX;
+}
+
 // Speicher der Rate-Limiter gelegentlich säubern (verwaiste IP-Einträge)
 setInterval(() => {
   const now = Date.now();
   for (const [ip, b] of loginFails) if (now - b.at > LOGIN_WINDOW_MS) loginFails.delete(ip);
   for (const [ip, b] of regHits) if (now - b.at > REG_WINDOW_MS) regHits.delete(ip);
+  for (const [ip, b] of errHits) if (now - b.at > ERR_WINDOW_MS * 5) errHits.delete(ip);
 }, 10 * 60 * 1000).unref?.();
 
-function readJson(req) {
+function readJson(req, limit = MAX_BODY) {
   return new Promise((resolve) => {
     let buf = '', done = false;
     const finish = (v) => { if (!done) { done = true; resolve(v); } };
     req.on('data', (c) => {
       buf += c;
-      if (buf.length > MAX_BODY) { req.destroy(); finish(null); } // Überlänge: sofort abbrechen
+      if (buf.length > limit) { req.destroy(); finish(null); } // Überlänge: sofort abbrechen
     });
     req.on('end', () => { try { finish(JSON.parse(buf || '{}')); } catch { finish(null); } });
     req.on('error', () => finish(null));
@@ -149,6 +162,23 @@ export async function handleApi(req, res, path, ip) {
 
     if (req.method === 'GET' && route === '/leaderboard') {
       sendJson(res, 200, { top: leaderboard(20) });
+      return true;
+    }
+
+    // Fehler-Report vom Client (unbehandelte Fehler / Promise-Rejections).
+    // Kein Login nötig (Fehler passieren auch vorher); stark gedrosselt.
+    if (req.method === 'POST' && route === '/error') {
+      if (errBlocked(ip)) { res.writeHead(429); res.end(); return true; }
+      const body = await readJson(req, 16 * 1024); // Stacks können lang sein
+
+      if (body && typeof body === 'object') {
+        const user = userForToken(bearer(req)); // optional
+        recordError({
+          kind: body.kind, message: body.message, stack: body.stack,
+          url: body.url, ua: body.ua || req.headers['user-agent'], userId: user?.id,
+        });
+      }
+      res.writeHead(204); res.end(); // immer 204, nie ein Fehler-über-Fehler
       return true;
     }
 

@@ -38,6 +38,19 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_users_best ON users(best_time DESC);
   CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+  CREATE TABLE IF NOT EXISTS errors (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    at      INTEGER NOT NULL,   -- Zeitstempel (ms)
+    kind    TEXT,               -- 'error' | 'rejection'
+    message TEXT,
+    stack   TEXT,
+    url     TEXT,               -- location.href des Clients
+    ua      TEXT,               -- User-Agent (gekürzt)
+    user_id INTEGER,            -- falls angemeldet
+    sig     TEXT                -- Gruppierungs-Signatur (Meldung + oberster Frame)
+  );
+  CREATE INDEX IF NOT EXISTS idx_errors_at ON errors(at);
+  CREATE INDEX IF NOT EXISTS idx_errors_sig ON errors(sig);
 `);
 
 // ---------- Passwörter: scrypt (aus node:crypto, keine Extra-Abhängigkeit) ----------
@@ -76,6 +89,15 @@ const stmt = {
   leaderboard: db.prepare(
     `SELECT username, best_time, games, online_wins FROM users
      WHERE best_time > 0 ORDER BY best_time DESC, username ASC LIMIT ?`),
+  insertErr: db.prepare(
+    `INSERT INTO errors (at, kind, message, stack, url, ua, user_id, sig) VALUES (?,?,?,?,?,?,?,?)`),
+  trimErr: db.prepare(`DELETE FROM errors WHERE id <= (SELECT MAX(id) FROM errors) - ?`),
+  errGroups: db.prepare(
+    `SELECT sig, kind, COUNT(*) AS n, MAX(at) AS last, MIN(at) AS first,
+            COUNT(DISTINCT user_id) AS users, message, stack, url
+     FROM errors GROUP BY sig ORDER BY n DESC, last DESC LIMIT ?`),
+  errRecent: db.prepare(`SELECT * FROM errors ORDER BY id DESC LIMIT ?`),
+  errCount: db.prepare(`SELECT COUNT(*) AS n FROM errors`),
 };
 
 const SESSION_TTL_MS = 30 * 24 * 3600 * 1000; // 30 Tage
@@ -117,6 +139,28 @@ export function publicUser(u) {
     games: u.games, onlineRounds: u.online_rounds, onlineWins: u.online_wins,
   };
 }
+
+// ---------- Fehler-Reports (vom Client gemeldete unbehandelte Fehler) ----------
+// Signatur zum Gruppieren: Meldung + oberster Code-Frame ohne Zeilennummern,
+// damit gleiche Bugs von verschiedenen Geräten/Builds zusammenfallen.
+function errSig(message, stack) {
+  const top = String(stack || '').split('\n').find((l) => /\.(m?js)|https?:/.test(l)) || '';
+  const norm = top.replace(/:\d+:\d+/g, '').replace(/\?[^ )]*/g, '').trim().slice(0, 140);
+  return (String(message || '').slice(0, 120) + ' | ' + norm).slice(0, 260);
+}
+// Steuerzeichen entfernen (außer Zeilenumbruch/Tab): sonst könnten vom Client
+// eingeschmuggelte ANSI-/Terminal-Escapes die Ausgabe von errors.js manipulieren.
+const clean = (s, n) => String(s ?? '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '').slice(0, n);
+export function recordError(e) {
+  const message = clean(e.message, 500), stack = clean(e.stack, 4000);
+  stmt.insertErr.run(
+    Date.now(), clean(e.kind, 20), message, stack, clean(e.url, 300),
+    clean(e.ua, 200), e.userId || null, errSig(message, stack));
+  if (Math.random() < 0.03) stmt.trimErr.run(5000); // Ringpuffer: letzte ~5000 behalten
+}
+export function errorGroups(limit = 50) { return stmt.errGroups.all(Math.min(200, limit | 0 || 50)); }
+export function recentErrors(limit = 50) { return stmt.errRecent.all(Math.min(500, limit | 0 || 50)); }
+export function errorCount() { return stmt.errCount.get().n; }
 
 // Abgelaufene Sessions gelegentlich wegräumen
 setInterval(() => { try { stmt.deleteExpired.run(Date.now()); } catch { /* egal */ } }, 3600 * 1000).unref?.();

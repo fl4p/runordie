@@ -7,6 +7,54 @@
      Browsers, die je nach Hosting an einer fremden Route landet (502/404) -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8F%83%3C/text%3E%3C/svg%3E">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<script>
+// Fehler-Reporter — meldet unbehandelte Fehler + Promise-Rejections ans Backend,
+// damit Probleme auf fremden Geräten (das Frontend läuft auf GitHub Pages) sichtbar
+// werden. Klassisches Skript im <head>, damit es VOR dem Spiel-Modul aktiv ist und
+// auch dessen Ladefehler mitbekommt. Robust: darf niemals selbst einen Fehler werfen.
+(function () {
+  var sent = 0, MAX = 25, seen = {};
+  function apiBase() {
+    var q = new URLSearchParams(location.search).get('server');
+    if (q) return q.replace(/^ws/, 'http').replace(/\/ws$/, '') + '/api';
+    if (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+      return new URL('api', location.href).href.replace(/\/$/, '');
+    return 'https://hdd.fabi.me/runordie/api'; // gehostetes Backend (wie NET_FALLBACK)
+  }
+  function report(kind, message, stack) {
+    try {
+      if (sent >= MAX) return;
+      var sig = String(message || '').slice(0, 150) + '|' + String(stack || '').split('\n')[1];
+      if (seen[sig]) return; seen[sig] = 1; sent++;
+      var base = apiBase();
+      var h = { 'content-type': 'application/json' };
+      // Token NUR ans vertrauenswürdige Backend anhängen (nicht an ein per
+      // ?server= untergeschobenes fremdes Ziel) — sonst Token-Diebstahl per Fehler.
+      if (base.indexOf('https://hdd.fabi.me/') === 0 ||
+          /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(base)) {
+        var tok = null; try { tok = localStorage.getItem('runordie_token'); } catch (e) { /* egal */ }
+        if (tok) h.authorization = 'Bearer ' + tok;
+      }
+      fetch(base + '/error', {
+        method: 'POST', keepalive: true, headers: h,
+        body: JSON.stringify({
+          kind: kind, message: String(message || '').slice(0, 500),
+          stack: String(stack || '').slice(0, 4000),
+          url: String(location.href).slice(0, 300), ua: navigator.userAgent.slice(0, 200)
+        })
+      }).catch(function () { /* Meldung des Fehlers scheitert -> nie erneut melden */ });
+    } catch (e) { /* Reporter darf nie crashen */ }
+  }
+  addEventListener('error', function (e) {
+    report('error', e.message, (e.error && e.error.stack) || (e.filename + ':' + e.lineno + ':' + e.colno));
+  });
+  addEventListener('unhandledrejection', function (e) {
+    var r = e.reason || {};
+    report('rejection', (r && r.message) || String(e.reason), r && r.stack);
+  });
+  window.__report = report; // manuelles Melden gefangener Fehler möglich
+})();
+</script>
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #0d1117; font-family: "Avenir Next", "Segoe UI", sans-serif; }
   canvas { display: block; }
@@ -4214,6 +4262,7 @@ document.addEventListener('click', (e) => {
     if (id === 'authboard') netShowLeaderboard();
     // Online-Spieler einladen (Knopf-ID inv_<userid>)
     if (id.startsWith('inv_')) netInvite(+id.slice(4));
+    if (id.startsWith('kick_')) netSendJson({ t: 'kick', slot: +id.slice(5) });
   }
 });
 
@@ -5442,6 +5491,8 @@ function netOnMessage(ev) {
       netRenderError(m.msg || 'Unbekannter Fehler');
       return;
     case 'peer': {
+      // peer/left sind reine Host-Ereignisse (Server schickt sie nur an den Host)
+      if (netMySlot !== 0 || !netCode) return;
       const slot = netValidSlot(m.slot);
       if (slot === null) return;
       if (!netRoster.includes(slot)) netRoster.push(slot);
@@ -5453,6 +5504,7 @@ function netOnMessage(ev) {
       return;
     }
     case 'left': {
+      if (netMySlot !== 0 || !netCode) return; // nur der Host verarbeitet 'left'
       const slot = netValidSlot(m.slot);
       if (slot === null) return;
       netRtcClose(slot);
@@ -5464,6 +5516,11 @@ function netOnMessage(ev) {
       netResetState();
       backToMenu();
       flashPad('🌐 Der Host hat den Raum geschlossen', '#ff6b6b');
+      return;
+    case 'kicked':
+      netResetState();
+      backToMenu();
+      flashPad('🌐 Der Host hat dich aus dem Raum entfernt', '#ff6b6b');
       return;
     case 'presence':
       netOnlineUsers = netSanitizePresence(m.users);
@@ -5606,7 +5663,7 @@ function netResetState() {
   }
   netRtcCloseAll();
   netRole = null; netUiOpen = false; netMySlot = 0; netCode = null;
-  netRoster = [0]; netNames = {}; netOnlineUsers = []; netHelloSent = false; netInvitedIds.clear();
+  netRoster = [0]; netNames = {}; netOnlineUsers = []; netHelloSent = false; netInvitedIds.clear(); netRoomWaitAt = 0;
   netSnaps.length = 0; netActQueue.length = 0; netInputSeq = 0; netRoundNo = 0; netNextId = 1;
   netLastSnapAt = 0; netStaleWarnAt = 0;
   for (const k of Object.keys(netInputs)) delete netInputs[k];
@@ -5686,7 +5743,7 @@ function authSubmitScore(time) {
 // werden. Anonyme Spieler nehmen daran nicht teil (kein stabiler Name).
 function netPresenceConnect() {
   if (!authToken) return;
-  netHelloSent = false;
+  if (netWs && netWs.readyState === 1 && netHelloSent) return; // schon präsent -> kein zweites hello
   netConnect(() => { if (!netHelloSent) { netHelloSent = true; netSendJson({ t: 'hello', token: authToken }); } });
 }
 
@@ -5858,7 +5915,7 @@ function netRenderJoin(prefill = '') {
 }
 
 function netRenderError(msg) {
-  netUiOpen = true;
+  netUiOpen = true; netRoomWaitAt = 0; // definitive Antwort -> Wächter aus
   $('msg').innerHTML = netMenuShell(
     `<span style="color:#ff6b6b">⚠ ${netEsc(msg)}</span><br>` +
     `<span class="menurow"><button id="nethostgo">🏠 Raum erstellen</button><button id="netjoinshow">🔑 Raum beitreten</button></span>`
@@ -5866,10 +5923,14 @@ function netRenderError(msg) {
 }
 
 function netRenderLobby() {
-  netUiOpen = true;
-  const rows = netRoster.map((s) =>
-    `<span style="color:${PLAYER_DEFS[s].css};font-weight:700">● ${netEsc(netSlotName(s))}${s === netMySlot ? ' — DU' : ''}${s === 0 ? ' (Host)' : ''}</span>`
-  ).join('<br>');
+  netUiOpen = true; netRoomWaitAt = 0; // in der Lobby -> Wächter aus
+  const rows = netRoster.map((s) => {
+    // Der Host kann Mitspieler (Slot ≥ 1) vor dem Start rauswerfen
+    const kick = (netMySlot === 0 && s !== 0)
+      ? ` <button id="kick_${s}" title="Rauswerfen" style="font:inherit;font-size:12px;padding:1px 8px;border-radius:6px;border:1px solid #ff6b6b66;background:#1a2029;color:#ff6b6b;cursor:pointer">✕</button>`
+      : '';
+    return `<span style="color:${PLAYER_DEFS[s].css};font-weight:700">● ${netEsc(netSlotName(s))}${s === netMySlot ? ' — DU' : ''}${s === 0 ? ' (Host)' : ''}${kick}</span>`;
+  }).join('<br>');
   const joinUrl = location.origin + location.pathname + '?room=' + netCode;
   const info = netMySlot === 0
     ? (netRoster.length < 2
@@ -5887,19 +5948,33 @@ function netRenderLobby() {
   $('msg').classList.remove('hidden');
 }
 
-function netCreateRoom() {
+// Raumzustand vor create/join sicher zurücksetzen (sonst könnte ein alter netCode
+// eine legitime 'err' unterdrücken und den Nutzer auf "Verbinde…" hängen lassen)
+// und einen Wächter starten, falls der Server nie antwortet.
+let netRoomWaitAt = 0;
+function netBeginRoom() {
   netUiOpen = true;
-  netNames = {};
+  netCode = null; netMySlot = 0; netRoster = [0]; netNames = {};
   $('msg').innerHTML = netMenuShell('<span style="opacity:.7">Verbinde mit dem Server …</span>');
+  netRoomWaitAt = perfNow();
+  setTimeout(() => {
+    // Kam nach 10 s weder created/joined noch err? Nicht ewig hängen bleiben.
+    if (netUiOpen && !netCode && netRoomWaitAt && perfNow() - netRoomWaitAt >= 9.9) {
+      netLeave();
+      netRenderError('Zeitüberschreitung — der Server hat nicht geantwortet. Bitte erneut versuchen.');
+    }
+  }, 10000);
+}
+
+function netCreateRoom() {
+  netBeginRoom();
   netConnect(() => netWs.send(JSON.stringify({ t: 'create', token: authToken || undefined })));
 }
 
 function netJoinRoom(code) {
   code = String(code || '').toUpperCase().trim();
   if (code.length !== 4) { netRenderJoin(code); return; }
-  netUiOpen = true;
-  netNames = {};
-  $('msg').innerHTML = netMenuShell('<span style="opacity:.7">Verbinde mit dem Server …</span>');
+  netBeginRoom();
   netConnect(() => netWs.send(JSON.stringify({ t: 'join', code, token: authToken || undefined })));
 }
 

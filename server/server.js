@@ -77,9 +77,17 @@ function broadcastPresence() {
 }
 // Verbindung als online führen (nach erfolgreicher Anmeldung). Gibt true zurück,
 // wenn sich die Liste geändert hat (neuer Nutzer oder Socket-Wechsel).
+// Meldet sich derselbe Nutzer neu an (anderer Browser/Reconnect), wird die ALTE
+// Sitzung sofort abgeräumt: aus ihrem Raum werfen und trennen. Das verhindert
+// Zombie-Räume (alter Host noch "OPEN", aber niemand simuliert) — der Hauptgrund,
+// warum "in Brave beitreten, schließen, in Chrome erneut beitreten" scheiterte,
+// bis der ~Heartbeat die tote Verbindung nach Sekunden aufräumte.
 function setOnline(ws) {
   if (!ws.user) return false;
   const prev = online.get(ws.user.id);
+  if (prev && prev !== ws) {
+    try { leaveRoom(prev); prev.terminate(); } catch (err) { console.error('takeover:', err); }
+  }
   online.set(ws.user.id, ws);
   return prev !== ws;
 }
@@ -153,8 +161,11 @@ wss.on('connection', (ws, req) => {
     c > 0 ? ipConns.set(ws.ip, c) : ipConns.delete(ws.ip);
     try {
       const wasOnline = clearOnline(ws);
+      const wasInRoom = !!ws.roomCode; // vor leaveRoom merken (danach null)
       leaveRoom(ws);
-      if (wasOnline) broadcastPresence(); // Online-Liste aktualisieren
+      // Präsenz auffrischen, wenn die Liste sich ändert ODER Mitspieler durch das
+      // Verlassen wieder frei/einladbar werden (auch bei anonymem Host)
+      if (wasOnline || wasInRoom) broadcastPresence();
     } catch (err) { console.error('close:', err); }
   });
   ws.on('error', () => { /* close folgt */ });
@@ -261,6 +272,22 @@ function handleMessage(ws, data, isBinary) {
     if (msg.t === 'lock' && ws.slot === 0) { room.locked = true; broadcastPresence(); return; } // jetzt "busy"
     if (msg.t === 'leave') { leaveRoom(ws); broadcastPresence(); return; }
 
+    // Nur der Host kann Mitspieler aus dem Raum werfen — und nur VOR Spielstart
+    // (nach dem Lock würde ein Rauswurf eine laufende Partie desynchronisieren)
+    if (msg.t === 'kick' && ws.slot === 0) {
+      if (room.locked) return;
+      const slot = msg.slot | 0;
+      const target = room.clients.get(slot);
+      if (!target || slot < 1) return;
+      room.clients.delete(slot);
+      if (room.names) delete room.names[slot];
+      target.roomCode = null; target.slot = null;
+      sendJson(target, { t: 'kicked' });        // der Geworfene fällt ins Menü
+      sendJson(ws, { t: 'left', slot });         // der Host aktualisiert seine Lobby wie bei 'left'
+      broadcastPresence();                       // der Geworfene ist wieder frei/einladbar
+      return;
+    }
+
     // Alles andere: JSON-Relay (Events vom Host, Aktionen von Clients)
     if (ws.slot === 0) {
       // Jede neue Runde macht genau EIN Rundenende wieder buchbar
@@ -327,15 +354,19 @@ function leaveRoom(ws) {
   ws.roomCode = null; ws.slot = null;
 }
 
-// ---------- Heartbeat: tote Verbindungen nach ~30-40 s trennen ----------
+// ---------- Heartbeat: tote Verbindungen zügig trennen ----------
+// 6-s-Takt, nach 2 verpassten Pongs raus (~12–18 s). Das begrenzt das Zeitfenster,
+// in dem ein abrupt geschlossener (Host-)Client als Zombie-Raum weiterlebt. Für
+// angemeldete Nutzer räumt zusätzlich die Sitzungsübernahme (setOnline) sofort auf.
+const HEARTBEAT_MS = 6000;
 setInterval(() => {
   const now = Date.now();
   for (const [ip, b] of ipJoins) if (now - b.at > IP_JOIN_WINDOW_MS * 2) ipJoins.delete(ip);
   for (const ws of wss.clients) {
-    if (++ws.missedPongs > 3) { ws.terminate(); continue; }
+    if (++ws.missedPongs > 2) { ws.terminate(); continue; }
     try { ws.ping(); } catch { /* terminate beim nächsten Takt */ }
   }
-}, 10000);
+}, HEARTBEAT_MS);
 
 // Ein einzelner Relay-Prozess bedient alle Räume — nie unkontrolliert sterben
 process.on('uncaughtException', (err) => console.error('uncaught:', err));

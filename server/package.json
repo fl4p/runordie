@@ -2,11 +2,12 @@
   "name": "runordie-server",
   "private": true,
   "version": "1.0.0",
-  "description": "RUN OR DIE — statischer Webserver + WebSocket-Relay für Online-Räume (bis 4 Spieler)",
+  "description": "RUN OR DIE — Backend: WebSocket-Relay + Konten-API für Online-Räume (bis 4 Spieler)",
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "errors": "node errors.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
