@@ -74,43 +74,169 @@
   .plabel { bottom: 10px; font-size: 14px; opacity: .8; background: rgba(13,17,23,.6); padding: 4px 10px; border-radius: 8px; }
   #l1 { left: 12px; color: #4dd2ff; }
   #l2 { right: 12px; color: #ff9f43; text-align: right; }
+  /* ================= Hauptmenü / #msg-Overlay =================
+     Das Overlay dient AUCH als Banner für GAME OVER / Rundenende / Online-Menü
+     (JS schreibt eigenes Markup nach #msg.innerHTML) — deshalb bleiben die
+     Basiswerte (Schriftgrad/-gewicht, <small>) erhalten und alles Menü-
+     Spezifische hängt an eigenen Klassen (.mtitle, .modes, .mpanel, …).
+     Mobile-first: Basiswerte gelten fürs Handy-Hochformat (~360-430px),
+     @media (min-width: 640px) erweitert auf Tablet/Desktop. */
   #msg {
     top: 50%; left: 50%; transform: translate(-50%,-50%); text-align: center;
-    font-size: 42px; font-weight: 800; text-shadow: 0 4px 24px #000;
-    background: rgba(13,17,23,.85); border: 1px solid #30363d; border-radius: 16px;
-    padding: 18px 26px; max-width: min(680px, 94vw); max-height: 92dvh;
-    overflow-y: auto; pointer-events: auto; touch-action: pan-y;
+    font-size: 30px; font-weight: 800; text-shadow: 0 4px 24px #000;
+    background: /* Akzentstreifen oben + durchscheinende Glasfläche */
+      linear-gradient(90deg, #4dd2ff, #ff9f43, #6ee75c, #ff6bd6) top/100% 3px no-repeat,
+      rgba(13,17,23,.72);
+    -webkit-backdrop-filter: blur(16px) saturate(1.25);
+    backdrop-filter: blur(16px) saturate(1.25);
+    border: 1px solid rgba(230,237,243,.14); border-radius: 20px;
+    box-shadow: 0 24px 80px rgba(0,0,0,.55);
+    padding: 16px 14px 12px;
+    max-width: min(720px, calc(100vw - 12px - env(safe-area-inset-left) - env(safe-area-inset-right)));
+    max-height: calc(100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+    pointer-events: auto; touch-action: pan-y;
   }
+  #msg::-webkit-scrollbar { width: 8px; }
+  #msg::-webkit-scrollbar-thumb { background: rgba(230,237,243,.18); border-radius: 4px; }
   #msg small { display: block; font-size: 15px; font-weight: 400; margin-top: 8px; opacity: .9; line-height: 1.6; }
-  #msg .tagline { display: block; font-size: 15px; opacity: .7; }
-  #msg .menurow { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin: 14px 0 4px; }
+  /* ---- Titelblock ---- */
+  #msg .mtitle {
+    display: block; font-size: clamp(32px, 10vw, 62px); line-height: 1.02;
+    font-weight: 900; font-style: italic; letter-spacing: 2px;
+    transform: skewX(-4deg); text-shadow: none; padding: 0 6px; margin: 2px 0 0;
+    background: linear-gradient(105deg, #4dd2ff 12%, #e6edf3 40%, #ffd23d 58%, #ff9f43 88%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    filter: drop-shadow(0 5px 22px rgba(77,210,255,.28));
+  }
+  #msg .mtitle em { font-size: .42em; letter-spacing: 8px; vertical-align: .28em; color: rgba(230,237,243,.75); padding-left: 8px; }
+  #msg .tagline { display: block; font-size: 13.5px; font-weight: 500; letter-spacing: .3px; opacity: .72; margin-top: 7px; text-shadow: none; }
+  /* ---- Spielmodus-Karten: 1 Spalte am Handy, 2 ab Tablet/quer ---- */
+  #msg .modes { display: grid; grid-template-columns: 1fr; gap: 8px; margin: 14px 0 4px; }
+  #msg .modes button { margin-top: 0; }
+  #msg .menurow { display: flex; gap: 10px; justify-content: center; align-items: center; flex-wrap: wrap; margin: 14px 0 4px; }
   #msg .menurow button { margin-top: 0; }
   #msg .bigbtn {
-    font-size: 17px; font-weight: 800; letter-spacing: 1px;
-    padding: 12px 22px; border-radius: 12px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    min-height: 60px; /* großzügiges Touch-Ziel */
+    font-size: 16px; font-weight: 800; letter-spacing: 1px;
+    padding: 10px 14px; border-radius: 14px;
+    border: 1px solid rgba(230,237,243,.16); background: rgba(230,237,243,.05);
   }
-  #msg .bigbtn span { display: block; font-size: 12px; font-weight: 400; opacity: .7; letter-spacing: 0; margin-top: 3px; }
-  #msg .bigbtn.solo { border-color: #4dd2ff66; color: #4dd2ff; background: rgba(77,210,255,.08); }
-  #msg .bigbtn.solo:hover { background: rgba(77,210,255,.18); }
-  #msg .bigbtn.duo { border-color: #ff9f4366; color: #ff9f43; background: rgba(255,159,67,.08); }
-  #msg .bigbtn.duo:hover { background: rgba(255,159,67,.18); }
-  #msg .bigbtn.online { border-color: #6ee75c66; color: #6ee75c; background: rgba(110,231,92,.08); }
-  #msg .bigbtn.online:hover { background: rgba(110,231,92,.18); }
-  #msg .roomcode { display: block; font-size: 44px; letter-spacing: 10px; color: #6ee75c; margin: 8px 0 2px; }
-  #msg .lobbylist { display: block; font-size: 16px; line-height: 1.9; margin: 6px 0; }
-  #msg .menucols {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 6px 20px;
-    text-align: left; font-size: 13px; line-height: 1.55; margin: 12px 0 2px;
+  #msg .bigbtn span { display: block; font-size: 12px; font-weight: 500; color: #e6edf3; opacity: .62; letter-spacing: .2px; line-height: 1.35; margin: 0; }
+  #msg .bigbtn .ico { font-size: 24px; opacity: 1; line-height: 1.1; }
+  #msg .bigbtn.solo   { border-color: rgba(77,210,255,.4);  color: #4dd2ff; background: linear-gradient(165deg, rgba(77,210,255,.16),  rgba(77,210,255,.04)); }
+  #msg .bigbtn.bot    { border-color: rgba(255,107,214,.4); color: #ff6bd6; background: linear-gradient(165deg, rgba(255,107,214,.15), rgba(255,107,214,.04)); }
+  #msg .bigbtn.duo    { border-color: rgba(255,159,67,.4);  color: #ff9f43; background: linear-gradient(165deg, rgba(255,159,67,.16),  rgba(255,159,67,.04)); }
+  #msg .bigbtn.online { border-color: rgba(110,231,92,.4);  color: #6ee75c; background: linear-gradient(165deg, rgba(110,231,92,.16),  rgba(110,231,92,.04)); }
+  /* Touch-Feedback ohne Hover (Handy): :active hellt die Karte auf */
+  #msg .bigbtn:active { filter: brightness(1.35); }
+  /* ---- Online-/Lobby-Bausteine (werden von JS in #msg gerendert) ---- */
+  #msg .mh { display: block; font-weight: 700; letter-spacing: 1px; margin-bottom: 3px; }
+  #msg .roomcode {
+    display: block; width: fit-content; margin: 10px auto 4px;
+    font-size: 34px; font-weight: 900; letter-spacing: 8px; color: #6ee75c;
+    padding: 4px 8px 4px 16px; border: 1px dashed rgba(110,231,92,.45); border-radius: 14px;
+    background: rgba(110,231,92,.07); text-shadow: 0 0 26px rgba(110,231,92,.5);
   }
-  #msg .menucols .mh { display: block; margin-bottom: 3px; }
+  #msg .lobbylist {
+    display: block; width: fit-content; min-width: 200px; max-width: 100%; margin: 8px auto;
+    font-size: 16px; line-height: 2; padding: 6px 16px; box-sizing: border-box;
+    background: rgba(230,237,243,.04); border: 1px solid rgba(230,237,243,.1); border-radius: 12px;
+  }
+  /* ---- Aufklapp-Panels: Steuerung & Tipps / Einstellungen ---- */
+  #msg .mpanel {
+    margin: 8px 0 0; font-size: 13px; font-weight: 400; text-align: left;
+    border: 1px solid rgba(230,237,243,.1); border-radius: 12px;
+    background: rgba(230,237,243,.03); text-shadow: none;
+  }
+  #msg .mpanel summary {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    min-height: 44px; box-sizing: border-box; /* Touch-Ziel */
+    padding: 10px 14px; font-size: 13.5px; font-weight: 700; letter-spacing: .4px;
+    opacity: .85; list-style: none; border-radius: 12px; -webkit-tap-highlight-color: transparent;
+  }
+  #msg .mpanel summary::-webkit-details-marker { display: none; }
+  #msg .mpanel summary::after { content: "▾"; margin-left: auto; opacity: .5; }
+  #msg .mpanel[open] summary::after { content: "▴"; }
+  #msg .mpanel summary:active { background: rgba(230,237,243,.07); }
+  #msg .pbody { display: block; padding: 2px 10px 10px; line-height: 1.55; }
+  #msg .menucols { display: grid; grid-template-columns: 1fr; gap: 8px 20px; text-align: left; line-height: 1.55; margin-bottom: 10px; }
   #msg .p1c { color: #4dd2ff; font-weight: 700; }
   #msg .p2c { color: #ff9f43; font-weight: 700; }
-  #msg details { margin: 8px 0 2px; font-size: 13px; }
-  #msg summary { cursor: pointer; opacity: .7; padding: 4px; }
-  #msg summary:hover { opacity: 1; }
-  #msg details[open] { text-align: left; background: rgba(255,255,255,.03); border-radius: 10px; padding: 6px 12px 10px; }
-  #msg .settings button { font-size: 12.5px; padding: 6px 10px; }
-  #msg .mkeys { display: block; font-size: 12px; opacity: .5; margin-top: 10px; }
+  /* ---- Einstellungen als Schalter-Zeilen (Texte setzt updateDiveBtn per
+          textContent — deshalb reine <button> ohne nötige Kind-Elemente,
+          der ⇄-Pfeil kommt als CSS-Pseudo-Element) ---- */
+  #msg .sgh { display: block; font-size: 11px; font-weight: 700; letter-spacing: 1.4px; text-transform: uppercase; opacity: .5; margin: 10px 0 2px; }
+  #msg .pbody > button, #msg .senslabel {
+    display: flex; width: 100%; box-sizing: border-box; align-items: center; gap: 10px;
+    min-height: 44px; /* Touch-Ziel */
+    text-align: left; font-size: 13px; line-height: 1.35; padding: 9px 12px; margin: 6px 0 0;
+    border-radius: 10px; border: 1px solid rgba(230,237,243,.12);
+    background: rgba(230,237,243,.04); color: #e6edf3;
+  }
+  #msg .pbody > button::after { content: "⇄"; margin-left: auto; opacity: .4; flex: none; padding-left: 6px; }
+  #msg .pbody > #gpuprofbtn::after { content: "▸"; }
+  #msg .pbody > button:active { background: rgba(230,237,243,.12); }
+  /* Slider-Zeile: darf am Handy umbrechen, der Regler bekommt die volle Breite */
+  #msg .senslabel { pointer-events: auto; flex-wrap: wrap; row-gap: 0; }
+  #msg .senslabel input[type=range] {
+    flex: 1 1 140px; min-width: 120px; height: 40px; /* hohe Daumen-Trefferfläche */
+    -webkit-appearance: none; appearance: none; margin: 0; padding: 0;
+    border: none; background: transparent; text-transform: none;
+  }
+  #msg .senslabel input[type=range]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: rgba(230,237,243,.2); }
+  #msg .senslabel input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 24px; height: 24px; margin-top: -9px;
+    border-radius: 50%; background: #4da3ff; border: none; box-shadow: 0 1px 6px rgba(0,0,0,.45);
+  }
+  #msg .senslabel input[type=range]::-moz-range-track { height: 6px; border-radius: 3px; background: rgba(230,237,243,.2); }
+  #msg .senslabel input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border: none; border-radius: 50%; background: #4da3ff; }
+  #msg .senslabel #sensval { opacity: .7; min-width: 34px; text-align: right; flex: none; margin-left: auto; }
+  /* ---- Fußzeile (Tastatur-Hinweise) ---- */
+  #msg .mkeys { display: block; font-size: 11.5px; font-weight: 400; opacity: .45; letter-spacing: .3px; margin-top: 10px; }
+  /* ---- Tablet/Desktop (und Handy quer ab 640px Breite) ---- */
+  @media (min-width: 640px) {
+    #msg { font-size: 42px; padding: 24px 26px 16px; }
+    #msg .modes { grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 18px; }
+    #msg .bigbtn { padding: 14px 16px; font-size: 16.5px; }
+    #msg .bigbtn .ico { font-size: 26px; }
+    #msg .menucols { grid-template-columns: 1fr 1fr; }
+    #msg .pbody { padding: 2px 14px 12px; }
+    #msg .tagline { font-size: 14px; }
+    #msg .roomcode { font-size: 44px; letter-spacing: 12px; padding-left: 20px; }
+  }
+  /* Handy quer (niedrige Höhe): kompakter Kopf, damit die Karten sichtbar bleiben */
+  @media (max-height: 480px) {
+    #msg { font-size: 24px; padding: 10px 16px 8px; }
+    #msg .mtitle { font-size: clamp(26px, 7vh, 38px); }
+    #msg .tagline { margin-top: 3px; }
+    #msg .modes { margin-top: 10px; }
+    #msg .bigbtn { min-height: 52px; padding: 8px 12px; }
+  }
+  /* Nur echte Zeiger-Geräte: Hover-Effekte (am Touchscreen bleibt nichts "kleben") */
+  @media (hover: hover) {
+    #msg .bigbtn.solo:hover   { background: rgba(77,210,255,.2);  box-shadow: 0 6px 26px rgba(77,210,255,.18); }
+    #msg .bigbtn.bot:hover    { background: rgba(255,107,214,.2); box-shadow: 0 6px 26px rgba(255,107,214,.18); }
+    #msg .bigbtn.duo:hover    { background: rgba(255,159,67,.2);  box-shadow: 0 6px 26px rgba(255,159,67,.18); }
+    #msg .bigbtn.online:hover { background: rgba(110,231,92,.2);  box-shadow: 0 6px 26px rgba(110,231,92,.18); }
+    #msg .mpanel summary:hover { opacity: 1; background: rgba(230,237,243,.04); }
+    #msg .pbody > button:hover { background: rgba(230,237,243,.09); }
+  }
+  /* Touch-Geräte: Tastatur-Kurzhinweise sind irrelevant -> ausblenden
+     (Element bleibt im DOM/MENU_HTML-Snapshot, nur CSS versteckt es) */
+  @media (pointer: coarse) { #msg .mkeys { display: none; } }
+  /* Dezente Bewegung nur, wenn das System nichts dagegen hat */
+  @media (prefers-reduced-motion: no-preference) {
+    #msg { animation: msg-in .3s cubic-bezier(.2,.8,.3,1); }
+    #msg .bigbtn { transition: transform .15s ease, box-shadow .15s ease, background .15s ease, filter .1s ease; }
+    #msg .bigbtn:hover { transform: translateY(-2px); }
+    #msg .bigbtn:active { transform: scale(.97); }
+    #msg .mtitle { animation: title-shine 7s linear infinite; }
+  }
+  @keyframes msg-in { from { opacity: 0; transform: translate(-50%,-47%) scale(.97); } }
+  @keyframes title-shine { 0%,100% { background-position: 0% 0; } 50% { background-position: 100% 0; } }
   #speed { top: 60px; left: 50%; transform: translateX(-50%); font-size: 13px; opacity: .55; }
   #padassign {
     bottom: 54px; left: 50%; transform: translateX(-50%);
@@ -122,26 +248,27 @@
     bottom: 112px; left: 50%; transform: translateX(-50%);
     font-size: 22px; font-weight: 800; text-shadow: 0 2px 12px #000;
   }
+  /* Basis-Buttons/-Inputs — gelten auch für das von JS gerenderte Markup
+     (Online-Menü, Lobby, Highscore-Eingabe mit #scorename/#scoreok) */
   #msg button {
-    pointer-events: auto; margin-top: 12px; font: inherit; font-size: 15px;
-    padding: 8px 18px; border-radius: 8px; border: 1px solid #30363d;
-    background: #1a2029; color: #e6edf3; cursor: pointer;
+    pointer-events: auto; margin-top: 12px; font: inherit; font-size: 14.5px; font-weight: 600;
+    box-sizing: border-box;
+    padding: 9px 18px; border-radius: 10px; border: 1px solid rgba(230,237,243,.16);
+    background: rgba(230,237,243,.06); color: #e6edf3; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
   }
-  #msg button:hover { background: #242d39; }
-  #msg .senslabel {
-    pointer-events: auto; display: inline-flex; align-items: center; gap: 10px;
-    font-size: 15px; padding: 8px 18px; border-radius: 8px;
-    border: 1px solid #30363d; background: #1a2029; color: #e6edf3;
-  }
-  #msg .senslabel input[type=range] {
-    width: 130px; padding: 0; border: none; background: transparent;
-    text-transform: none; accent-color: #4da3ff;
-  }
+  /* Touch-Ziele >=44px für alle "richtigen" Menü-Buttons — bewusst NICHT für
+     die Mini-Buttons in der Lobby-Liste (✕ Rauswerfen / Einladen, inline gestylt) */
+  #msg .menurow button, #msg .modes button, #msg #scoreok { min-height: 44px; }
+  #msg button:hover { background: rgba(230,237,243,.12); }
+  #msg button:active { background: rgba(230,237,243,.16); }
   #msg input {
-    pointer-events: auto; font: inherit; font-size: 16px; width: 180px;
-    padding: 7px 12px; border-radius: 8px; border: 1px solid #30363d;
-    background: #10151c; color: #e6edf3; text-transform: uppercase; text-align: center;
+    pointer-events: auto; font: inherit; font-size: 16px; width: min(180px, 60vw);
+    min-height: 44px; box-sizing: border-box; /* Touch-Ziel, kein iOS-Zoom (>=16px) */
+    padding: 8px 12px; border-radius: 10px; border: 1px solid rgba(230,237,243,.16);
+    background: rgba(13,17,23,.6); color: #e6edf3; text-transform: uppercase; text-align: center;
   }
+  #msg input:focus { outline: none; border-color: rgba(77,210,255,.6); box-shadow: 0 0 0 3px rgba(77,210,255,.15); }
   .powerups { top: 12px; font-size: 22px; letter-spacing: 3px; text-shadow: 0 2px 8px #000; }
   #pu1 { left: 14px; }
   #pu2 { left: calc(50% + 16px); }
@@ -177,11 +304,10 @@
   #btnGhost { right: calc(148px + env(safe-area-inset-right)); bottom: calc(136px + env(safe-area-inset-bottom)); width: 56px; height: 56px; font-size: 24px; }
   #btnExit { right: calc(12px + env(safe-area-inset-right)); top: calc(12px + env(safe-area-inset-top)); width: 44px; height: 44px; font-size: 20px; border-radius: 12px; }
   @media (pointer: coarse) { .plabel { display: none; } }
-  /* Kleine Bildschirme: kompaktere Schrift, einspaltige Info */
+  /* Kleine Bildschirme: kompaktere HUD-Anzeige (das Menü selbst ist mobile-first
+     über die #msg-Basiswerte + min-width-Erweiterung geregelt) */
   @media (max-height: 560px), (max-width: 700px) {
-    #msg { font-size: 28px; padding: 10px 16px; }
     #msg small { font-size: 13px; line-height: 1.45; }
-    #msg .menucols { grid-template-columns: 1fr; }
     #score { font-size: 18px; padding: 4px 14px; white-space: nowrap; }
     #speed { top: 46px; }
   }
@@ -208,42 +334,52 @@
   <div class="tbtn" id="btnGhost">🌑</div>
   <div class="tbtn" id="btnExit">✕</div>
 </div>
-<div class="hud" id="msg">RUN OR DIE<small>
+<div class="hud" id="msg"><span class="mtitle">RUN <em>OR</em> DIE</span>
   <span class="tagline">Ragdoll-Runner: Hindernisse rollen an — weich aus, spring drüber, überleb!</span>
-  <span class="menurow">
-    <button id="startsolo" class="bigbtn solo">▶ EINZELSPIELER<span>Vollbild · Überlebenszeit · Highscores</span></button>
-    <button id="startbot" class="bigbtn solo">🤖 GEGEN BOT<span>Vollbild-Duell gegen den Computer</span></button>
-    <button id="startduo" class="bigbtn duo">▶▶ 2 SPIELER<span>Splitscreen-Duell an einer Tastatur</span></button>
-    <button id="startonline" class="bigbtn online">🌐 ONLINE<span>Übers Internet · 2–4 Spieler</span></button>
+  <span class="modes">
+    <button id="startsolo" class="bigbtn solo"><span class="ico">🏃</span>EINZELSPIELER<span>Vollbild · Überlebenszeit · Highscores</span></button>
+    <button id="startbot" class="bigbtn bot"><span class="ico">🤖</span>GEGEN BOT<span>Vollbild-Duell gegen den Computer</span></button>
+    <button id="startduo" class="bigbtn duo"><span class="ico">🤼</span>2 SPIELER<span>Splitscreen-Duell an einer Tastatur</span></button>
+    <button id="startonline" class="bigbtn online"><span class="ico">🌐</span>ONLINE<span>Übers Internet · 2–4 Spieler</span></button>
   </span>
-  <span class="menucols">
-    <span>
-      <b class="mh">🎮 Steuerung</b>
-      <span class="p1c">Spieler 1</span> — W A S D · Leertaste springt · E/Maus boxt · Rechtsklick grätscht<br>
-      <span class="p2c">Spieler 2</span> — Pfeiltasten · Enter springt · − boxt · Punkt grätscht<br>
-      🎮 Controller: Stick ◀/▶ wählt die Seite — A springt, X boxt, B grätscht<br>
-      📱 Touch: Stick läuft · ▲ springt · 🥊 boxt · 🛝 grätscht
+  <details class="mpanel"><summary>🎮 Steuerung &amp; Tipps</summary>
+    <span class="pbody">
+      <span class="menucols">
+        <span>
+          <b class="mh">🎮 Steuerung</b>
+          <span class="p1c">Spieler 1</span> — W A S D · Leertaste springt · E/Maus boxt · Rechtsklick grätscht<br>
+          <span class="p2c">Spieler 2</span> — Pfeiltasten · Enter springt · − boxt · Punkt grätscht<br>
+          🎮 Controller: Stick ◀/▶ wählt die Seite — A springt, X boxt, B grätscht<br>
+          📱 Touch: Stick läuft · ▲ springt · 🥊 boxt · 🛝 grätscht
+        </span>
+        <span>
+          <b class="mh">✨ Gut zu wissen</b>
+          2× Springen = Doppelsprung · Hechtsprung braucht 💎<br>
+          💥-Blöcke explodieren bei Berührung (Kettenreaktion!)<br>
+          Rote Laser überspringen — mit der Zeit werden es mehr<br>
+          ❄️ Eiszonen machen die Fahrbahn spiegelglatt
+        </span>
+      </span>
+      <b class="mh">🃏 Alle Details: Power-ups, Spezialmoves &amp; Modi</b>
+      Power-ups: 💎 grün = 3 Hechtsprünge · 🥊 rot = 3 harte Schläge · 🐌 violett = 4 s Zeitlupe für den GEGNER · 🧲 = zieht 6 s lang Power-ups an · ⭐ gold = 5 s unverwundbar · 🛡 = blockt 3 Treffer.<br>
+      <b>Boxen:</b> ~2 m Reichweite, 0,55 s Abklingzeit — Treffer schleudern den Gegner als Ragdoll davon (🛡 blockt).<br>
+      <b>Grätsche:</b> 0,55 s Slide mit 13 m/s in Rücklage — erwischte Gegner fliegen hoch und sind kurz gestunnt. Nur am Boden, 1,3 s Abklingzeit, an Kanten riskant.<br>
+      <b>Hechtsprung:</b> 3. Sprung in der Luft (braucht 💎) — Vorwärts-Dive; wer dabei boxt, schleudert 1,7× härter. Die Landung richtet die Figur wieder auf.<br>
+      <b>Kanten-Hängen:</b> Beim Fallen an der Plattformkante greifen — die Sprungtaste zieht dich hoch.<br>
+      <b>R</b> = Dreh-Modus: Maus (Spieler 1) bzw. rechter Stick drehen Figur, Kamera und Box-Richtung.
     </span>
-    <span>
-      <b class="mh">✨ Gut zu wissen</b>
-      2× Springen = Doppelsprung · Hechtsprung braucht 💎<br>
-      💥-Blöcke explodieren bei Berührung (Kettenreaktion!)<br>
-      Rote Laser überspringen — mit der Zeit werden es mehr<br>
-      ❄️ Eiszonen machen die Fahrbahn spiegelglatt
-    </span>
-  </span>
-  <details><summary>Alle Details: Power-ups, Spezialmoves &amp; Modi</summary>
-    Power-ups: 💎 grün = 3 Hechtsprünge · 🥊 rot = 3 harte Schläge · 🐌 violett = 4 s Zeitlupe für den GEGNER · 🧲 = zieht 6 s lang Power-ups an · ⭐ gold = 5 s unverwundbar · 🛡 = blockt 3 Treffer.<br>
-    <b>Boxen:</b> ~2 m Reichweite, 0,55 s Abklingzeit — Treffer schleudern den Gegner als Ragdoll davon (🛡 blockt).<br>
-    <b>Grätsche:</b> 0,55 s Slide mit 13 m/s in Rücklage — erwischte Gegner fliegen hoch und sind kurz gestunnt. Nur am Boden, 1,3 s Abklingzeit, an Kanten riskant.<br>
-    <b>Hechtsprung:</b> 3. Sprung in der Luft (braucht 💎) — Vorwärts-Dive; wer dabei boxt, schleudert 1,7× härter. Die Landung richtet die Figur wieder auf.<br>
-    <b>Kanten-Hängen:</b> Beim Fallen an der Plattformkante greifen — die Sprungtaste zieht dich hoch.<br>
-    <b>R</b> = Dreh-Modus: Maus (Spieler 1) bzw. rechter Stick drehen Figur, Kamera und Box-Richtung.
   </details>
-  <span class="menurow settings">
-    <button id="divebtn"></button><button id="stunbtn"></button><button id="punchbtn"></button><button id="rushbtn"></button><button id="snowbtn"></button><button id="botdiffbtn"></button><button id="fpscapbtn"></button><label class="senslabel" for="sensrange">🎮 Stick-Empfindlichkeit <input type="range" id="sensrange" min="0.5" max="2" step="0.05" value="1"><span id="sensval">1×</span></label><button id="gpuprofbtn">🔬 GPU-Profil erstellen</button>
-  </span>
-  <span class="mkeys">Tastatur: 1 = Einzelspieler · 2 = Gegen Bot · beliebige Taste = 2 Spieler · ESC = Menü</span></small></div>
+  <details class="mpanel"><summary>⚙️ Einstellungen</summary>
+    <span class="pbody">
+      <span class="sgh">🎲 Spielregeln</span>
+      <button id="divebtn"></button><button id="stunbtn"></button><button id="punchbtn"></button><button id="rushbtn"></button><button id="snowbtn"></button><button id="botdiffbtn"></button>
+      <span class="sgh">🖥️ Grafik &amp; System</span>
+      <button id="fpscapbtn"></button>
+      <label class="senslabel" for="sensrange">🎮 Stick-Empfindlichkeit <input type="range" id="sensrange" min="0.5" max="2" step="0.05" value="1"><span id="sensval">1×</span></label>
+      <button id="gpuprofbtn">🔬 GPU-Profil erstellen</button>
+    </span>
+  </details>
+  <span class="mkeys">⌨️ 1 = Einzelspieler · 2 = Gegen Bot · beliebige Taste = 2 Spieler · ESC = Menü</span></div>
 
 <script type="importmap">
 { "imports": {
