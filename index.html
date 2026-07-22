@@ -4552,6 +4552,7 @@ document.addEventListener('click', (e) => {
     if (id === 'roomsrefresh') netSendJson({ t: 'rooms' });
     if (id === 'netpublictoggle') netSendJson({ t: 'setpublic', on: !netIsPublic });
     if (id.startsWith('joinpub_')) { netBrowsingRooms = false; netJoinRoom(id.slice(8)); }
+    if (id.startsWith('lset_')) netToggleLobbySetting(id.slice(5)); // Host stellt eine Regel um
     // Online-Spieler einladen (Knopf-ID inv_<userid>)
     if (id.startsWith('inv_')) netInvite(+id.slice(4));
     if (id.startsWith('kick_')) netSendJson({ t: 'kick', slot: +id.slice(5) });
@@ -6077,6 +6078,7 @@ function netOnMessage(ev) {
         flashPad('🌐 Spieler wieder verbunden', '#6ee75c');
       }
       netSendJson({ k: 'lobby', roster: netRoster, names: netNames }); // an alle verteilen
+      netBroadcastLobbySettings(); // der/die Neue sieht sofort die aktuellen Regeln
       netRtcOffer(seats[0], seats); // eine P2P-Verbindung je Mitspieler (mit seinen Sitzen)
       if (netUiOpen) netRenderLobby();
       return;
@@ -6175,6 +6177,12 @@ function netApplyEvent(m) {
       if ('noStun' in m) noStun = !!m.noStun;
       if ('snowZones' in m) { snowZones = !!m.snowZones; if (!snowZones && snowActive) endSnow(true); }
       return;
+    case 'lobbyset': { // Host hat in der LOBBY die Regeln angepasst -> nur anzeigen
+      const s = m.s || {};
+      netLobbySettings = { dive: !!s.dive, stun: !!s.stun, snow: !!s.snow, sky: !!s.sky, punch: !!s.punch };
+      if (netUiOpen && netCode) netRenderLobby();
+      return;
+    }
     case 'breach': { // Sprenghecht: identischer Split wie auf dem Host
       const segs = breachWallAt(m.id, m.hx);
       (m.segIds || []).forEach((sid, i) => { if (segs[i]) segs[i].netId = sid; });
@@ -6201,6 +6209,7 @@ function netOnStart(m) {
   if (rotMode) toggleRotMode();
   diveAlways = !!m.settings?.diveAlways;
   noStun = !!m.settings?.noStun;
+  punchStun = !!m.settings?.punch; // Boxen-Regel des Hosts übernehmen
   dayMode = !!m.settings?.sky; // Tag/Nacht-Phase des Hosts übernehmen
   netLastSnapAt = perfNow();
   snowZones = !!m.settings?.snowZones;
@@ -6221,7 +6230,7 @@ function netStartOnline() {
   rushMode = false;
   if (rotMode) toggleRotMode();
   for (let i = 0; i < botCtl.length; i++) botCtl[i] = null;
-  netSendJson({ k: 'start', v: NET_PROTO, roster: netRoster, names: netNames, settings: { diveAlways, noStun, snowZones, sky: dayMode ? 1 : 0 } });
+  netSendJson({ k: 'start', v: NET_PROTO, roster: netRoster, names: netNames, settings: { diveAlways, noStun, snowZones, sky: dayMode ? 1 : 0, punch: punchStun ? 1 : 0 } });
   $('touchui').classList.toggle('hidden', !isTouch);
   resetRound();      // setzt state='playing' und broadcastet das 'round'-Event
   applySoloLayout(); // Vollbild-Kamera + Online-Scorebar
@@ -6286,6 +6295,39 @@ function netBroadcastSettings() {
   if (netRole === 'host') netSendJson({ k: 'settings', diveAlways, noStun, snowZones });
 }
 
+// ---- Regeln in der Lobby (Host stellt ein, Clients sehen sie) ----
+// Die fünf online-relevanten Regeln, die der Host schon VOR dem Start setzen kann.
+const NET_SETTING_KEYS = ['dive', 'stun', 'snow', 'sky', 'punch'];
+function netLobbySettingLabel(key, v) {
+  switch (key) {
+    case 'dive':  return v ? '🤸 Hechtsprung: IMMER' : '🤸 Hechtsprung: nur mit 💎';
+    case 'stun':  return v ? '💫 Stun: AUS (nur Schieben)' : '💫 Stun: AN';
+    case 'snow':  return v ? '❄️ Eiszonen: AN' : '🌤️ Eiszonen: AUS';
+    case 'sky':   return v ? '☀️ Tag' : '🌙 Nacht';
+    case 'punch': return v ? '🥊 Boxen: STUN' : '🥊 Boxen: NORMAL';
+  }
+  return '';
+}
+// Aktuelle Regeln des Hosts als kompaktes Objekt (aus den lokalen Flags)
+function netLobbySettingsObj() {
+  return { dive: diveAlways, stun: noStun, snow: snowZones, sky: dayMode, punch: punchStun };
+}
+let netLobbySettings = null; // vom Host empfangene Regeln (Client-Anzeige in der Lobby)
+function netBroadcastLobbySettings() {
+  if (netMySlot === 0 && netCode) netSendJson({ k: 'lobbyset', s: netLobbySettingsObj() }); // Host des Raums
+}
+function netToggleLobbySetting(key) {
+  if (netMySlot !== 0) return; // nur der Host darf umstellen
+  if (key === 'dive') { diveAlways = !diveAlways; localStorage.setItem('runordie_diveAlways', diveAlways ? '1' : '0'); }
+  else if (key === 'stun') { noStun = !noStun; localStorage.setItem('runordie_noStun', noStun ? '1' : '0'); }
+  else if (key === 'snow') { snowZones = !snowZones; localStorage.setItem('runordie_snow', snowZones ? '1' : '0'); if (!snowZones && snowActive) endSnow(true); }
+  else if (key === 'sky') { toggleDaySky(); }
+  else if (key === 'punch') { punchStun = !punchStun; localStorage.setItem('runordie_punchStun', punchStun ? '1' : '0'); }
+  else return;
+  netBroadcastLobbySettings();
+  netRenderLobby();
+}
+
 function netResetState() {
   if (netReconnect) { if (netReconnect.timer) clearTimeout(netReconnect.timer); netReconnect = null; }
   if (netHostHoldTimer) { clearTimeout(netHostHoldTimer); netHostHoldTimer = 0; }
@@ -6307,7 +6349,7 @@ function netResetState() {
   netRtcCloseAll();
   netRole = null; netUiOpen = false; netMySlot = 0; netMySeats = [0]; netCode = null;
   netRoster = [0]; netNames = {}; netOnlineUsers = []; netHelloSent = false; netInvitedIds.clear(); netRoomWaitAt = 0; netPing = 0;
-  netIsPublic = false; netBrowsingRooms = false;
+  netIsPublic = false; netBrowsingRooms = false; netLobbySettings = null;
   netSnaps.length = 0; netActQueue.length = 0; netInputSeq = 0; netRoundNo = 0; netNextId = 1;
   netLastSnapAt = 0; netStaleWarnAt = 0;
   for (const k of Object.keys(netInputs)) delete netInputs[k];
@@ -6779,10 +6821,24 @@ function netRenderLobby() {
   const pub = netMySlot === 0
     ? `<span class="menurow"><button id="netpublictoggle">${netIsPublic ? '🌐 Öffentlich: AN — für alle sichtbar' : '🔒 Nur per Code (privat)'}</button></span>`
     : '';
+  // Regeln: der Host stellt sie ein, Mitspieler sehen sie (schreibgeschützt)
+  let settingsBlock;
+  if (netMySlot === 0) {
+    const o = netLobbySettingsObj();
+    settingsBlock = `<span style="display:block;margin:8px 0 2px;opacity:.75;font-size:13px">⚙️ Regeln:</span>` +
+      `<span class="menurow" style="flex-wrap:wrap;gap:6px">` +
+      NET_SETTING_KEYS.map((k) => `<button id="lset_${k}" style="font-size:13px">${netEsc(netLobbySettingLabel(k, o[k]))}</button>`).join('') +
+      `</span>`;
+  } else {
+    settingsBlock = netLobbySettings
+      ? `<span style="display:block;margin:8px 0 2px;opacity:.75;font-size:13px">⚙️ Regeln des Hosts: ` +
+        NET_SETTING_KEYS.map((k) => netEsc(netLobbySettingLabel(k, netLobbySettings[k]))).join(' · ') + `</span>`
+      : '';
+  }
   $('msg').innerHTML = netMenuShell(
     `Raum-Code:<span class="roomcode">${netCode}</span>` +
     `<span style="opacity:.6;font-size:12px">${joinUrl}</span><br>` +
-    `<span class="lobbylist">${rows}</span>${info}${pub}${invite}`
+    `<span class="lobbylist">${rows}</span>${info}${settingsBlock}${pub}${invite}`
   );
   $('msg').classList.remove('hidden');
 }
@@ -7382,6 +7438,7 @@ window.__game = { players, obstacles, powerups, world, cams, sky, fxRings, laser
   netShowOnlineMenu, netCreateRoom, netJoinRoom, netStartOnline, netLeave, netShowStats, netShowPublicRooms,
   get netPublicRooms() { return netPublicRooms.slice(); }, get netIsPublic() { return netIsPublic; },
   netSetPublic: (on) => netSendJson({ t: 'setpublic', on: !!on }),
+  netToggleLobbySetting, get netLobbySettings() { return netLobbySettings; }, get netLobbySettingsObj() { return netLobbySettingsObj(); },
   get netFallback() { return NET_FALLBACK_WS; }, set netFallback(v) { NET_FALLBACK_WS = v; },
   get netRole() { return netRole; }, get netCode() { return netCode; },
   get netRoster() { return netRoster.slice(); }, get netMySlot() { return netMySlot; },
