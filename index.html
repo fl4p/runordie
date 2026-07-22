@@ -3863,7 +3863,15 @@ function botScanThreat(p, bot, horizonCap) {
 // Ein einziger Ragdoll-Treffer (0.8 s) vor einer Wand schleift die liegende
 // Figur 6-13 m nach hinten — wer bei z≈5 erwischt wird, ist über der
 // Hinterkante, bevor der Stun endet. Auf Eis (längere Rutscher) noch enger.
-function botDodgeZ(t) { return Math.min(t.position.z, iceLevel > 0.3 ? 2 : 3); }
+// Rush-Sonderfall: "Position halten" beim Ausweichen wäre dort ein Dauer-Stopp —
+// ein zurückliegender Bot steht im Strom der Hindernisse/Laser, die vom
+// Führenden nach hinten durchziehen, und ist damit PERMANENT im Ausweich-Modus
+// geparkt (beobachtet: lebendig, aufrecht, unsichtbar weit hinter der Kamera,
+// Runde endet nie). Beim Ausweichen deshalb weiter Richtung Führendem drücken.
+function botDodgeZ(t) {
+  if (rushMode) return Math.min(t.position.z, aliveMinZ() + 3);
+  return Math.min(t.position.z, iceLevel > 0.3 ? 2 : 3);
+}
 
 // Parallel ankommende "Springer"-Gefahren (Querlaser, Latte, Walze) übersehen
 // wir nicht, nur weil gerade eine ANDERE Gefahr seitlich ausgewichen wird:
