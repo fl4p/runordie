@@ -376,6 +376,8 @@
       <span class="sgh">🖥️ Grafik &amp; System</span>
       <button id="fpscapbtn"></button>
       <label class="senslabel" for="sensrange">🎮 Stick-Empfindlichkeit <input type="range" id="sensrange" min="0.5" max="2" step="0.05" value="1"><span id="sensval">1×</span></label>
+      <span class="sgh">🎮 Controller-Tasten</span>
+      <button id="padmapjump"></button><button id="padmappunch"></button><button id="padmaptackle"></button><button id="padmapghost"></button><button id="padmapreset"></button>
       <button id="gpuprofbtn">🔬 GPU-Profil erstellen</button>
     </span>
   </details>
@@ -3073,6 +3075,32 @@ function updatePadHud(pads) {
 
 // Normalisiert Standard- UND Nicht-Standard-Pads (z.B. GameSir-G7 Pro: mapping "",
 // 15 Buttons, D-Pad als Hut-Achse axes[9], X auf Button 3 statt 2)
+// ---------- Controller-Tastenbelegung (Menü: Zeile anklicken, Taste drücken) ----------
+const PAD_DEF_STD = { jump: 0, tackle: 1, punch: 2, ghost: 3 };
+const PAD_DEF_HID = { jump: 0, tackle: 1, punch: 3, ghost: 4 }; // X/Y liegen dort meist auf 3/4
+const PAD_BTN_NAMES = { 0: 'A', 1: 'B', 2: 'X', 3: 'Y', 4: 'LB', 5: 'RB', 6: 'LT', 7: 'RT', 8: 'Back', 9: 'Start', 10: 'L3', 11: 'R3', 12: 'D-Pad ▲', 13: 'D-Pad ▼', 14: 'D-Pad ◀', 15: 'D-Pad ▶' };
+let padMap = null; // null = Standardbelegung je Pad-Typ, sonst { jump, tackle, punch, ghost }
+try {
+  // Schema validieren: eine Map mit fehlenden Keys würde Aktionen still
+  // lahmlegen (btn(undefined) ist dauerhaft false)
+  const m = JSON.parse(localStorage.getItem('runordie_padMap'));
+  if (m && ['jump', 'tackle', 'punch', 'ghost'].every((k) => Number.isFinite(m[k]))) padMap = m;
+} catch { /* Standard */ }
+let padCapture = null;          // Aktion, die gerade auf einen Tastendruck wartet
+let padCaptureSeed = false;     // erster Aufnahme-Frame: gehaltene Tasten einsammeln
+let padDrain = false;           // nach der Zuweisung: warten, bis alles losgelassen ist
+const padCaptureHeld = new Set();
+function padAssignButton(gp, action, idx) {
+  // Beim ersten Umbelegen die zum Pad passende Standardbelegung materialisieren
+  padMap = { ...(padMap || (gp.mapping === 'standard' ? PAD_DEF_STD : PAD_DEF_HID)) };
+  for (const k of Object.keys(padMap)) // Duplikat: Tasten tauschen statt doppelt belegen
+    if (k !== action && padMap[k] === idx) padMap[k] = padMap[action];
+  padMap[action] = idx;
+  localStorage.setItem('runordie_padMap', JSON.stringify(padMap));
+  flashPad(`🎮 ${PAD_BTN_NAMES[idx] || 'Taste ' + idx} belegt`, '#6ee75c');
+  updateDiveBtn();
+}
+
 function readPad(gp) {
   const btn = (i) => !!gp.buttons[i]?.pressed;
   const ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
@@ -3080,7 +3108,9 @@ function readPad(gp) {
   if (gp.mapping === 'standard') {
     return {
       ax, ay, any, rx: gp.axes[2] || 0,
-      jump: btn(0), tackle: btn(1), punch: btn(2), ghost: btn(3), back: btn(8), // Y = Tarnung
+      jump: btn((padMap || PAD_DEF_STD).jump), tackle: btn((padMap || PAD_DEF_STD).tackle),
+      punch: btn((padMap || PAD_DEF_STD).punch), ghost: btn((padMap || PAD_DEF_STD).ghost),
+      back: btn(8),
       dl: btn(14), dr: btn(15), du: btn(12), dd: btn(13),
     };
   }
@@ -3096,10 +3126,10 @@ function readPad(gp) {
   }
   return {
     ax, ay, any, rx: gp.axes[2] || 0, // rechter Stick X
-    jump: btn(0),                  // A
-    tackle: btn(1),                // B
-    punch: btn(3) || btn(2),       // X liegt meist auf 3
-    ghost: btn(4),                 // Y liegt bei diesen Pads meist auf 4
+    jump: btn((padMap || PAD_DEF_HID).jump),
+    tackle: btn((padMap || PAD_DEF_HID).tackle),
+    punch: padMap ? btn(padMap.punch) : (btn(3) || btn(2)), // X liegt meist auf 3
+    ghost: btn((padMap || PAD_DEF_HID).ghost),              // Y meist auf 4
     back: btn(10),
     du: hatDir === 0 || hatDir === 1 || hatDir === 7,
     dr: hatDir === 1 || hatDir === 2 || hatDir === 3,
@@ -3128,6 +3158,44 @@ function pollGamepads() {
     return;
   }
   _padHadPads = true;
+
+  // Aufnahme-Modus der Tastenbelegung: der nächste FRISCHE Tastendruck (egal
+  // welches Pad) wird zugewiesen; beim Start bereits gehaltene Tasten zählen
+  // erst nach dem Loslassen. Während der Aufnahme keine normale Verarbeitung —
+  // der Druck darf weder springen noch im Menü das Spiel starten.
+  // Drain nach einer Zuweisung: weiter pausieren, bis ALLE Tasten losgelassen
+  // sind — sonst sähe der nächste Frame die noch gehaltene Wunschtaste und
+  // r.any würde aus dem Einstellungs-Panel heraus ein Spiel starten
+  if (padDrain) {
+    if (pads.some((gp) => gp.buttons.some((b) => b.pressed))) { updatePadHud(pads); return; }
+    padDrain = false;
+  }
+  if (padCapture) {
+    if (padCaptureSeed) {
+      padCaptureSeed = false;
+      padCaptureHeld.clear();
+      for (const gp of pads)
+        for (let i = 0; i < gp.buttons.length; i++)
+          if (gp.buttons[i]?.pressed) padCaptureHeld.add(gp.index * 64 + i);
+      updatePadHud(pads);
+      return;
+    }
+    for (const gp of pads)
+      for (let i = 0; i < gp.buttons.length; i++) {
+        const key = gp.index * 64 + i;
+        if (gp.buttons[i]?.pressed) {
+          if (!padCaptureHeld.has(key)) {
+            padAssignButton(gp, padCapture, i);
+            padCapture = null;
+            padDrain = true; // erst loslassen, dann wieder normale Verarbeitung
+            updatePadHud(pads);
+            return;
+          }
+        } else padCaptureHeld.delete(key);
+      }
+    updatePadHud(pads);
+    return;
+  }
   // Getrennte Controller freigeben
   const present = new Set(pads.map((g) => g.index));
   for (const k of Object.keys(padAssign)) if (!present.has(+k)) { delete padAssign[k]; delete padEdge[k]; }
@@ -4266,6 +4334,7 @@ function applySoloLayout() {
 }
 
 function startGame(solo = false, vsBot = false) {
+  padCapture = null; // offene Tasten-Aufnahme endet mit dem Spielstart
   soloMode = solo;
   botMode = !solo && vsBot;
   if (botMode) { if (!botCtl[1]?.sticky) botCtl[1] = makeBot(botDiff); }
@@ -4318,6 +4387,23 @@ function updateDiveBtn() {
   if (bb) bb.textContent = `🤖 Bot-Stärke: ${BOT_LABELS[botDiff]}`;
   const fc = $('fpscapbtn');
   if (fc) fc.textContent = fpsCap ? '🔋 FPS-Limit: 60 (spart Akku)' : '⚡ FPS-Limit: AUS (volle Bildrate)';
+  const bn = (i) => PAD_BTN_NAMES[i] ?? `Taste ${i}`;
+  // Anzeige-Defaults vom tatsächlich verbundenen Pad ableiten: ein HID-Pad
+  // ohne Map nutzt X/Y auf 3/4 — "X (Standard)" (Index 2) wäre gelogen
+  const _pads = navigator.getGamepads ? Array.from(navigator.getGamepads()).filter((g) => g && g.connected) : [];
+  const _padDef = _pads.some((g) => g.mapping !== 'standard') ? PAD_DEF_HID : PAD_DEF_STD;
+  for (const [bid, act, label] of [
+    ['padmapjump', 'jump', '🦘 Springen'], ['padmappunch', 'punch', '🥊 Boxen'],
+    ['padmaptackle', 'tackle', '🛝 Grätschen'], ['padmapghost', 'ghost', '🌑 Tarnung'],
+  ]) {
+    const b = $(bid);
+    if (b) b.textContent = padCapture === act
+      ? `⌛ ${label}: jetzt Taste am Controller drücken … (Klick bricht ab)`
+      : `${label}: ${padMap ? bn(padMap[act])
+          : _pads.length ? bn(_padDef[act]) + ' (Standard)' : 'Standard (je nach Controller)'}`;
+  }
+  const pr = $('padmapreset');
+  if (pr) pr.textContent = '🔄 Controller-Standardbelegung';
   syncSensUi();
 }
 
@@ -4371,6 +4457,17 @@ document.addEventListener('click', (e) => {
   if (id === 'botdiffbtn') {
     botDiff = botDiff === 'easy' ? 'medium' : botDiff === 'medium' ? 'hard' : 'easy';
     localStorage.setItem('runordie_botDiff', botDiff);
+    updateDiveBtn();
+  }
+  const padmapAct = { padmapjump: 'jump', padmappunch: 'punch', padmaptackle: 'tackle', padmapghost: 'ghost' }[id];
+  if (padmapAct) {
+    padCapture = padCapture === padmapAct ? null : padmapAct; // zweiter Klick bricht ab
+    padCaptureSeed = !!padCapture;
+    updateDiveBtn();
+  }
+  if (id === 'padmapreset') {
+    padMap = null; padCapture = null;
+    localStorage.removeItem('runordie_padMap');
     updateDiveBtn();
   }
   if (id === 'fpscapbtn') {
