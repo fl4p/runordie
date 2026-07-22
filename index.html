@@ -357,10 +357,7 @@
 <div id="netpause" class="hidden"><div class="nppanel">
   <div class="nptitle">☰ SPIEL-MENÜ</div>
   <span class="npnote" id="npnote"></span>
-  <span class="npbody" id="npsettings">
-    <span class="npsgh">🎲 Regeln (ab der nächsten Runde)</span>
-    <button id="npdive"></button><button id="npstun"></button><button id="npsnow"></button>
-  </span>
+  <span class="npbody" id="npsettings"></span>
   <button id="npresume" class="npbig">▶ Weiter spielen</button>
   <button id="npleave" class="npbig npdanger">🚪 Raum verlassen</button>
 </div></div>
@@ -4536,13 +4533,7 @@ document.addEventListener('click', (e) => {
   }
   if (id === 'npresume') toggleNetPause(false);
   if (id === 'npleave') { toggleNetPause(false); backToMenu(); } // einziger Pfad, der den Raum wirklich verlässt
-  if (netRole === 'host' && (id === 'npdive' || id === 'npstun' || id === 'npsnow')) {
-    if (id === 'npdive') { diveAlways = !diveAlways; localStorage.setItem('runordie_diveAlways', diveAlways ? '1' : '0'); }
-    if (id === 'npstun') { noStun = !noStun; localStorage.setItem('runordie_noStun', noStun ? '1' : '0'); }
-    if (id === 'npsnow') { snowZones = !snowZones; localStorage.setItem('runordie_snow', snowZones ? '1' : '0'); if (!snowZones && snowActive) endSnow(true); }
-    netBroadcastSettings();
-    updateNetPause();
-  }
+  // Regel-Umschalter (lset_*) greifen über den gemeinsamen Lobby-Pfad weiter unten
   if (id === 'padmapreset') {
     padMap = null; padCapture = null;
     localStorage.removeItem('runordie_padMap');
@@ -6206,14 +6197,17 @@ function netApplyEvent(m) {
       return;
     }
     case 'sky': dayMode = !!m.day; return; // Tag/Nacht-Ziel kommt vom Host
-    case 'settings': // Host hat im Spiel-Menü die Regeln angepasst
-      if ('diveAlways' in m) diveAlways = !!m.diveAlways;
-      if ('noStun' in m) noStun = !!m.noStun;
-      if ('snowZones' in m) { snowZones = !!m.snowZones; if (!snowZones && snowActive) endSnow(true); }
-      return;
-    case 'lobbyset': { // Host hat in der LOBBY die Regeln angepasst -> nur anzeigen
+    case 'lobbyset': { // Host stellt Regeln um — in der Lobby nur Anzeige, im
+      // laufenden Spiel (Spiel-Menü des Hosts) werden sie sofort angewendet
       const s = m.s || {};
       netLobbySettings = { dive: !!s.dive, stun: !!s.stun, snow: !!s.snow, sky: !!s.sky, punch: !!s.punch };
+      if (netRole === 'client' && state !== 'menu') {
+        diveAlways = netLobbySettings.dive;
+        noStun = netLobbySettings.stun;
+        if (snowZones !== netLobbySettings.snow) { snowZones = netLobbySettings.snow; if (!snowZones && snowActive) endSnow(true); }
+        dayMode = netLobbySettings.sky;
+        punchStun = netLobbySettings.punch;
+      }
       if (netUiOpen && netCode) netRenderLobby();
       return;
     }
@@ -6314,19 +6308,19 @@ function toggleNetPause(show) {
 function updateNetPause() {
   const host = netRole === 'host';
   const n = $('npnote'); if (n) n.textContent = host
-    ? 'Der Raum läuft weiter. Regeln gelten ab der nächsten Runde.'
+    ? 'Der Raum läuft weiter. Du bestimmst die Regeln.'
     : 'Der Raum läuft weiter. Die Regeln bestimmt der Host.';
-  const box = $('npsettings'); if (box) box.style.display = host ? '' : 'none';
-  if (host) {
-    const d = $('npdive'); if (d) d.textContent = diveAlways ? '🤸 Hechtsprung: IMMER (klassisch)' : '🤸 Hechtsprung: nur mit 💎';
-    const s = $('npstun'); if (s) s.textContent = noStun ? '💫 Hindernis-Stun: AUS (nur Schieben)' : '💫 Hindernis-Stun: AN';
-    const w = $('npsnow'); if (w) w.textContent = snowZones ? '❄️ Eiszonen: AN' : '🌤️ Eiszonen: AUS';
+  const box = $('npsettings');
+  if (box) {
+    box.style.display = host ? '' : 'none';
+    // exakt dieselben fünf Regeln und Beschriftungen wie in der Lobby, über
+    // denselben Toggle-Pfad (lset_-Buttons -> netToggleLobbySetting)
+    if (host) {
+      const o = netLobbySettingsObj();
+      box.innerHTML = '<span class="npsgh">🎲 Regeln</span>' +
+        NET_SETTING_KEYS.map((k) => `<button id="lset_${k}">${netEsc(netLobbySettingLabel(k, o[k]))}</button>`).join('');
+    }
   }
-}
-// Host broadcastet geänderte Regeln; die Replik übernimmt sie (greifen ab
-// dem nächsten resetRound bzw. sofort für pro-Frame gelesene Flags)
-function netBroadcastSettings() {
-  if (netRole === 'host') netSendJson({ k: 'settings', diveAlways, noStun, snowZones });
 }
 
 // ---- Regeln in der Lobby (Host stellt ein, Clients sehen sie) ----
@@ -6359,7 +6353,8 @@ function netToggleLobbySetting(key) {
   else if (key === 'punch') { punchStun = !punchStun; localStorage.setItem('runordie_punchStun', punchStun ? '1' : '0'); }
   else return;
   netBroadcastLobbySettings();
-  netRenderLobby();
+  if (netUiOpen && netCode) netRenderLobby();
+  if (!$('netpause')?.classList.contains('hidden')) updateNetPause(); // Spiel-Overlay offen
 }
 
 function netResetState() {
