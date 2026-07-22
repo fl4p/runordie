@@ -6281,8 +6281,15 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     const watch = (w) => w && w.addEventListener('statechange', () => {
       if (w.state === 'installed' && navigator.serviceWorker.controller) showSwToast();
     });
-    if (reg.waiting && navigator.serviceWorker.controller) showSwToast(); // schon wartend
-    reg.addEventListener('updatefound', () => watch(reg.installing));
+    // Kaltstart-Falle: Direkt nach dem Laden ist die Seite (network-first)
+    // ohnehin frisch — ein JETZT entdecktes Worker-Update betrifft nur sw.js
+    // selbst, nicht den laufenden Spielcode. Der Hinweis erschien sonst nach
+    // jedem sw.js-Deploy bei jedem Kaltstart, obwohl man die neue Version
+    // gerade geladen hat. Nur melden, wenn das Update später im bereits
+    // laufenden Tab auftaucht.
+    const justLoaded = () => performance.now() < 20000;
+    if (reg.waiting && navigator.serviceWorker.controller && !justLoaded()) showSwToast();
+    reg.addEventListener('updatefound', () => { if (!justLoaded()) watch(reg.installing); });
   });
 }
 
