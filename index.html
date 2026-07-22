@@ -4896,7 +4896,9 @@ function animate() {
     hudTimer -= dt;
     if (hudTimer <= 0) {
       hudTimer = 0.25;
-      $('speed').textContent = `Tempo ${baseSpeed().toFixed(1)} m/s · ${elapsed.toFixed(0)} s`;
+      // Online-Client: Ping (Rundlaufzeit zum Host) mit anzeigen
+      const ping = netRole === 'client' ? ` · 📶 ${netPing || '…'} ms` : '';
+      $('speed').textContent = `Tempo ${baseSpeed().toFixed(1)} m/s · ${elapsed.toFixed(0)} s${ping}`;
     }
     if (soloMode) { const st = $('solotime'); if (st) st.textContent = Math.floor(elapsed); }
   }
@@ -5075,6 +5077,20 @@ let netSavedSettings = null;
 let netNextId = 1;
 let netSnapTimer = 0;   // zeitbasierter Snapshot-Takt (20 Hz, unabhängig von der Display-Hz)
 let netInputTimer = 0;
+let netPing = 0;        // Client: gemessene Rundlaufzeit zum Host (ms), 0 = noch unbekannt
+let netPingTimer = 0;   // Sende-Intervall des Ping-Pakets
+
+// Ping messen: Client schickt {k:'ping',ts}, Host echot {k:'pong',ts} zurück.
+// Über denselben Kanal wie das Gameplay (P2P wenn offen, sonst Relay) -> realistisch.
+function netSendPing() {
+  const msg = JSON.stringify({ k: 'ping', ts: perfNow() });
+  if (netPeer?.rel?.readyState === 'open') { try { netPeer.rel.send(msg); } catch { /* egal */ } }
+  else if (netWs?.readyState === 1) netWs.send(msg);
+}
+function netApplyPong(ts) {
+  const rtt = Math.round((perfNow() - ts) * 1000);
+  if (rtt >= 0 && rtt < 60000) netPing = rtt;
+}
 let netStaleWarnAt = 0; // Snapshot-Watchdog: frühester Zeitpunkt der nächsten Warnung
 let netLastSnapAt = 0;  // Watchdog-Basis, solange noch kein Snapshot ankam
 const NET_PROTO = 4;    // v4: Sitz-Byte im Input-Frame (gemischter Splitscreen+Online)
@@ -5134,6 +5150,7 @@ function netRtcWireHost(slot, peer) {
   peer.rel.onmessage = (ev) => {
     let m; try { m = JSON.parse(ev.data); } catch { return; }
     if (m.k === 'act' && netRole === 'host') netActPush(peer.slots?.[m.seat | 0] ?? slot, m.a);
+    else if (m.k === 'ping') { try { peer.rel.send(JSON.stringify({ k: 'pong', ts: m.ts })); } catch { /* egal */ } }
   };
   peer.fast.onopen = () => flashPad(`🔗 Direktverbindung zu Spieler ${slot + 1}`, '#6ee75c');
 }
@@ -5185,6 +5202,11 @@ async function netRtcAnswer(m) {
             }
           };
           ch.onopen = () => flashPad('🔗 Direktverbindung zum Host aktiv', '#6ee75c');
+        } else { // 'rel': der Client empfängt hier das Pong der Ping-Messung
+          ch.onmessage = (ev) => {
+            let mm; try { mm = JSON.parse(ev.data); } catch { return; }
+            if (mm.k === 'pong') netApplyPong(mm.ts);
+          };
         }
       };
       pc.onicecandidate = (e) => { if (e.candidate) netSendJson({ k: 'rtc', cand: e.candidate }); };
@@ -5624,6 +5646,8 @@ function netTick(dt) {
     netWatchdog();
     netInputTimer -= dt;
     if (netInputTimer <= 0) { netSendInput(); netInputTimer = 1 / 30; }
+    netPingTimer -= dt;
+    if (netPingTimer <= 0) { netSendPing(); netPingTimer = 1; } // 1×/s
   }
 }
 
@@ -5803,6 +5827,7 @@ function netOnMessage(ev) {
     // Host: Client-JSON = Aktion oder WebRTC-Signaling (vom Relay mit from gestempelt)
     if (m.k === 'act' && netRole === 'host' && (m.from | 0) > 0) netActPush(m.from | 0, m.a);
     if (m.k === 'rtc' && (m.from | 0) > 0) netRtcHostSignal(m.from | 0, m);
+    if (m.k === 'ping' && (m.from | 0) > 0) netSendJson({ k: 'pong', ts: m.ts, to: m.from }); // Ping-Echo (Relay)
     return;
   }
   netApplyEvent(m);
@@ -5810,6 +5835,7 @@ function netOnMessage(ev) {
 
 function netApplyEvent(m) {
   switch (m.k) {
+    case 'pong': if (m.to === netMySlot) netApplyPong(m.ts); return; // Ping-Echo (Relay)
     case 'lobby':
       netRoster = netSanitizeRoster(m.roster) || netRoster;
       if ('names' in m) netNames = netSanitizeNames(m.names);
@@ -5932,7 +5958,7 @@ function netResetState() {
   }
   netRtcCloseAll();
   netRole = null; netUiOpen = false; netMySlot = 0; netMySeats = [0]; netCode = null;
-  netRoster = [0]; netNames = {}; netOnlineUsers = []; netHelloSent = false; netInvitedIds.clear(); netRoomWaitAt = 0;
+  netRoster = [0]; netNames = {}; netOnlineUsers = []; netHelloSent = false; netInvitedIds.clear(); netRoomWaitAt = 0; netPing = 0;
   netSnaps.length = 0; netActQueue.length = 0; netInputSeq = 0; netRoundNo = 0; netNextId = 1;
   netLastSnapAt = 0; netStaleWarnAt = 0;
   for (const k of Object.keys(netInputs)) delete netInputs[k];
@@ -6822,6 +6848,7 @@ window.__game = { players, obstacles, powerups, world, cams, sky, fxRings, laser
   get netRole() { return netRole; }, get netCode() { return netCode; },
   get netRoster() { return netRoster.slice(); }, get netMySlot() { return netMySlot; },
   get netMySeats() { return netMySeats.slice(); }, get netLocalSeats() { return netLocalSeats; }, set netLocalSeats(v) { netLocalSeats = v === 2 ? 2 : 1; },
+  get netPing() { return netPing; },
   get netSnaps() { return netSnaps.length; }, get netNames() { return { ...netNames }; },
   netInvite, get netOnline() { return netOnlineUsers.slice(); },
   get netP2P() { return netPeer ? netPeer.fast?.readyState === 'open' : Object.fromEntries(Object.entries(netPeers).map(([s, p]) => [s, p.fast?.readyState])); },
