@@ -1,12 +1,19 @@
 // HTTP-JSON-API für Benutzerkonten: Registrieren, Login, Konto, Bestenliste,
-// Solo-Score melden. Läuft auf demselben node:http-Server wie die statischen
-// Dateien; hinter nginx unter /runordie/api/… erreichbar (same-origin).
+// Solo-Score melden. Das Frontend liegt auf GitHub Pages, ruft die API also
+// CROSS-ORIGIN auf -> CORS nötig. Erlaubte Origins per CORS_ORIGINS (kommagetrennt),
+// Standard das GitHub-Pages-Frontend; localhost ist für Entwicklung immer erlaubt.
 import {
   createUser, findUser, verifyPassword, newSession, userForToken, endSession,
   recordSolo, leaderboard, publicUser, validUsername, validPassword,
 } from './db.js';
 
 const MAX_BODY = 4 * 1024;
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || 'https://fl4p.github.io')
+  .split(',').map((s) => s.trim()).filter(Boolean);
+function corsAllows(origin) {
+  return !!origin && (CORS_ORIGINS.includes(origin) ||
+    /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin));
+}
 
 // Login-Bruteforce bremsen: pro IP begrenzte Fehlversuche im Zeitfenster
 const loginFails = new Map(); // ip -> { n, at }
@@ -72,6 +79,18 @@ function bearer(req) {
 export async function handleApi(req, res, path, ip) {
   if (!path.startsWith('/api/')) return false;
   const route = path.slice(4); // "/api/x" -> "/x"
+
+  // CORS: erlaubten Origin zurückspiegeln (setHeader bleibt bei writeHead erhalten).
+  // Keine Cookies -> keine credentials; das Token reist im Authorization-Header.
+  const origin = req.headers.origin;
+  if (corsAllows(origin)) {
+    res.setHeader('access-control-allow-origin', origin);
+    res.setHeader('vary', 'Origin');
+    res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
+    res.setHeader('access-control-allow-headers', 'authorization, content-type');
+    res.setHeader('access-control-max-age', '600');
+  }
+  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return true; } // Preflight
 
   try {
     if (req.method === 'POST' && (route === '/register' || route === '/login')) {

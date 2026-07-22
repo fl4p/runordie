@@ -104,9 +104,24 @@ const send = (ws, data, binary = false) => {
 };
 const sendJson = (ws, obj) => send(ws, JSON.stringify(obj));
 
+// Origin-Prüfung schon beim Handshake (verifyClient) statt danach: eine fremde
+// Website bekommt so gar keine offene Verbindung (kein kurzes Open→Close). Der
+// eigene Origin und localhost (Dev) sind immer erlaubt; ohne ORIGINS bleibt alles offen.
+function originAllowed(req) {
+  const origin = req.headers.origin;
+  if (!ALLOWED_ORIGINS.length || !origin) return true;
+  const host = req.headers.host;
+  const sameOrigin = host && origin.endsWith('//' + host);
+  const localOrigin = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+  return sameOrigin || localOrigin || ALLOWED_ORIGINS.includes(origin);
+}
+
 // Spielframes sind klein (Snapshots < 2 KB, Spawn-Events wenige KB) — das
 // ws-Default von 100 MiB wäre ein Speicher-Verstärker für böswillige Clients
-const wss = new WebSocketServer({ server: http, path: '/ws', maxPayload: 64 * 1024 });
+const wss = new WebSocketServer({
+  server: http, path: '/ws', maxPayload: 64 * 1024,
+  verifyClient: (info) => originAllowed(info.req),
+});
 
 const ipConns = new Map(); // ip -> offene Verbindungen
 const ipJoins = new Map(); // ip -> { n, at } — Join-Fenster, überlebt Reconnects
@@ -120,13 +135,6 @@ function clientIp(req) {
 
 wss.on('connection', (ws, req) => {
   if (wss.clients.size > MAX_CONNS) { ws.close(1013, 'server busy'); return; }
-  const origin = req.headers.origin;
-  // Same-Origin immer erlauben (der Browser sendet den Header auch dann mit) —
-  // eine Allowlist ohne die eigene Serving-Domain sperrte sonst die eigene Seite aus
-  const sameOrigin = origin && req.headers.host && origin.endsWith('//' + req.headers.host);
-  if (ALLOWED_ORIGINS.length && origin && !sameOrigin && !ALLOWED_ORIGINS.includes(origin)) {
-    ws.close(1008, 'origin'); return; // fremde Website bindet Besucher-Browser ein
-  }
   ws.ip = clientIp(req);
   const nIp = (ipConns.get(ws.ip) || 0) + 1;
   if (nIp > MAX_CONNS_PER_IP) { ws.close(1013, 'too many connections'); return; }

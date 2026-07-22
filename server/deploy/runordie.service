@@ -1,7 +1,7 @@
-# systemd-Unit für das RUN OR DIE Relay (nach /etc/systemd/system/)
+# systemd-Unit für das RUN OR DIE Backend — Relay + Konten-API (Frontend: GitHub Pages)
 #   sudo systemctl daemon-reload && sudo systemctl enable --now runordie
 [Unit]
-Description=RUN OR DIE game relay (Node WebSocket + static)
+Description=RUN OR DIE backend (WebSocket relay + accounts API)
 After=network.target
 
 [Service]
@@ -9,6 +9,13 @@ User=fab
 WorkingDirectory=/opt/runordie/server
 ExecStart=/usr/bin/env node server.js
 Environment=PORT=18931
+# Frontend-Origin (GitHub Pages): erlaubt für WebSocket UND CORS. localhost ist
+# für Entwicklung ohnehin immer erlaubt. Bei eigener Domain hier ergänzen.
+Environment=ORIGINS=https://fl4p.github.io
+Environment=CORS_ORIGINS=https://fl4p.github.io
+# Hinter nginx: echte Client-IP aus X-Forwarded-For lesen (sonst zählen alle
+# Rate-Limits gegen 127.0.0.1). nginx MUSS den Header setzen (tut es im Snippet).
+Environment=TRUST_PROXY=1
 Restart=always
 RestartSec=3
 # Härtung: das Relay braucht weder Schreibrechte noch neue Privilegien
