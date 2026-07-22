@@ -53,6 +53,12 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_errors_sig ON errors(sig);
 `);
 
+// Migration: gesamte Spielzeit (Sekunden). ADD COLUMN ist idempotent gemacht —
+// bei bestehender Produktions-DB darf nichts verloren gehen (nur anhängen).
+if (!db.prepare(`SELECT 1 FROM pragma_table_info('users') WHERE name='play_seconds'`).get()) {
+  db.exec(`ALTER TABLE users ADD COLUMN play_seconds INTEGER NOT NULL DEFAULT 0`); // Summe aus Solo + Online
+}
+
 // ---------- Passwörter: scrypt (aus node:crypto, keine Extra-Abhängigkeit) ----------
 // ASYNC: scrypt braucht ~50–100 ms; synchron würde es den einzigen Node-Thread
 // blockieren und damit ALLE laufenden Spiele einfrieren (das Relay teilt sich
@@ -83,9 +89,9 @@ const stmt = {
   deleteSession: db.prepare(`DELETE FROM sessions WHERE token = ?`),
   deleteExpired: db.prepare(`DELETE FROM sessions WHERE expires_at < ?`),
   bumpBest: db.prepare(
-    `UPDATE users SET best_time = MAX(best_time, ?), games = games + 1 WHERE id = ?`),
+    `UPDATE users SET best_time = MAX(best_time, ?), games = games + 1, play_seconds = play_seconds + ? WHERE id = ?`),
   bumpOnline: db.prepare(
-    `UPDATE users SET online_rounds = online_rounds + 1, online_wins = online_wins + ? WHERE id = ?`),
+    `UPDATE users SET online_rounds = online_rounds + 1, online_wins = online_wins + ?, play_seconds = play_seconds + ? WHERE id = ?`),
   leaderboard: db.prepare(
     `SELECT username, best_time, games, online_wins FROM users
      WHERE best_time > 0 ORDER BY best_time DESC, username ASC LIMIT ?`),
@@ -128,8 +134,12 @@ export function userForToken(token) {
 }
 export function endSession(token) { if (token) stmt.deleteSession.run(token); }
 
-export function recordSolo(userId, time) { stmt.bumpBest.run(time | 0, userId); }
-export function recordOnline(userId, won) { stmt.bumpOnline.run(won ? 1 : 0, userId); }
+// time = Solo-Überlebenszeit dieses Laufs -> zählt auch als Spielzeit
+export function recordSolo(userId, time) { stmt.bumpBest.run(time | 0, Math.max(0, time | 0), userId); }
+// dur = Dauer der Online-Runde in Sekunden (vom Host gemeldet) -> Spielzeit
+export function recordOnline(userId, won, dur = 0) {
+  stmt.bumpOnline.run(won ? 1 : 0, Math.max(0, Math.min(100000, dur | 0)), userId);
+}
 export function leaderboard(limit = 20) { return stmt.leaderboard.all(Math.min(100, limit | 0 || 20)); }
 
 // Öffentliche Sicht auf ein Konto (nie den Hash herausgeben)
@@ -137,6 +147,7 @@ export function publicUser(u) {
   return u && {
     id: u.id, username: u.username, bestTime: u.best_time,
     games: u.games, onlineRounds: u.online_rounds, onlineWins: u.online_wins,
+    playSeconds: u.play_seconds | 0,
   };
 }
 

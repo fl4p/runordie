@@ -4397,6 +4397,7 @@ function backToMenu() {
   m.classList.remove('hidden');
   updateDiveBtn();
   applySoloLayout(); // Steuer-Labels/Scorebar nach Online-Runden zurücksetzen
+  netEnsurePresence(); // angemeldet? -> schon im Hauptmenü online/einladbar sein
 }
 
 function updateDiveBtn() {
@@ -4545,6 +4546,7 @@ document.addEventListener('click', (e) => {
     if (id === 'authlogout') authLogout().then(() => { netLeave(); netShowOnlineMenu(); }); // Präsenz trennen
     if (id === 'authlogout2') authLogout2().then(() => netShowOnlineMenu());
     if (id === 'authboard') netShowLeaderboard();
+    if (id === 'authstats') netShowStats();
     // Online-Spieler einladen (Knopf-ID inv_<userid>)
     if (id.startsWith('inv_')) netInvite(+id.slice(4));
     if (id.startsWith('kick_')) netSendJson({ t: 'kick', slot: +id.slice(5) });
@@ -4641,7 +4643,8 @@ function endRound() {
   const w = activePlayers().find((p) => p.alive) ?? null;
   if (w) { w.score++; renderScoreBar(); }
   showRoundEndMsg(w);
-  if (netRole === 'host') netSendJson({ k: 'end', w: w ? w.id - 1 : -1, scores: players.map((p) => p.score) });
+  // dur = Rundendauer (s) für die Spielzeit-Statistik jedes angemeldeten Spielers
+  if (netRole === 'host') netSendJson({ k: 'end', w: w ? w.id - 1 : -1, scores: players.map((p) => p.score), dur: Math.max(0, Math.round(elapsed)) });
 }
 
 // Runden-Ende-Banner (auch von der Client-Replik mit dem Host-Sieger aufgerufen)
@@ -6402,7 +6405,7 @@ function authSetToken(t) {
 async function authRestore() {
   if (!authToken) return;
   const tok = authToken;
-  try { const u = (await authApi('GET', '/me')).user; if (authToken === tok) authUser = u; }
+  try { const u = (await authApi('GET', '/me')).user; if (authToken === tok) { authUser = u; netEnsurePresence(); } }
   catch { if (authToken === tok) { authSetToken(null); authUser = null; } }
 }
 
@@ -6410,6 +6413,7 @@ async function authLogin(username, password, register) {
   const r = await authApi('POST', register ? '/register' : '/login', { username, password });
   authSetToken(r.token);
   authUser = r.user;
+  netEnsurePresence(); // sofort online/einladbar, auch vom Hauptmenü aus
 }
 
 async function authLogout() {
@@ -6456,6 +6460,13 @@ function netPresenceConnect() {
   if (!authToken) return;
   if (netWs && netWs.readyState === 1 && netHelloSent) return; // schon präsent -> kein zweites hello
   netConnect(() => { if (!netHelloSent) { netHelloSent = true; netSendJson({ t: 'hello', token: authToken }); } });
+}
+// Präsenz schon im HAUPTMENÜ halten (nicht erst im Online-Menü): ein angemeldeter
+// Spieler erscheint sofort online und kann eingeladen werden. Nur wenn wir NICHT
+// gerade in einem Raum/Spiel sind (dort ist die Verbindung anderweitig belegt).
+function netEnsurePresence() {
+  if (!authToken || netRole || netCode) return;
+  netPresenceConnect();
 }
 
 // Andere Online-Spieler (nicht man selbst, nicht schon im eigenen Raum)
@@ -6532,7 +6543,7 @@ function authHeaderHtml() {
   if (authUser) {
     return `<span style="opacity:.85">Angemeldet als <b style="color:#6ee75c">${netEsc(authUser.username)}</b>` +
       ` · 🏆 ${authUser.bestTime | 0}s · Siege ${authUser.onlineWins | 0}</span> ` +
-      `<span class="menurow"><button id="authboard">🏅 Bestenliste</button><button id="authlogout">Abmelden</button></span>`;
+      `<span class="menurow"><button id="authstats">📊 Statistik</button><button id="authboard">🏅 Bestenliste</button><button id="authlogout">Abmelden</button></span>`;
   }
   return `<span style="opacity:.7">Spiele anonym oder melde dich an (Name in der Lobby, globale Rekorde).</span>` +
     `<span class="menurow"><button id="authloginshow">🔑 Anmelden</button><button id="authregshow">✨ Konto erstellen</button>` +
@@ -6588,6 +6599,40 @@ async function netDoAuth(register) {
   } catch (e) {
     netRenderAuth(register, e.message, player);
   }
+}
+
+// Sekunden lesbar: „1h 23m" / „45m 10s" / „12s"
+function fmtDuration(s) {
+  s = Math.max(0, s | 0);
+  if (s < 60) return s + 's';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + 'm ' + (s % 60) + 's';
+  return Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+}
+function statCardHtml(u, color) {
+  const row = (k, v) => `<tr><td style="padding:2px 14px 2px 0;opacity:.7;text-align:left">${k}</td><td style="padding:2px 0;text-align:right;font-weight:700">${v}</td></tr>`;
+  return `<div style="display:inline-block;margin:6px 8px;padding:8px 14px;border:1px solid #ffffff1a;border-radius:10px;min-width:210px">` +
+    `<b style="color:${color}">${netEsc(u.username)}</b>` +
+    `<table style="margin:6px auto 0;border-collapse:collapse;font-size:14px">` +
+    row('⏱️ Spielzeit', fmtDuration(u.playSeconds | 0)) +
+    row('🎮 Solo-Läufe', u.games | 0) +
+    row('🏆 Bester Lauf', (u.bestTime | 0) + ' s') +
+    row('🌐 Online-Runden', u.onlineRounds | 0) +
+    row('🥇 Online-Siege', u.onlineWins | 0) +
+    `</table></div>`;
+}
+async function netShowStats() {
+  netUiOpen = true;
+  $('msg').innerHTML = netMenuShell('<span style="opacity:.7">Lade Statistik …</span>');
+  $('msg').classList.remove('hidden');
+  // Frische Zahlen holen (Spielzeit/Runden ändern sich serverseitig)
+  try { const r = await authApi('GET', '/me'); if (r.user) authUser = r.user; } catch { /* zeige, was da ist */ }
+  if (authToken2) { try { const r = await authApi('GET', '/me', null, authToken2); if (r.user) authUser2 = r.user; } catch { /* egal */ } }
+  let cards = authUser ? statCardHtml(authUser, '#6ee75c') : '';
+  if (authUser2) cards += statCardHtml(authUser2, '#ffd23d');
+  $('msg').innerHTML = netMenuShell(`<b class="mh">📊 STATISTIK</b><br>${cards || '<span style="opacity:.6">Nicht angemeldet.</span>'}` +
+    `<span class="menurow"><button id="netonlineback">← Online-Menü</button></span>`);
+  $('msg').classList.remove('hidden');
 }
 
 async function netShowLeaderboard() {
@@ -7280,7 +7325,7 @@ window.__game = { players, obstacles, powerups, world, cams, sky, fxRings, laser
   get snowActive() { return snowActive; }, get snowLevel() { return snowLevel; }, get iceLevel() { return iceLevel; },
   get snowZones() { return snowZones; },
   // Online-Modus (Test-Harness): Lobby steuern und Netz-Zustand einsehen
-  netShowOnlineMenu, netCreateRoom, netJoinRoom, netStartOnline, netLeave,
+  netShowOnlineMenu, netCreateRoom, netJoinRoom, netStartOnline, netLeave, netShowStats,
   get netFallback() { return NET_FALLBACK_WS; }, set netFallback(v) { NET_FALLBACK_WS = v; },
   get netRole() { return netRole; }, get netCode() { return netCode; },
   get netRoster() { return netRoster.slice(); }, get netMySlot() { return netMySlot; },

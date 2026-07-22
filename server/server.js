@@ -362,7 +362,7 @@ function handleMessage(ws, data, isBinary) {
       // einem echten, gestarteten Spiel mit Mitspielern und nur einmal pro Runde.
       if (msg.k === 'end' && room.locked && room.clients.size >= 1 && !room.tallied) {
         room.tallied = true;
-        tallyRound(room, msg.w);
+        tallyRound(room, msg.w, msg.dur);
       }
       const s = JSON.stringify(msg);
       for (const c of roomClientSockets(room)) send(c, s); // 2-Sitz-Clients nur einmal
@@ -402,15 +402,15 @@ function authWs(ws, token, token2) {
 
 // Rundenergebnis buchen: jede/r angemeldete aktive Spieler/in bekommt eine
 // gespielte Runde, der Sieger-Slot zusätzlich einen Sieg.
-function tallyRound(room, winnerSlot) {
+function tallyRound(room, winnerSlot, dur) {
   const members = [room.host, ...roomClientSockets(room)]; // 2-Sitz-Clients nur einmal
   for (const c of members) {
     if (!c) continue;
     const slots = c.slots || [];
     // Sitz 0 gehört dem Erstkonto, Sitz 1 dem Zweitkonto (Splitscreen) — jeweils
-    // eigene Runden/Siege buchen. Sieg = genau DER Sitz war der Sieger-Slot.
-    if (c.user) { try { recordOnline(c.user.id, slots[0] === winnerSlot); } catch (err) { console.error('stats:', err); } }
-    if (c.user2) { try { recordOnline(c.user2.id, slots[1] === winnerSlot); } catch (err) { console.error('stats:', err); } }
+    // eigene Runden/Siege/Spielzeit buchen. Sieg = genau DER Sitz war der Sieger-Slot.
+    if (c.user) { try { recordOnline(c.user.id, slots[0] === winnerSlot, dur); } catch (err) { console.error('stats:', err); } }
+    if (c.user2) { try { recordOnline(c.user2.id, slots[1] === winnerSlot, dur); } catch (err) { console.error('stats:', err); } }
   }
 }
 
