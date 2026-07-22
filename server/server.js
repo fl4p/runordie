@@ -8,6 +8,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import { handleApi } from './api.js';
 import { userForToken, recordOnline } from './db.js';
@@ -58,6 +59,16 @@ const http = createServer(async (req, res) => {
 // code -> { host: ws, clients: Map<slot, ws>, locked: bool }
 const rooms = new Map();
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // ohne I/O/0/1 (Verwechslung)
+
+// ---------- Reconnect-Kulanz ----------
+// Bricht die Verbindung eines Clients ab, WÄHREND das Spiel läuft (Raum locked),
+// darf er sich für ein kurzes Fenster wieder in den laufenden Raum einklinken —
+// sonst würde ein kurzer Netzhänger ihn ins Menü werfen. Der Client bekommt beim
+// Beitreten einen opaken Reconnect-Schlüssel (rk); bei Abbruch merken wir ihn hier
+// und erlauben genau diesem rk, den Lock einmalig zu umgehen. Funktioniert auch
+// für anonyme Spieler (Identität = rk, kein Konto nötig).
+const rejoinGrace = new Map(); // rk -> { code, at }
+const GRACE_MS = 15000;
 
 // ---------- Präsenz: angemeldete Spieler, die gerade im Online-Bereich sind ----------
 // userId -> ws. Basis für die "Online-Spieler"-Liste und Einladungen. Anonyme
@@ -183,6 +194,10 @@ wss.on('connection', (ws, req) => {
     try {
       const wasOnline = clearOnline(ws);
       const wasInRoom = !!ws.roomCode; // vor leaveRoom merken (danach null)
+      // Abbruch mitten im laufenden Spiel: Reconnect-Fenster für diesen Client öffnen
+      // (nur Clients, nicht der Host — ohne Host ist der Raum ohnehin weg).
+      const rm = ws.roomCode ? rooms.get(ws.roomCode) : null;
+      if (rm?.locked && ws.slot !== 0 && ws.rkey) { rejoinGrace.set(ws.rkey, { code: ws.roomCode, at: Date.now() }); ws.graced = true; }
       leaveRoom(ws);
       // Präsenz auffrischen, wenn die Liste sich ändert ODER Mitspieler durch das
       // Verlassen wieder frei/einladbar werden (auch bei anonymem Host)
@@ -269,9 +284,9 @@ function handleMessage(ws, data, isBinary) {
       const names = {};
       slots.forEach((s, i) => { names[s] = seatName(ws.name, i); });
       rooms.set(code, { host: ws, clients: new Map(), locked: false, names });
-      ws.roomCode = code; ws.slots = slots; ws.slot = 0;
+      ws.roomCode = code; ws.slots = slots; ws.slot = 0; ws.rkey = randomUUID();
       setOnline(ws);
-      sendJson(ws, { t: 'created', code, name: ws.name, slots });
+      sendJson(ws, { t: 'created', code, name: ws.name, slots, rk: ws.rkey });
       broadcastPresence(); // Ersteller ist jetzt (evtl. neu) online
       return;
     }
@@ -281,7 +296,13 @@ function handleMessage(ws, data, isBinary) {
       const code = String(msg.code || '').toUpperCase().trim();
       const r = rooms.get(code);
       if (!r) { sendJson(ws, { t: 'err', msg: 'Raum nicht gefunden' }); return; }
-      if (r.locked) { sendJson(ws, { t: 'err', msg: 'Spiel läuft schon' }); return; }
+      if (r.locked) {
+        // Laufendes Spiel: normalerweise gesperrt. Ausnahme: ein Client, der eben
+        // die Verbindung verloren hat, darf mit gültigem Reconnect-Schlüssel zurück.
+        const g = msg.rk ? rejoinGrace.get(String(msg.rk)) : null;
+        if (g && g.code === code && Date.now() - g.at < GRACE_MS) rejoinGrace.delete(String(msg.rk));
+        else { sendJson(ws, { t: 'err', msg: 'Spiel läuft schon' }); return; }
+      }
       authWs(ws, msg.token);
       // Man kann nicht dem EIGENEN Raum (aus einer zweiten Sitzung) beitreten:
       // die Sitzungsübernahme in setOnline würde ihn sonst mitten im Beitritt löschen.
@@ -293,9 +314,9 @@ function handleMessage(ws, data, isBinary) {
       if (!slots) { sendJson(ws, { t: 'err', msg: seats === 2 ? 'Nicht genug Platz für 2 Spieler' : 'Raum ist voll (4 Spieler)' }); return; }
       const names = {};
       slots.forEach((s, i) => { r.clients.set(s, ws); r.names[s] = seatName(ws.name, i); names[s] = seatName(ws.name, i); });
-      ws.roomCode = code; ws.slots = slots; ws.slot = slots[0];
+      ws.roomCode = code; ws.slots = slots; ws.slot = slots[0]; ws.rkey = randomUUID();
       setOnline(ws);
-      sendJson(ws, { t: 'joined', code, slots, names: { ...r.names } }); // bekannte Namen mitschicken
+      sendJson(ws, { t: 'joined', code, slots, names: { ...r.names }, rk: ws.rkey }); // bekannte Namen mitschicken
       sendJson(r.host, { t: 'peer', slots, names }); // Host lernt die neuen Slots + Namen
       broadcastPresence();
       return;
@@ -385,7 +406,9 @@ function leaveRoom(ws) {
   } else {
     const gone = ws.slots || [ws.slot];
     for (const s of gone) { room.clients.delete(s); if (room.names) delete room.names[s]; }
-    sendJson(room.host, { t: 'left', slots: gone });
+    // reconnectable: dieser Client hat gerade die Verbindung verloren (Kulanz aktiv)
+    // und könnte zurückkommen -> der Host soll den Raum kurz offen halten.
+    sendJson(room.host, { t: 'left', slots: gone, reconnectable: !!ws.graced });
   }
   ws.roomCode = null; ws.slots = null; ws.slot = null;
 }
@@ -398,6 +421,7 @@ const HEARTBEAT_MS = 6000;
 setInterval(() => {
   const now = Date.now();
   for (const [ip, b] of ipJoins) if (now - b.at > IP_JOIN_WINDOW_MS * 2) ipJoins.delete(ip);
+  for (const [rk, g] of rejoinGrace) if (now - g.at > GRACE_MS) rejoinGrace.delete(rk); // abgelaufene Kulanz
   for (const ws of wss.clients) {
     if (++ws.missedPongs > 2) { ws.terminate(); continue; }
     try { ws.ping(); } catch { /* terminate beim nächsten Takt */ }

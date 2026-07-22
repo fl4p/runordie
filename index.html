@@ -5070,6 +5070,8 @@ let netOnlineUsers = []; // [{id,name,busy}] — angemeldete Spieler im Online-B
 let netHelloSent = false; // Präsenz-hello nur einmal je Verbindung senden
 const netInvitedIds = new Set(); // wen ich in diesem Raum schon eingeladen habe
 let netCode = null;
+let netRkey = null;      // opaker Reconnect-Schlüssel vom Server (created/joined) — Wiedereintritt in laufenden Raum
+let netReconnect = null; // { until, timer } während eines Reconnect-Versuchs, sonst null
 let netUiOpen = false;   // Online-Menü sichtbar -> keine "Taste startet Spiel"-Pfade
 let netReplaying = false;
 let netApplyingFx = false;
@@ -5700,11 +5702,82 @@ function netConnectTo(url, onReady, allowFallback) {
       netConnectTo(NET_FALLBACK_WS, onReady, false); // Origin ohne Relay -> öffentliches
       return;
     }
+    // Client mitten in einem Raum unerwartet getrennt: nicht sofort ins Menü,
+    // sondern bis zu 10 s mit Backoff neu verbinden (Host = Slot 0 ausgenommen,
+    // ohne Host ist der Raum ohnehin verloren).
+    if (netCode && netMySlot !== 0 && !netReconnect) { netWs = null; netStartReconnect(); return; }
     const active = netRole || netUiOpen;
     netResetState();
     if (active) { backToMenu(); flashPad('🌐 Verbindung zum Server getrennt', '#ff6b6b'); }
   };
   ws.onerror = () => { /* onclose folgt */ };
+}
+
+// URL des Relays auflösen (wie netConnect, aber ohne Fallback-Kette — für Reconnect)
+function netWsUrl() {
+  const override = new URLSearchParams(location.search).get('server');
+  if (override) return override;
+  if (netIsLocal()) return netSameOriginWs();
+  return NET_FALLBACK_WS;
+}
+
+// ---- Reconnect mit Backoff (Client) ----
+// Ein kurzer Netzhänger soll den Spieler nicht ins Menü werfen. Wir versuchen bis
+// zu 10 s lang, die WebSocket neu aufzubauen und in DENSELBEN Raum zurückzukehren
+// (Server-Kulanz erlaubt den Wiedereintritt trotz laufendem Spiel per rk-Schlüssel).
+function netShowReconnect(on) {
+  let el = document.getElementById('reconnil');
+  if (on) {
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'reconnil';
+      el.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(6,10,20,.72);backdrop-filter:blur(2px);color:#e6edf3;text-align:center;font:600 clamp(16px,4vw,26px)/1.4 system-ui,sans-serif';
+      el.innerHTML = '<div>🌐 Verbindung verloren<br><span style="font-weight:400;font-size:.7em;opacity:.85">Verbinde neu&nbsp;…</span></div>';
+      document.body.appendChild(el);
+    }
+    el.style.display = 'flex';
+  } else if (el) el.style.display = 'none';
+}
+function netStartReconnect() {
+  if (netReconnect) return;
+  netReconnect = { until: perfNow() + 10, timer: 0 };
+  netRtcCloseAll(); // die tote P2P-Verbindung aufräumen; sie wird beim Wiedereintritt neu aufgebaut
+  netShowReconnect(true);
+  netReconnectAttempt(0.4);
+}
+function netReconnectAttempt(delay) {
+  if (!netReconnect) return;                                   // abgebrochen (netResetState)
+  if (perfNow() >= netReconnect.until) return netReconnectGiveUp();
+  let ws;
+  try { ws = new WebSocket(netWsUrl()); } catch { return netReconnectRetry(delay); }
+  ws.binaryType = 'arraybuffer';
+  netWs = ws;
+  ws.onopen = () => {
+    // Wiedereintritt in den laufenden Raum (rk umgeht den Lock beim Server)
+    try { ws.send(JSON.stringify({ t: 'join', code: netCode, token: authToken || undefined, seats: netMySeats.length, rk: netRkey || undefined })); }
+    catch { try { ws.close(); } catch { /* egal */ } }
+  };
+  ws.onmessage = netOnMessage;
+  ws.onclose = () => { if (netWs !== ws) return; netWs = null; netReconnectRetry(delay); };
+  ws.onerror = () => { /* onclose folgt */ };
+}
+function netReconnectRetry(delay) {
+  if (!netReconnect) return;
+  if (perfNow() >= netReconnect.until) return netReconnectGiveUp();
+  netReconnect.timer = setTimeout(() => netReconnectAttempt(Math.min(2, delay * 1.6)), Math.max(0, delay) * 1000);
+}
+function netReconnectGiveUp() {
+  netReconnect = null;
+  netShowReconnect(false);
+  netResetState(); backToMenu();
+  flashPad('🌐 Verbindung verloren', '#ff6b6b');
+}
+function netReconnectSucceeded() {
+  if (!netReconnect) return;
+  if (netReconnect.timer) clearTimeout(netReconnect.timer);
+  netReconnect = null;
+  netShowReconnect(false);
+  flashPad('🌐 Wieder verbunden', '#6ee75c');
 }
 
 // Server-/Relay-Daten sind NIE vertrauenswürdig (?server= kann auf einen
@@ -5762,6 +5835,7 @@ function netOnMessage(ev) {
       const code = netValidCode(m.code);
       if (!code) return;
       netCode = code;
+      if (typeof m.rk === 'string') netRkey = m.rk;
       netMySeats = netSanitizeSeats(m.slots); netMySlot = netMySeats[0]; // 1–2 lokale Sitze
       netRoster = [...netMySeats].sort((a, b) => a - b);
       netNames = {}; netMySeats.forEach((s, i) => { netNames[s] = i === 0 ? netValidName(m.name) : (netValidName(m.name) ? netValidName(m.name) + ' ②' : undefined); });
@@ -5773,13 +5847,20 @@ function netOnMessage(ev) {
       const seats = netSanitizeSeats(m.slots);
       if (!code) return;
       netCode = code; netMySeats = seats; netMySlot = seats[0];
+      if (typeof m.rk === 'string') netRkey = m.rk;
       for (const s of seats) if (!netRoster.includes(s)) netRoster.push(s);
       netRoster.sort((a, b) => a - b);
       netNames = netSanitizeNames(m.names); // bekannte Namen der schon Anwesenden
+      // Reconnect: läuft gerade ein Wiederverbinden, ist das ein Wiedereintritt —
+      // KEINE Lobby einblenden (wir sind mitten im Spiel), nur das Overlay schließen.
+      if (netReconnect) { netReconnectSucceeded(); return; }
       netRenderLobby();
       return;
     }
     case 'err':
+      // Reconnect abgelehnt (Kulanz abgelaufen / Raum weg): Socket schließen ->
+      // onclose löst den nächsten Versuch aus (oder gibt nach 10 s auf).
+      if (netReconnect) { try { netWs?.close(); } catch { /* egal */ } return; }
       // Doppelklick-Race: das zweite create/join beantwortet der Server mit
       // "Schon in einem Raum" — die bereits gerenderte Lobby nicht ersetzen
       if (netCode) return;
@@ -5793,6 +5874,11 @@ function netOnMessage(ev) {
       const pnames = netSanitizeNames(m.names);
       for (const s of seats) { if (!netRoster.includes(s)) netRoster.push(s); netNames[s] = pnames[s]; }
       netRoster.sort((a, b) => a - b);
+      // Wiederkehr eines getrennten Spielers: den Raum-Offenhalten-Timer stoppen.
+      if (netHostHoldTimer && netRoster.length >= 2) {
+        clearTimeout(netHostHoldTimer); netHostHoldTimer = 0;
+        flashPad('🌐 Spieler wieder verbunden', '#6ee75c');
+      }
       netSendJson({ k: 'lobby', roster: netRoster, names: netNames }); // an alle verteilen
       netRtcOffer(seats[0], seats); // eine P2P-Verbindung je Mitspieler (mit seinen Sitzen)
       if (netUiOpen) netRenderLobby();
@@ -5804,7 +5890,7 @@ function netOnMessage(ev) {
       if (!seats.length) return;
       netRtcClose(seats[0]); // eine Verbindung je Mitspieler
       for (const s of seats) { delete netInputs[s]; delete netInputSeqSeen[s]; delete netNames[s]; }
-      netOnPeerLeft(seats);
+      netOnPeerLeft(seats, !!m.reconnectable);
       return;
     }
     case 'closed':
@@ -5931,20 +6017,38 @@ function netStartOnline() {
   applySoloLayout(); // Vollbild-Kamera + Online-Scorebar
 }
 
-function netOnPeerLeft(seats) {
+let netHostHoldTimer = 0; // Host hält den Raum kurz offen, während ein getrennter Client zurückkommt
+function netOnPeerLeft(seats, reconnectable) {
   seats = Array.isArray(seats) ? seats : [seats]; // eine Verbindung kann 1–2 Sitze belegen
   netRoster = netRoster.filter((s) => !seats.includes(s));
   if (netRole === 'host' && state !== 'menu') {
     for (const slot of seats) { const p = players[slot]; if (p && !p.parked && p.alive) killPlayer(p); }
-    flashPad(`🌐 SPIELER ${seats.map((s) => s + 1).join('/')} hat das Spiel verlassen`, PLAYER_DEFS[seats[0]]?.css || '#e6edf3');
-    if (netRoster.length < 2) { flashPad('🌐 Alle Mitspieler weg — zurück zum Menü', '#ff6b6b'); backToMenu(); }
+    const label = seats.map((s) => s + 1).join('/');
+    flashPad(`🌐 SPIELER ${label} ${reconnectable ? 'getrennt — warte auf Rückkehr …' : 'hat das Spiel verlassen'}`, PLAYER_DEFS[seats[0]]?.css || '#e6edf3');
+    if (netRoster.length < 2) {
+      // Nur noch der Host da. Kam der Client durch einen Netzhänger abhanden, den
+      // Raum ~16 s offen halten (Server-Kulanz 15 s) statt sofort abzubrechen.
+      if (reconnectable) netHostHoldForReconnect();
+      else { flashPad('🌐 Alle Mitspieler weg — zurück zum Menü', '#ff6b6b'); backToMenu(); }
+    }
   } else {
     netSendJson({ k: 'lobby', roster: netRoster });
     if (netUiOpen) netRenderLobby();
   }
 }
+function netHostHoldForReconnect() {
+  if (netHostHoldTimer) return;
+  netHostHoldTimer = setTimeout(() => {
+    netHostHoldTimer = 0;
+    if (netRole === 'host' && netRoster.length < 2) { flashPad('🌐 Niemand zurückgekehrt — zurück zum Menü', '#ff6b6b'); backToMenu(); }
+  }, 16000);
+}
 
 function netResetState() {
+  if (netReconnect) { if (netReconnect.timer) clearTimeout(netReconnect.timer); netReconnect = null; }
+  if (netHostHoldTimer) { clearTimeout(netHostHoldTimer); netHostHoldTimer = 0; }
+  netShowReconnect(false);
+  netRkey = null;
   const ws = netWs;
   netWs = null;
   if (ws) {
@@ -6851,6 +6955,8 @@ window.__game = { players, obstacles, powerups, world, cams, sky, fxRings, laser
   get netRoster() { return netRoster.slice(); }, get netMySlot() { return netMySlot; },
   get netMySeats() { return netMySeats.slice(); }, get netLocalSeats() { return netLocalSeats; }, set netLocalSeats(v) { netLocalSeats = v === 2 ? 2 : 1; },
   get netPing() { return netPing; },
+  get netReconnecting() { return !!netReconnect; },
+  netDropWs: () => { try { netWs && netWs.close(); } catch { /* egal */ } }, // Test: unerwarteten Abbruch simulieren
   get netSnaps() { return netSnaps.length; }, get netNames() { return { ...netNames }; },
   netInvite, get netOnline() { return netOnlineUsers.slice(); },
   get netP2P() { return netPeer ? netPeer.fast?.readyState === 'open' : Object.fromEntries(Object.entries(netPeers).map(([s, p]) => [s, p.fast?.readyState])); },
