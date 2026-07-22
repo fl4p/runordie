@@ -4583,6 +4583,7 @@ function backToMenu() {
   if (MENU_HTML) m.innerHTML = MENU_HTML;
   m.style.color = '';
   m.classList.remove('hidden');
+  if (netTest) { netTest = false; netTestBuf.length = 0; for (let i = 1; i < botCtl.length; i++) if (botCtl[i]?.sticky) botCtl[i] = null; } // Testraum beenden
   updateDiveBtn();
   applySoloLayout(); // Steuer-Labels/Scorebar nach Online-Runden zurücksetzen
   netEnsurePresence(); // angemeldet? -> schon im Hauptmenü online/einladbar sein
@@ -5186,6 +5187,7 @@ function animate() {
 
   pollGamepads();
   applyTouchInput();
+  netTestDelayInput(); // Testraum: lokale Bewegung um das simulierte Ping verzögern
   updateBots();
   netTick(dt); // Online: Host wendet Client-Eingaben an, Client posiert die Replik
 
@@ -5223,8 +5225,8 @@ function animate() {
     hudTimer -= dt;
     if (hudTimer <= 0) {
       hudTimer = 0.25;
-      // Online-Client: Ping (Rundlaufzeit zum Host) mit anzeigen
-      const ping = netRole === 'client' ? ` · 📶 ${netPing || '…'} ms` : '';
+      // Online-Client: Ping (Rundlaufzeit zum Host) mit anzeigen; Testraum: simuliert
+      const ping = netRole === 'client' ? ` · 📶 ${netPing || '…'} ms` : netTest ? ` · 📶 ~${NET_TEST_PING} ms (Test)` : '';
       $('speed').textContent = `Tempo ${baseSpeed().toFixed(1)} m/s · ${elapsed.toFixed(0)} s${ping}`;
       if (netDebugOn) netDebugRender();
     }
@@ -7224,9 +7226,44 @@ function netCreateRoom() {
 
 function netJoinRoom(code) {
   code = String(code || '').toUpperCase().trim();
+  if (code === 'TEST') { netStartTestRoom(); return; } // Spezial-Code: lokaler Testraum
   if (code.length !== 4) { netRenderJoin(code); return; }
   netBeginRoom();
   netConnect(() => netWs.send(JSON.stringify({ t: 'join', code, token: authToken || undefined, token2: netToken2(), seats: netLocalSeats })));
+}
+
+// Testraum (Code "TEST"): eine LOKALE Partie gegen 2 Bots, KEIN Server — aber mit
+// simuliertem 120-ms-Ping, damit sich das Online-Gefühl (verzögerte Steuerung)
+// solo ausprobieren/testen lässt. Deine Bewegungseingaben werden um die Ping-Zeit
+// verzögert angewandt (genau wie eine Aktion, die erst zum Host und zurück muss).
+let netTest = false;
+const NET_TEST_PING = 120;          // ms simuliertes Ping
+const netTestBuf = [];              // Eingabepuffer {t, keys, padX, padZ} für die Verzögerung
+function netStartTestRoom() {
+  ensureAudio();
+  netTest = true;
+  netTestBuf.length = 0;
+  soloMode = false; botMode = true; // Bot-Duell-Layout: Vollbild-Kamera auf den Menschen
+  botCtl[1] = makeBot('hard', true); // sticky: überleben Rundenwechsel
+  botCtl[2] = makeBot('hard', true);
+  botCtl[3] = null;
+  rosterSlots = [0, 1, 2];
+  applySoloLayout();
+  state = 'playing';
+  $('msg').classList.add('hidden');
+  $('touchui').classList.toggle('hidden', !isTouch);
+  resetRound();
+  flashPad(`🧪 Testraum · 2 Bots · ~${NET_TEST_PING} ms simuliertes Ping`, '#4dd2ff');
+}
+// Bewegungseingabe des lokalen Spielers um NET_TEST_PING verzögert anwenden.
+function netTestDelayInput() {
+  if (!netTest || state !== 'playing') return;
+  const p = player1, now = perfNow();
+  netTestBuf.push({ t: now, f: p.keys.f, b: p.keys.b, l: p.keys.l, r: p.keys.r, px: p.padX, pz: p.padZ });
+  const cutoff = now - NET_TEST_PING / 1000;
+  while (netTestBuf.length > 1 && netTestBuf[1].t <= cutoff) netTestBuf.shift();
+  const d = netTestBuf[0];
+  if (d) { p.keys.f = d.f; p.keys.b = d.b; p.keys.l = d.l; p.keys.r = d.r; p.padX = d.px; p.padZ = d.pz; }
 }
 
 // Offline-Spielbarkeit: Service Worker cacht das Spiel samt CDN-Modulen.
