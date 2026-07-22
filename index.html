@@ -397,6 +397,16 @@ skyDusk.visible = false;
 skyDusk.renderOrder = -2; // vor skyDay: der Tag-Himmel deckt die Dämmerung am Ende ab
 scene.add(skyDusk);
 
+// Himmel reist mit der Kamera: die drei Kugeln werden vor JEDEM Render-Pass exakt
+// auf die Kameraposition zentriert. So läuft der Horizont nie aus (Kamera bleibt
+// im Kugelmittelpunkt) und der Mond steht in fester Weltrichtung ohne Parallax.
+// Im Splitscreen wird pro Auge neu zentriert — beide Kameras stehen woanders.
+function centerSkyOn(cam) {
+  sky.position.copy(cam.position);
+  skyDay.position.copy(cam.position);
+  skyDusk.position.copy(cam.position);
+}
+
 // Tag/Nacht-Wechsel: läuft automatisch im 25-s-Takt, inkl. Licht- und Nebelstimmung.
 // Die Eiszone (siehe unten) überlagert beide Modi mit kalter, heller Stimmung.
 let dayMode = false;   // Zielzustand des Zyklus
@@ -4422,13 +4432,16 @@ function animate() {
     // Einzelspieler / gegen Bot / Online: ein Vollbild-Viewport
     renderer.setScissorTest(false);
     renderer.setViewport(0, 0, w, h);
+    centerSkyOn(cams[0]);
     renderer.render(scene, cams[0]);
   } else {
     // Splitscreen-Rendering
     renderer.setScissorTest(true);
     renderer.setViewport(0, 0, hw, h); renderer.setScissor(0, 0, hw, h);
+    centerSkyOn(cams[0]);
     renderer.render(scene, cams[0]);
     renderer.setViewport(hw, 0, w - hw, h); renderer.setScissor(hw, 0, w - hw, h);
+    centerSkyOn(cams[1]);
     renderer.render(scene, cams[1]);
     renderer.setScissorTest(false);
   }
@@ -5836,7 +5849,7 @@ function renderProfReport(d, opts = {}) {
 }
 
 // Debug-Hook für automatisierte Tests
-window.__game = { players, obstacles, powerups, world, cams, fxRings, lasers, sharks, renderer, spawnShark, spawnLaser, spawnPowerup, spawnWave, toggleDaySky, toggleRotMode, startSnow, endSnow, runGpuProfile, cpuBuf, analyzeLiveFrames, renderProfReport,
+window.__game = { players, obstacles, powerups, world, cams, sky, fxRings, lasers, sharks, renderer, spawnShark, spawnLaser, spawnPowerup, spawnWave, toggleDaySky, toggleRotMode, startSnow, endSnow, runGpuProfile, cpuBuf, analyzeLiveFrames, renderProfReport,
   startGame, backToMenu, invariants: botInvariants,
   // sticky-Bots überleben Menü-Starts — abschalten mit setBot(i, null)
   setBot: (i, diff) => { botCtl[i] = diff ? makeBot(diff, true) : null; },
