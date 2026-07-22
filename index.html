@@ -5701,9 +5701,41 @@ function netJoinRoom(code) {
   netConnect(() => netWs.send(JSON.stringify({ t: 'join', code, token: authToken || undefined })));
 }
 
-// Offline-Spielbarkeit: Service Worker cacht das Spiel samt CDN-Modulen
+// Offline-Spielbarkeit: Service Worker cacht das Spiel samt CDN-Modulen.
+// Wird eine neue Version installiert, läuft der offene Tab mit dem alten Code
+// weiter — ein kleiner Hinweis unten bietet das Neuladen an (nie automatisch,
+// das würde mitten in einer Runde stören).
+let swToastShown = false;
+function showSwToast() {
+  if (swToastShown) return;
+  swToastShown = true;
+  const el = document.createElement('div');
+  el.style.cssText = 'position:fixed;left:50%;bottom:calc(16px + env(safe-area-inset-bottom));' +
+    'transform:translateX(-50%);z-index:60;display:flex;align-items:center;gap:12px;' +
+    'background:rgba(13,17,23,.96);border:1px solid #30363d;border-radius:12px;' +
+    'padding:10px 14px;font:600 14px system-ui,sans-serif;color:#e6edf3;' +
+    'box-shadow:0 6px 24px rgba(0,0,0,.5);pointer-events:auto;max-width:94vw';
+  const btn = 'font:inherit;cursor:pointer;border-radius:8px;padding:6px 12px;border:1px solid #30363d;background:#1a2029;color:#e6edf3';
+  el.innerHTML = `<span>✨ Neue Version verfügbar</span>` +
+    `<button id="swreload" style="${btn};border-color:#6ee75c66;color:#6ee75c">Neu laden</button>` +
+    `<button id="swdismiss" aria-label="Schließen" style="${btn};padding:6px 10px;opacity:.7">✕</button>`;
+  document.body.appendChild(el);
+  el.querySelector('#swreload').addEventListener('click', () => location.reload());
+  el.querySelector('#swdismiss').addEventListener('click', () => el.remove());
+}
+
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+  addEventListener('load', async () => {
+    let reg;
+    try { reg = await navigator.serviceWorker.register('./sw.js'); } catch { return; }
+    // Neuen Worker beobachten: erreicht er 'installed' UND kontrolliert bereits
+    // ein alter Worker die Seite, ist es ein Update (kein Erstbesuch) -> Hinweis.
+    const watch = (w) => w && w.addEventListener('statechange', () => {
+      if (w.state === 'installed' && navigator.serviceWorker.controller) showSwToast();
+    });
+    if (reg.waiting && navigator.serviceWorker.controller) showSwToast(); // schon wartend
+    reg.addEventListener('updatefound', () => watch(reg.installing));
+  });
 }
 
 MENU_HTML = $('msg').innerHTML;
