@@ -2817,9 +2817,9 @@ function spawnPowerup(type, x, z) {
 
 function spawnRandomPowerup() {
   const r = Math.random();
-  const type = r < 0.27 ? 'jump' : r < 0.43 ? 'punch' : r < 0.56 ? 'slow'
-    : r < 0.67 ? 'magnet' : r < 0.77 ? 'breach' : r < 0.86 ? 'invuln'
-    : r < 0.95 ? 'shield' : 'ghost'; // 🌑 bewusst das seltenste (5 %)
+  const type = r < 0.25 ? 'jump' : r < 0.40 ? 'punch' : r < 0.53 ? 'slow'
+    : r < 0.64 ? 'magnet' : r < 0.74 ? 'breach' : r < 0.83 ? 'invuln'
+    : r < 0.91 ? 'shield' : 'ghost'; // 🌑 selten, aber etwas häufiger (9 %)
   const x = (Math.random() * 2 - 1) * (PLATFORM_HALF_W - 1.5);
   // leicht versetzt: auf der Spawnlinie steckte das Item sonst in einer im
   // selben Frame gespawnten Mauer (gleiche Geschwindigkeit -> für immer)
@@ -5526,14 +5526,14 @@ function netDecodeSnapshot(dv) {
   for (let i = 0; i < cnt; i++) {
     const ob = obMap.get(dv.getUint16(o)); o += 2;
     const z = dv.getInt16(o) / 100; o += 2;
-    if (ob) ob.body.position.z = z;
+    if (ob) ob.body.position.z = z - ob.body.velocity.z * NET_INTERP; // auf Renderzeit der Spieler
   }
   const laMap = netIdMap(lasers);
   cnt = dv.getUint8(o++);
   for (let i = 0; i < cnt; i++) {
     const L = laMap.get(dv.getUint16(o)); o += 2;
     const z = dv.getInt16(o) / 100; o += 2;
-    if (L) L.z = z;
+    if (L) L.z = z - L.speed * NET_INTERP; // auf Renderzeit der Spieler
   }
   const shMap = netIdMap(sharks);
   cnt = dv.getUint8(o++);
@@ -5542,7 +5542,7 @@ function netDecodeSnapshot(dv) {
     const px = dv.getInt16(o) / 100, py = dv.getInt16(o + 2) / 100, pz = dv.getInt16(o + 4) / 100;
     const vx = dv.getInt16(o + 6) / 100, vy = dv.getInt16(o + 8) / 100, vz = dv.getInt16(o + 10) / 100;
     o += 12;
-    if (S) { S.body.position.set(px, py, pz); S.body.velocity.set(vx, vy, vz); }
+    if (S) { S.body.position.set(px - vx * NET_INTERP, py - vy * NET_INTERP, pz - vz * NET_INTERP); S.body.velocity.set(vx, vy, vz); }
   }
   const puMap = netIdMap(powerups);
   cnt = dv.getUint8(o++);
@@ -5552,8 +5552,10 @@ function netDecodeSnapshot(dv) {
     o += 4;
     if (pu) { pu.netX = x; pu.netZ = z; }
   }
-  // Spieluhr sachte an den Host angleichen (treibt Sweeper-/Laser-Formeln)
-  const d = el - elapsed;
+  // Spieluhr sachte an den Host angleichen (treibt Sweeper-/Laser-Formeln) —
+  // um NET_INTERP zurück, damit formelgetriebene Hindernisse (Sweeper/Wrecker)
+  // zur selben Renderzeit stehen wie die interpolierten Spieler
+  const d = (el - NET_INTERP) - elapsed;
   elapsed += Math.abs(d) > 0.3 ? d : d * 0.15;
   netSnaps.push(snap);
   if (netSnaps.length > 24) netSnaps.shift();
