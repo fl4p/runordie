@@ -4,7 +4,7 @@
 // Standard das GitHub-Pages-Frontend; localhost ist für Entwicklung immer erlaubt.
 import {
   createUser, findUser, verifyPassword, newSession, userForToken, endSession,
-  recordSolo, leaderboard, publicUser, validUsername, validPassword, recordError,
+  recordSolo, leaderboard, publicUser, validUsername, validPassword, recordError, recordBugReport,
 } from './db.js';
 
 const MAX_BODY = 4 * 1024;
@@ -57,12 +57,25 @@ function errBlocked(ip) {
   return b.n > ERR_MAX;
 }
 
+// Bug-Reports pro IP drosseln: ein Klick ist eine bewusste Aktion (kein
+// Automatismus wie /error), aber die Mitschnitte sind groß — enger begrenzen.
+const bugHits = new Map(); // ip -> { n, at }
+const BUG_MAX = 6, BUG_WINDOW_MS = 60 * 1000;
+function bugBlocked(ip) {
+  const now = Date.now();
+  const b = bugHits.get(ip) || { n: 0, at: now };
+  if (now - b.at > BUG_WINDOW_MS) { b.n = 0; b.at = now; }
+  b.n++; bugHits.set(ip, b);
+  return b.n > BUG_MAX;
+}
+
 // Speicher der Rate-Limiter gelegentlich säubern (verwaiste IP-Einträge)
 setInterval(() => {
   const now = Date.now();
   for (const [ip, b] of loginFails) if (now - b.at > LOGIN_WINDOW_MS) loginFails.delete(ip);
   for (const [ip, b] of regHits) if (now - b.at > REG_WINDOW_MS) regHits.delete(ip);
   for (const [ip, b] of errHits) if (now - b.at > ERR_WINDOW_MS * 5) errHits.delete(ip);
+  for (const [ip, b] of bugHits) if (now - b.at > BUG_WINDOW_MS * 5) bugHits.delete(ip);
 }, 10 * 60 * 1000).unref?.();
 
 function readJson(req, limit = MAX_BODY) {
@@ -181,6 +194,22 @@ export async function handleApi(req, res, path, ip) {
         });
       }
       res.writeHead(204); res.end(); // immer 204, nie ein Fehler-über-Fehler
+      return true;
+    }
+
+    // Bug-Report vom Client: 10-s-Mitschnitt (Spieler-/Hindernis-Positionen) +
+    // optionale Notiz, vom 🐛-Knopf im Spiel ausgelöst. Kein Login nötig.
+    if (req.method === 'POST' && route === '/bugreport') {
+      if (bugBlocked(ip)) { res.writeHead(429); res.end(); return true; }
+      const body = await readJson(req, 300 * 1024); // Mitschnitte sind größer als Fehler-Stacks
+      if (!body) { sendJson(res, 400, { error: 'Ungültige oder zu große Anfrage' }); return true; }
+
+      const user = userForToken(bearer(req)); // optional
+      recordBugReport({
+        note: body.note, mode: body.mode, elapsed: body.elapsed, ping: body.ping,
+        url: body.url, ua: body.ua || req.headers['user-agent'], userId: user?.id, frames: body.frames,
+      });
+      res.writeHead(204); res.end();
       return true;
     }
 

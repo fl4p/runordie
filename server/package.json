@@ -8,6 +8,7 @@
   "scripts": {
     "start": "node server.js",
     "errors": "node errors.js",
+    "bugreports": "node bugreports.js",
     "netlog": "node netlog.js",
     "test:e2e": "node test/reconnect.e2e.mjs"
   },

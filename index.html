@@ -324,6 +324,33 @@
   #btnGhost { right: calc(148px + env(safe-area-inset-right)); bottom: calc(136px + env(safe-area-inset-bottom)); width: 56px; height: 56px; font-size: 24px; }
   #btnExit { right: calc(12px + env(safe-area-inset-right)); top: calc(12px + env(safe-area-inset-top)); width: 44px; height: 44px; font-size: 20px; border-radius: 12px; }
   @media (pointer: coarse) { .plabel { display: none; } }
+  /* ---------- Bug-Recorder: Melde-Knopf + Notiz-Panel ---------- */
+  #btnBug {
+    top: calc(10px + env(safe-area-inset-top)); left: calc(10px + env(safe-area-inset-left));
+    width: 34px; height: 34px; border-radius: 10px; font-size: 17px; opacity: .5;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    background: rgba(13,17,23,.55); border: 1px solid rgba(230,237,243,.18); pointer-events: auto;
+  }
+  #btnBug:hover, #btnBug:active { opacity: .95; }
+  #btnBug.hidden { display: none; }
+  #bugpanel { position: fixed; inset: 0; z-index: 45; display: flex; align-items: center; justify-content: center;
+    background: rgba(6,9,13,.55); pointer-events: auto; }
+  #bugpanel.hidden { display: none; }
+  #bugpanel .bpcard { width: min(340px, 92vw); box-sizing: border-box; padding: 16px; border-radius: 16px;
+    background: rgba(13,17,23,.92); border: 1px solid rgba(230,237,243,.14); box-shadow: 0 12px 48px rgba(0,0,0,.5);
+    -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); color: #e6edf3; text-align: center; }
+  #bugpanel .bptitle { font-weight: 800; font-size: 17px; margin-bottom: 4px; }
+  #bugpanel .bpnote { font-size: 12px; opacity: .6; margin-bottom: 10px; }
+  #bugpanel textarea { width: 100%; box-sizing: border-box; min-height: 64px; resize: none; font: inherit; font-size: 14px;
+    padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(230,237,243,.16);
+    background: rgba(230,237,243,.06); color: #e6edf3; text-transform: none; }
+  #bugpanel textarea:focus { outline: none; border-color: rgba(77,210,255,.6); }
+  #bugpanel .bprow { display: flex; gap: 8px; margin-top: 10px; }
+  #bugpanel button { flex: 1; font: inherit; font-size: 13.5px; font-weight: 600; padding: 9px 10px;
+    border-radius: 10px; border: 1px solid rgba(230,237,243,.16); background: rgba(230,237,243,.06);
+    color: #e6edf3; cursor: pointer; min-height: 40px; }
+  #bugpanel button:hover { background: rgba(230,237,243,.12); }
+  #bugpanel #bugsend { border-color: rgba(110,231,92,.4); color: #a8f09a; background: rgba(110,231,92,.08); }
   /* Kleine Bildschirme: kompaktere HUD-Anzeige (das Menü selbst ist mobile-first
      über die #msg-Basiswerte + min-width-Erweiterung geregelt) */
   @media (max-height: 560px), (max-width: 700px) {
@@ -337,6 +364,7 @@
 <body>
 <div id="divider"></div>
 <div class="hud" id="score"><span class="p1">SPIELER 1</span>&nbsp; <span id="s1">0</span> : <span id="s2">0</span> &nbsp;<span class="p2">SPIELER 2</span></div>
+<div class="hud" id="btnBug" title="Bug melden (letzte 10s aufzeichnen)">🐛</div>
 <div class="hud" id="speed"></div>
 <div class="hud plabel" id="l1">Spieler 1 — W A S D + LEERTASTE (2× = Doppelsprung) · E/Maus = Boxen</div>
 <div class="hud plabel" id="l2">Spieler 2 — Pfeiltasten + ENTER (2× = Doppelsprung) · − = Boxen</div>
@@ -360,6 +388,12 @@
   <span class="npbody" id="npsettings"></span>
   <button id="npresume" class="npbig">▶ Weiter spielen</button>
   <button id="npleave" class="npbig npdanger">🚪 Raum verlassen</button>
+</div></div>
+<div id="bugpanel" class="hidden"><div class="bpcard">
+  <div class="bptitle">🐛 Bug melden</div>
+  <span class="bpnote">Zeichnet Spieler-/Hindernis-Positionen der letzten 10 s auf.<br>Was war komisch?</span>
+  <textarea id="bugnote" maxlength="500" placeholder="z.B. Hai hat mich in die Plattform gedrückt (optional)"></textarea>
+  <span class="bprow"><button id="bugcancel">Abbrechen</button><button id="bugsend">Senden</button></span>
 </div></div>
 <div class="hud" id="msg"><span class="mtitle">RUN <em>OR</em> DIE</span>
   <span class="tagline">Ragdoll-Runner: Hindernisse rollen an — weich aus, spring drüber, überleb!</span>
@@ -3033,6 +3067,12 @@ addEventListener('keydown', (e) => {
     else if (e.code === 'Escape') { document.activeElement.blur(); backToMenu(); }
     return;
   }
+  // Bug-Notiz: Tasten gehören dem Textfeld (sonst würde WASD während des
+  // Tippens die Figur bewegen); ESC schließt nur das Panel, nicht die Runde
+  if (document.activeElement?.id === 'bugnote') {
+    if (e.code === 'Escape') { document.activeElement.blur(); closeBugPanel(); }
+    return;
+  }
   if (['Space', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
   if (e.code === 'Escape') { netRole ? toggleNetPause() : backToMenu(); return; }
   // Einstellungs-Tasten funktionieren auch im Menü (starten das Spiel nicht)
@@ -4428,6 +4468,7 @@ function startGame(solo = false, vsBot = false) {
 
 function backToMenu() {
   $('netpause')?.classList.add('hidden'); // Spiel-Overlay schließen
+  closeBugPanel();
   if (netWs || netRole || netUiOpen) netLeave(); // Online-Runde/Lobby sauber verlassen
   state = 'menu';
   // botMode bleibt wie soloMode stehen: so rendert der Menü-Hintergrund weiter
@@ -4507,9 +4548,12 @@ document.addEventListener('input', (e) => {
 
 // Klick-Delegation: überlebt das Neuaufbauen des Menü-HTML.
 // closest('button') statt e.target: Klicks können auf Kind-Spans landen.
+document.getElementById('btnBug')?.addEventListener('click', openBugPanel); // kein <button>, greift der Delegierte unten nicht
 document.addEventListener('click', (e) => {
   const id = e.target?.closest?.('button')?.id;
   if (!id) return;
+  if (id === 'bugcancel') closeBugPanel();
+  if (id === 'bugsend') sendBugReport();
   if (id === 'divebtn') {
     diveAlways = !diveAlways;
     localStorage.setItem('runordie_diveAlways', diveAlways ? '1' : '0');
@@ -4914,6 +4958,80 @@ function syncMeshes() {
   updateBoomInstances(); // inkl. globalem Lunten-Blinken des gezündeten Pools
 }
 
+// ---------- Bug-Recorder: rollierender 10-s-Mitschnitt für Spieler-Reports ----------
+// Läuft in JEDEM Modus (offline/Bot/online) — ein seltsames Verhalten (z.B. "Hai
+// drückt mich in die Plattform") lässt sich damit als Trace einreichen statt nur
+// zu beschreiben. Kein Login nötig, gedrosselt wie der Fehler-Reporter.
+const NET_REC_SPAN = 10;       // s Mitschnittlänge
+const NET_REC_INTERVAL = 0.2;  // s zwischen Samples (bis zu 50 Samples)
+const netRec = [];
+let netRecTimer = 0;
+const r2 = (v) => Math.round(v * 100) / 100; // 2 Nachkommastellen, kompaktes JSON
+
+function obstacleKind(o) {
+  if (o.boom) return 'tnt';
+  if (o.sweep) return 'sweep';
+  if (o.wreck) return 'wreck';
+  if (o.piston) return 'piston';
+  if (o.body.isJumpPad) return 'jumppad';
+  if (o.spin) return 'roller';
+  return 'obstacle';
+}
+
+function netRecSample() {
+  return {
+    t: perfNow(), el: +elapsed.toFixed(1),
+    pl: players.filter((p) => !p.parked).map((p) => [
+      p.id, r2(p.torso.position.x), r2(p.torso.position.y), r2(p.torso.position.z),
+      (p.alive ? 1 : 0) | (p.ragdoll ? 2 : 0),
+    ]),
+    ob: obstacles.map((o) => [r2(o.body.position.x), r2(o.body.position.y), r2(o.body.position.z), obstacleKind(o)]),
+    sh: sharks.map((S) => [r2(S.body.position.x), r2(S.body.position.y), r2(S.body.position.z)]),
+    la: lasers.map((L) => [r2(L.z), L.type]),
+  };
+}
+
+function netRecTick(dt) {
+  netRecTimer -= dt;
+  if (netRecTimer <= 0) {
+    netRecTimer = NET_REC_INTERVAL;
+    if (state === 'playing') netRec.push(netRecSample());
+  }
+  const cutoff = perfNow() - NET_REC_SPAN;
+  while (netRec.length && netRec[0].t < cutoff) netRec.shift();
+}
+
+let bugSentAt = -Infinity; // "noch nie gesendet" — 0 läge zu nah an perfNow() kurz nach dem Laden
+function openBugPanel() {
+  if (!netRec.length || perfNow() - bugSentAt < 5) return;
+  $('bugpanel').classList.remove('hidden');
+  const ta = $('bugnote');
+  if (ta) { ta.value = ''; setTimeout(() => ta.focus(), 30); }
+}
+function closeBugPanel() { $('bugpanel')?.classList.add('hidden'); }
+
+async function sendBugReport() {
+  const note = ($('bugnote')?.value || '').trim().slice(0, 500);
+  const frames = netRec.slice(); // zum Klick-Zeitpunkt einfrieren
+  closeBugPanel();
+  bugSentAt = perfNow();
+  const body = {
+    note, frames, url: location.href, ua: navigator.userAgent,
+    mode: soloMode ? 'solo' : botMode ? 'bot' : netRole ? 'online-' + netRole : 'duo',
+    elapsed: +elapsed.toFixed(1), ping: netRole === 'client' ? netPing : null,
+  };
+  let ok = false;
+  try {
+    const res = await fetch(netApiBase() + '/bugreport', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(authToken ? { authorization: 'Bearer ' + authToken } : {}) },
+      body: JSON.stringify(body),
+    });
+    ok = res.ok;
+  } catch { /* egal — unten als fehlgeschlagen gemeldet */ }
+  flashPad(ok ? '🐛 Bug-Report gesendet — danke!' : '🐛 Senden fehlgeschlagen', ok ? '#6ee75c' : '#ff6b6b');
+}
+
 function animate() {
   requestAnimationFrame(animate);
   if (profiling) return; // Szene eingefroren: der Profiler steuert das Rendern selbst
@@ -5098,6 +5216,8 @@ function animate() {
   }
   updateFx(dt);
   updateSnow(dt);
+  netRecTick(dt);
+  $('btnBug').classList.toggle('hidden', !netRec.length || (state !== 'playing' && state !== 'roundEnd'));
 
   if (netRole !== 'client') { // Replik: Rundenwechsel steuert der Host per Event
     if (state === 'playing' && firstDeathAt && perfNow() > firstDeathAt + 0.7) endRound();
@@ -7494,6 +7614,8 @@ window.__game = { players, obstacles, powerups, world, cams, sky, fxRings, laser
   get netSnaps() { return netSnaps.length; }, get netNames() { return { ...netNames }; },
   netInvite, get netOnline() { return netOnlineUsers.slice(); },
   get netP2P() { return netPeer ? netPeer.fast?.readyState === 'open' : Object.fromEntries(Object.entries(netPeers).map(([s, p]) => [s, p.fast?.readyState])); },
+  // Bug-Recorder (Test-Harness)
+  get bugRec() { return netRec.slice(); }, openBugPanel, closeBugPanel, sendBugReport,
   // Benutzerkonten (Test-Harness)
   authLogin, authLogout, authRestore, authApi,
   authLogin2, authLogout2, authRestore2,

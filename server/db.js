@@ -51,6 +51,19 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_errors_at ON errors(at);
   CREATE INDEX IF NOT EXISTS idx_errors_sig ON errors(sig);
+  CREATE TABLE IF NOT EXISTS bug_reports (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    at       INTEGER NOT NULL,   -- Zeitstempel (ms)
+    note     TEXT,               -- Spieler-Beschreibung (optional)
+    mode     TEXT,               -- 'solo' | 'bot' | 'duo' | 'online-host' | 'online-client'
+    elapsed  REAL,               -- Rundenzeit beim Klick (s)
+    ping     INTEGER,            -- Client: RTT zum Host (ms), sonst NULL
+    url      TEXT,
+    ua       TEXT,
+    user_id  INTEGER,            -- falls angemeldet
+    frames   TEXT NOT NULL       -- JSON: letzte ~10s Spieler-/Hindernis-Positionen
+  );
+  CREATE INDEX IF NOT EXISTS idx_bugreports_at ON bug_reports(at);
 `);
 
 // Migration: gesamte Spielzeit (Sekunden). ADD COLUMN ist idempotent gemacht —
@@ -104,6 +117,14 @@ const stmt = {
      FROM errors GROUP BY sig ORDER BY n DESC, last DESC LIMIT ?`),
   errRecent: db.prepare(`SELECT * FROM errors ORDER BY id DESC LIMIT ?`),
   errCount: db.prepare(`SELECT COUNT(*) AS n FROM errors`),
+  insertBug: db.prepare(
+    `INSERT INTO bug_reports (at, note, mode, elapsed, ping, url, ua, user_id, frames) VALUES (?,?,?,?,?,?,?,?,?)`),
+  trimBug: db.prepare(`DELETE FROM bug_reports WHERE id <= (SELECT MAX(id) FROM bug_reports) - ?`),
+  bugRecent: db.prepare(
+    `SELECT id, at, note, mode, elapsed, ping, url, ua, user_id, length(frames) AS frames_len
+     FROM bug_reports ORDER BY id DESC LIMIT ?`),
+  bugById: db.prepare(`SELECT * FROM bug_reports WHERE id = ?`),
+  bugCount: db.prepare(`SELECT COUNT(*) AS n FROM bug_reports`),
 };
 
 const SESSION_TTL_MS = 30 * 24 * 3600 * 1000; // 30 Tage
@@ -172,6 +193,23 @@ export function recordError(e) {
 export function errorGroups(limit = 50) { return stmt.errGroups.all(Math.min(200, limit | 0 || 50)); }
 export function recentErrors(limit = 50) { return stmt.errRecent.all(Math.min(500, limit | 0 || 50)); }
 export function errorCount() { return stmt.errCount.get().n; }
+
+// ---------- Bug-Reports (Spieler-Mitschnitte: "sieht komisch aus") ----------
+// frames kommt vom Client bereits als kompaktes Array (Tupel statt benannter
+// Felder, siehe netRecSample in index.html) — hier nur durchgereicht/gespeichert,
+// nicht interpretiert (die Analyse passiert offline über bugreports.js).
+export function recordBugReport(b) {
+  const note = clean(b.note, 500), mode = clean(b.mode, 20), url = clean(b.url, 300), ua = clean(b.ua, 200);
+  const frames = JSON.stringify(Array.isArray(b.frames) ? b.frames.slice(0, 200) : []);
+  stmt.insertBug.run(
+    Date.now(), note, mode,
+    Number.isFinite(b.elapsed) ? b.elapsed : null, Number.isFinite(b.ping) ? b.ping | 0 : null,
+    url, ua, b.userId || null, frames);
+  if (Math.random() < 0.05) stmt.trimBug.run(500); // Ringpuffer: letzte ~500 behalten (Frames sind groß)
+}
+export function recentBugReports(limit = 50) { return stmt.bugRecent.all(Math.min(200, limit | 0 || 50)); }
+export function bugReport(id) { return stmt.bugById.get(id | 0); }
+export function bugReportCount() { return stmt.bugCount.get().n; }
 
 // Abgelaufene Sessions gelegentlich wegräumen
 setInterval(() => { try { stmt.deleteExpired.run(Date.now()); } catch { /* egal */ } }, 3600 * 1000).unref?.();
