@@ -59,6 +59,35 @@ const http = createServer(async (req, res) => {
 const rooms = new Map();
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // ohne I/O/0/1 (Verwechslung)
 
+// ---------- Präsenz: angemeldete Spieler, die gerade im Online-Bereich sind ----------
+// userId -> ws. Basis für die "Online-Spieler"-Liste und Einladungen. Anonyme
+// Spieler tauchen NICHT auf (nur Konten haben eine stabile Identität/Namen).
+const online = new Map();
+
+function presenceList() {
+  return [...online.values()].map((w) => ({
+    id: w.user.id,
+    name: w.user.username,
+    busy: !!w.roomCode, // in einem Raum (Lobby oder Partie) -> nicht einladbar
+  }));
+}
+function broadcastPresence() {
+  const payload = JSON.stringify({ t: 'presence', users: presenceList() });
+  for (const w of online.values()) send(w, payload);
+}
+// Verbindung als online führen (nach erfolgreicher Anmeldung). Gibt true zurück,
+// wenn sich die Liste geändert hat (neuer Nutzer oder Socket-Wechsel).
+function setOnline(ws) {
+  if (!ws.user) return false;
+  const prev = online.get(ws.user.id);
+  online.set(ws.user.id, ws);
+  return prev !== ws;
+}
+function clearOnline(ws) {
+  if (ws.user && online.get(ws.user.id) === ws) { online.delete(ws.user.id); return true; }
+  return false;
+}
+
 function newCode() {
   for (let tries = 0; tries < 50; tries++) {
     let c = '';
@@ -114,7 +143,11 @@ wss.on('connection', (ws, req) => {
   ws.on('close', () => {
     const c = (ipConns.get(ws.ip) || 1) - 1;
     c > 0 ? ipConns.set(ws.ip, c) : ipConns.delete(ws.ip);
-    try { leaveRoom(ws); } catch (err) { console.error('leave:', err); }
+    try {
+      const wasOnline = clearOnline(ws);
+      leaveRoom(ws);
+      if (wasOnline) broadcastPresence(); // Online-Liste aktualisieren
+    } catch (err) { console.error('close:', err); }
   });
   ws.on('error', () => { /* close folgt */ });
 });
@@ -139,6 +172,31 @@ function handleMessage(ws, data, isBinary) {
     let msg;
     try { msg = JSON.parse(data.toString()); } catch { return; }
 
+    // Präsenz anmelden: der Client meldet sich mit seinem Token, ohne (noch)
+    // einem Raum beizutreten -> erscheint in der Online-Liste, kann eingeladen werden
+    if (msg.t === 'hello') {
+      authWs(ws, msg.token);
+      if (!ws.user) { sendJson(ws, { t: 'presence', users: [] }); return; }
+      const changed = setOnline(ws);
+      sendJson(ws, { t: 'presence', users: presenceList() }); // eigene Liste sofort
+      if (changed) broadcastPresence();                       // die anderen aktualisieren
+      return;
+    }
+
+    // Einladung: lädt eine/n Online-Spieler/in in den EIGENEN Raum ein
+    if (msg.t === 'invite') {
+      const now = Date.now();
+      if (now - (ws.inviteAt || 0) > 10000) { ws.inviteAt = now; ws.inviteCount = 0; }
+      if ((ws.inviteCount = (ws.inviteCount || 0) + 1) > 10) return; // Spam-Bremse
+      const r = ws.roomCode ? rooms.get(ws.roomCode) : null;
+      if (!ws.user || !r || r.locked) return;                    // nur aus einem offenen Raum
+      if (r.clients.size >= MAX_PLAYERS - 1) return;             // kein freier Slot
+      const target = online.get(msg.to | 0);
+      if (!target || target === ws || target.roomCode) return;   // offline / man selbst / schon im Raum
+      sendJson(target, { t: 'invited', from: ws.user.username, code: ws.roomCode });
+      return;
+    }
+
     // create/join drosseln: ein Socket ohne Raum kann sonst den 32^4-Code-Raum
     // durchprobieren, um laufende Räume zu finden/zu stören
     if (msg.t === 'create' || msg.t === 'join') {
@@ -159,7 +217,9 @@ function handleMessage(ws, data, isBinary) {
       authWs(ws, msg.token); // optionale Anmeldung -> ws.user / ws.name
       rooms.set(code, { host: ws, clients: new Map(), locked: false, names: { 0: ws.name } });
       ws.roomCode = code; ws.slot = 0;
+      setOnline(ws);
       sendJson(ws, { t: 'created', code, name: ws.name });
+      broadcastPresence(); // Ersteller ist jetzt (evtl. neu) online
       return;
     }
 
@@ -176,15 +236,17 @@ function handleMessage(ws, data, isBinary) {
       r.clients.set(slot, ws);
       r.names[slot] = ws.name;
       ws.roomCode = code; ws.slot = slot;
+      setOnline(ws);
       sendJson(ws, { t: 'joined', code, slot, names: { ...r.names } }); // bekannte Namen mitschicken
       sendJson(r.host, { t: 'peer', slot, name: ws.name });
+      broadcastPresence();
       return;
     }
 
     if (!room) return;
 
-    if (msg.t === 'lock' && ws.slot === 0) { room.locked = true; return; }
-    if (msg.t === 'leave') { leaveRoom(ws); return; }
+    if (msg.t === 'lock' && ws.slot === 0) { room.locked = true; broadcastPresence(); return; } // jetzt "busy"
+    if (msg.t === 'leave') { leaveRoom(ws); broadcastPresence(); return; }
 
     // Alles andere: JSON-Relay (Events vom Host, Aktionen von Clients)
     if (ws.slot === 0) {
