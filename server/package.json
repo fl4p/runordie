@@ -8,10 +8,14 @@
   "scripts": {
     "start": "node server.js",
     "errors": "node errors.js",
-    "netlog": "node netlog.js"
+    "netlog": "node netlog.js",
+    "test:e2e": "node test/reconnect.e2e.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.61.1"
   }
 }

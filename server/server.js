@@ -125,8 +125,13 @@ function freeSlots(room, n) {
   return out.length === n ? out : null;
 }
 const seatCount = (msg) => (msg.seats | 0) === 2 ? 2 : 1;
-// Anzeigename je Sitz: zweiter Sitz bekommt eine ②-Markierung
-const seatName = (name, i) => name ? (i === 0 ? name : name + ' ②') : null;
+// Anzeigename je Sitz einer Verbindung: Sitz 0 = Erstkonto, Sitz 1 = eigenes
+// Zweitkonto, falls angemeldet — sonst die ②-Markierung des Erstkontos.
+function seatName(ws, i) {
+  if (i === 0) return ws.user ? ws.user.username : null;
+  if (ws.user2) return ws.user2.username;
+  return ws.user ? ws.user.username + ' ②' : null;
+}
 
 function newCode() {
   for (let tries = 0; tries < 50; tries++) {
@@ -278,15 +283,15 @@ function handleMessage(ws, data, isBinary) {
       if (ws.roomCode) { sendJson(ws, { t: 'err', msg: 'Schon in einem Raum' }); return; }
       const code = newCode();
       if (!code) { sendJson(ws, { t: 'err', msg: 'Server voll' }); return; }
-      authWs(ws, msg.token); // optionale Anmeldung -> ws.user / ws.name
+      authWs(ws, msg.token, msg.token2); // optionale Anmeldung -> ws.user / ws.user2
       const seats = seatCount(msg);
       const slots = seats === 2 ? [0, 1] : [0]; // Host nimmt die untersten Slots
       const names = {};
-      slots.forEach((s, i) => { names[s] = seatName(ws.name, i); });
+      slots.forEach((s, i) => { names[s] = seatName(ws, i); });
       rooms.set(code, { host: ws, clients: new Map(), locked: false, names });
       ws.roomCode = code; ws.slots = slots; ws.slot = 0; ws.rkey = randomUUID();
       setOnline(ws);
-      sendJson(ws, { t: 'created', code, name: ws.name, slots, rk: ws.rkey });
+      sendJson(ws, { t: 'created', code, name: ws.name, slots, names, rk: ws.rkey });
       broadcastPresence(); // Ersteller ist jetzt (evtl. neu) online
       return;
     }
@@ -304,7 +309,7 @@ function handleMessage(ws, data, isBinary) {
         if (g && g.code === code && Date.now() - g.at < GRACE_MS) { preferSlots = g.slots || null; rejoinGrace.delete(String(msg.rk)); }
         else { sendJson(ws, { t: 'err', msg: 'Spiel läuft schon' }); return; }
       }
-      authWs(ws, msg.token);
+      authWs(ws, msg.token, msg.token2);
       // Man kann nicht dem EIGENEN Raum (aus einer zweiten Sitzung) beitreten:
       // die Sitzungsübernahme in setOnline würde ihn sonst mitten im Beitritt löschen.
       if (r.host?.user && ws.user && r.host.user.id === ws.user.id) {
@@ -318,7 +323,7 @@ function handleMessage(ws, data, isBinary) {
         ? preferSlots : freeSlots(r, seats);
       if (!slots) { sendJson(ws, { t: 'err', msg: seats === 2 ? 'Nicht genug Platz für 2 Spieler' : 'Raum ist voll (4 Spieler)' }); return; }
       const names = {};
-      slots.forEach((s, i) => { r.clients.set(s, ws); r.names[s] = seatName(ws.name, i); names[s] = seatName(ws.name, i); });
+      slots.forEach((s, i) => { r.clients.set(s, ws); r.names[s] = seatName(ws, i); names[s] = seatName(ws, i); });
       ws.roomCode = code; ws.slots = slots; ws.slot = slots[0]; ws.rkey = randomUUID();
       setOnline(ws);
       sendJson(ws, { t: 'joined', code, slots, names: { ...r.names }, rk: ws.rkey }); // bekannte Namen mitschicken
@@ -377,7 +382,7 @@ function handleMessage(ws, data, isBinary) {
 // Optionale Anmeldung einer WS-Verbindung über ein Session-Token: setzt den
 // angezeigten Namen (für Lobby/Scorebar) und die Nutzer-ID (für die Statistik).
 // Schlägt sie fehl, bleibt der Spieler anonym — Online-Spielen geht auch ohne Konto.
-function authWs(ws, token) {
+function authWs(ws, token, token2) {
   const u = token ? userForToken(token) : null;
   // Ändert oder verliert die Verbindung ihre Identität, den alten online-Eintrag
   // entfernen — nie ein Socket mit user=null in `online` zurücklassen. Sonst
@@ -388,6 +393,11 @@ function authWs(ws, token) {
   }
   ws.user = u || null;
   ws.name = u ? u.username : null;
+  // Zweiter lokaler Sitz (Splitscreen): eigenes Konto NUR für Name + Statistik,
+  // KEINE Präsenz/Einladung/Übernahme (nur das Erstkonto ist "online"/einladbar).
+  // Ein Konto zählt nicht doppelt, falls versehentlich zweimal dasselbe Token.
+  const u2 = token2 ? userForToken(token2) : null;
+  ws.user2 = (u2 && (!u || u2.id !== u.id)) ? u2 : null;
 }
 
 // Rundenergebnis buchen: jede/r angemeldete aktive Spieler/in bekommt eine
@@ -395,9 +405,12 @@ function authWs(ws, token) {
 function tallyRound(room, winnerSlot) {
   const members = [room.host, ...roomClientSockets(room)]; // 2-Sitz-Clients nur einmal
   for (const c of members) {
-    if (!c?.user) continue;
-    // Ein Konto gewinnt, wenn EINER seiner Sitze der Sieger-Slot ist
-    try { recordOnline(c.user.id, (c.slots || []).includes(winnerSlot)); } catch (err) { console.error('stats:', err); }
+    if (!c) continue;
+    const slots = c.slots || [];
+    // Sitz 0 gehört dem Erstkonto, Sitz 1 dem Zweitkonto (Splitscreen) — jeweils
+    // eigene Runden/Siege buchen. Sieg = genau DER Sitz war der Sieger-Slot.
+    if (c.user) { try { recordOnline(c.user.id, slots[0] === winnerSlot); } catch (err) { console.error('stats:', err); } }
+    if (c.user2) { try { recordOnline(c.user2.id, slots[1] === winnerSlot); } catch (err) { console.error('stats:', err); } }
   }
 }
 

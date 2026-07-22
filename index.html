@@ -1707,6 +1707,9 @@ function resetPlayer(p) {
     body.quaternion.set(0, 0, 0, 1);
     mesh.material.opacity = 1; mesh.material.transparent = false;
   }
+  // Online-Client-Vorhersage (siehe netPredictSeat): beim Rundenstart hart auf
+  // den frischen Spawn-Punkt setzen, sonst würde sie vom alten Rundenende gleiten
+  p.pred = { x: p.torso.position.x, y: p.torso.position.y, z: p.torso.position.z, vx: 0, vy: 0, vz: 0, jumps: 0 };
 }
 
 // Bis zu 4 Spieler: Slot 0/1 wie klassisch (blau/orange), 2/3 (grün/pink) sind
@@ -3591,7 +3594,7 @@ function tryPunch(p) {
 }
 
 function tryJump(p) {
-  if (netRole === 'client') { netAct('jump', netSeatIndexOf(p)); return; } // Aktion entscheidet der Host
+  if (netRole === 'client') { netAct('jump', netSeatIndexOf(p)); netPredictJump(p); return; } // Aktion entscheidet der Host, lokal nur sofortiges Feedback
   if (!p.alive || p.ragdoll || p.tackling || state !== 'playing') return;
   // Hängend: jede Sprungtaste zieht ein Stück hoch, oben angekommen -> über die Kante stemmen
   if (p.hanging) {
@@ -4536,8 +4539,11 @@ document.addEventListener('click', (e) => {
     // Benutzerkonten
     if (id === 'authloginshow') netRenderAuth(false);
     if (id === 'authregshow') netRenderAuth(true);
+    if (id === 'authloginshow2') netRenderAuth(false, '', 2);
+    if (id === 'authregshow2') netRenderAuth(true, '', 2);
     if (id === 'authgo') netDoAuth(netAuthRegister);
     if (id === 'authlogout') authLogout().then(() => { netLeave(); netShowOnlineMenu(); }); // Präsenz trennen
+    if (id === 'authlogout2') authLogout2().then(() => netShowOnlineMenu());
     if (id === 'authboard') netShowLeaderboard();
     // Online-Spieler einladen (Knopf-ID inv_<userid>)
     if (id.startsWith('inv_')) netInvite(+id.slice(4));
@@ -5024,6 +5030,8 @@ function animate() {
       if (p.parked) continue;
       updatePlayer(p, dt);
     }
+  } else {
+    netApplyPrediction(dt); // eigene Figur(en) lokal vorausrechnen (siehe netPredictSeat)
   }
   checkInvariants();
   // Rauchfahne + Tarnungs-Ablauf-Flanke: läuft zustandsUNabhängig (auch Menü,
@@ -5643,6 +5651,101 @@ function netApplySnapshots() {
   }
 }
 
+// ---- Client-Vorhersage: eigene Figur(en) sofort auf Eingaben reagieren lassen ----
+// Bisher kam JEDE Spielerpose — auch die eigene — nur aus interpolierten Snapshots
+// (~RTT + 120 ms Puffer), das machte Laufen/Springen/Ausweichen spürbar träge und
+// ließ die eigene Figur wie durch Hindernisse "phasen", bis die Korrektur eintraf.
+// Statt vollständiger Physik (Rollback/Replay wäre bei 10 Ragdoll-Körpern + Gelenken
+// riskant und aufwendig) wird nur die Torso-TRANSLATION lokal per Raycast simuliert
+// — dieselben Formeln wie updatePlayer() — und als Offset auf die weiterhin vom Host
+// gelieferte Pose gelegt (Gliedmaßenhaltung/Rotation bleiben server-getrieben). Ein
+// stetiger Korrekturterm zieht die Vorhersage weich Richtung Host-Wahrheit zurück,
+// statt hart zu snappen — dasselbe Prinzip wie die Drift-Korrekturen für Hindernisse.
+const NET_PRED_CORRECT = 6;  // 1/s Angleichrate an die Host-Position (exponentiell)
+const NET_PRED_SNAP = 2.5;   // m — größere Ausreißer (Runde/Reconnect/Tod) hart resyncen
+
+// Sofortiges lokales Feedback für den häufigsten Fall (Bodensprung); Doppelsprung,
+// Hechtsprung und Kantenhochziehen bleiben allein Sache des Hosts (seltener/komplexer)
+function netPredictJump(p) {
+  const pr = p.pred;
+  if (!pr || !p.alive || p.ragdoll || p.tackling || p.hanging || state !== 'playing') return;
+  if ((pr.jumps || 0) > 0) return;
+  pr.vy = JUMP_V;
+  pr.jumps = 1;
+}
+
+function netPredictSeat(p, dt) {
+  const pr = p.pred;
+  if (!pr) return;
+  const t = p.torso;
+  const authX = t.position.x, authY = t.position.y, authZ = t.position.z;
+  const predictable = p.alive && !p.ragdoll && !p.hanging && !p.tackling && state === 'playing';
+
+  if (!predictable) {
+    // Ragdoll/Grätsche/Hängen entscheidet ohnehin allein der Host — kein Offset
+    pr.x = authX; pr.y = authY; pr.z = authZ; pr.vx = pr.vy = pr.vz = 0; pr.jumps = 0;
+  } else {
+    if (Math.hypot(pr.x - authX, pr.y - authY, pr.z - authZ) > NET_PRED_SNAP) {
+      pr.x = authX; pr.y = authY; pr.z = authZ; pr.vx = pr.vy = pr.vz = 0;
+    }
+
+    _rayFrom.set(pr.x, pr.y, pr.z);
+    _rayTo.set(pr.x, pr.y - 1.45, pr.z);
+    _rayRes.reset();
+    world.raycastClosest(_rayFrom, _rayTo, { collisionFilterMask: GROUP.GROUND | GROUP.OBST, skipBackfaces: true }, _rayRes);
+    const grounded = _rayRes.hasHit;
+    if (grounded && pr.vy <= 0.5) pr.jumps = 0;
+
+    let dx = (p.keys.r ? 1 : 0) - (p.keys.l ? 1 : 0) + p.padX;
+    let dz = (p.keys.b ? 1 : 0) - (p.keys.f ? 1 : 0) + p.padZ;
+    const len = Math.hypot(dx, dz);
+    if (len > 1) { dx /= len; dz /= len; }
+    const slowed = perfNow() < p.slowUntil;
+    const spd = RUN_SPEED * (slowed ? 0.45 : 1);
+    const k = grounded ? 0.28 + (ICE_GRIP - 0.28) * iceLevel : 0.07;
+    pr.vx += (dx * spd - pr.vx) * k;
+    pr.vz += (dz * spd - pr.vz) * k;
+    pr.vy = grounded ? Math.max(-6, Math.min(6, (RIDE_HEIGHT - _rayRes.distance) * 14)) : pr.vy + GRAVITY * dt;
+
+    // Grobe Wand-Kollision je Achse (kurzer Raycast in Bewegungsrichtung) — reicht
+    // für "läuft nicht durch Wände", ohne echte Kontakt-/Gelenkphysik nachzubauen
+    if (Math.abs(pr.vx) > 0.01) {
+      _rayFrom.set(pr.x, pr.y + 0.15, pr.z);
+      _rayTo.set(pr.x + Math.sign(pr.vx) * (Math.abs(pr.vx) * dt + 0.32), pr.y + 0.15, pr.z);
+      _rayRes.reset();
+      world.raycastClosest(_rayFrom, _rayTo, { collisionFilterMask: GROUP.OBST, skipBackfaces: true }, _rayRes);
+      if (_rayRes.hasHit && !_rayRes.body?.isJumpPad) pr.vx = 0;
+    }
+    if (Math.abs(pr.vz) > 0.01) {
+      _rayFrom.set(pr.x, pr.y + 0.15, pr.z);
+      _rayTo.set(pr.x, pr.y + 0.15, pr.z + Math.sign(pr.vz) * (Math.abs(pr.vz) * dt + 0.32));
+      _rayRes.reset();
+      world.raycastClosest(_rayFrom, _rayTo, { collisionFilterMask: GROUP.OBST, skipBackfaces: true }, _rayRes);
+      if (_rayRes.hasHit && !_rayRes.body?.isJumpPad) pr.vz = 0;
+    }
+
+    pr.x += pr.vx * dt;
+    pr.y += pr.vy * dt;
+    pr.z += pr.vz * dt;
+
+    const c = Math.min(1, NET_PRED_CORRECT * dt);
+    pr.x += (authX - pr.x) * c;
+    pr.y += (authY - pr.y) * c;
+    pr.z += (authZ - pr.z) * c;
+  }
+
+  const ox = pr.x - authX, oy = pr.y - authY, oz = pr.z - authZ;
+  pr.offset = Math.hypot(ox, oy, oz); // Debug/Telemetrie: wie weit die Vorhersage gerade führt
+  for (const { body } of p.parts) { body.position.x += ox; body.position.y += oy; body.position.z += oz; }
+}
+
+function netApplyPrediction(dt) {
+  for (const seat of netMySeats) {
+    const p = players[seat];
+    if (p && !p.parked) netPredictSeat(p, dt);
+  }
+}
+
 // ---- Pro-Frame-Haken (in animate): Host wendet Eingaben an, Client posiert ----
 // Watchdog: friert der Host ein (Tab im Hintergrund -> rAF stoppt, die
 // WS-Pings beantwortet der Browser trotzdem), kämen ewig keine Snapshots
@@ -5818,7 +5921,7 @@ function netReconnectAttempt(delay) {
   ws.onopen = () => {
     netWsOpenedAt = perfNow();
     // Wiedereintritt in den laufenden Raum (rk umgeht den Lock beim Server)
-    try { ws.send(JSON.stringify({ t: 'join', code: netCode, token: authToken || undefined, seats: netMySeats.length, rk: netRkey || undefined })); }
+    try { ws.send(JSON.stringify({ t: 'join', code: netCode, token: authToken || undefined, token2: (netMySeats.length === 2 && authToken2) ? authToken2 : undefined, seats: netMySeats.length, rk: netRkey || undefined })); }
     catch { try { ws.close(); } catch { /* egal */ } }
   };
   ws.onmessage = netOnMessage;
@@ -5910,7 +6013,8 @@ function netOnMessage(ev) {
       if (typeof m.rk === 'string') netRkey = m.rk;
       netMySeats = netSanitizeSeats(m.slots); netMySlot = netMySeats[0]; // 1–2 lokale Sitze
       netRoster = [...netMySeats].sort((a, b) => a - b);
-      netNames = {}; netMySeats.forEach((s, i) => { netNames[s] = i === 0 ? netValidName(m.name) : (netValidName(m.name) ? netValidName(m.name) + ' ②' : undefined); });
+      // Namen kommen vom Server (Sitz 2 kann ein EIGENES Konto sein, sonst „Name ②")
+      netNames = netSanitizeNames(m.names);
       netRenderLobby();
       return;
     }
@@ -6197,6 +6301,11 @@ function netLeave() {
 // localStorage; API-Aufrufe gehen same-origin an /api/… (bzw. das ?server=-Ziel).
 let authToken = localStorage.getItem('runordie_token') || null;
 let authUser = null; // { username, bestTime, games, onlineRounds, onlineWins }
+// Zweiter lokaler Spieler (Splitscreen an EINEM Gerät): eigenes Konto, damit auch
+// sein Name in der Lobby steht und seine Online-Statistik zählt. Reine Zweit-
+// Identität — Präsenz/Einladungen laufen nur über das Erstkonto.
+let authToken2 = localStorage.getItem('runordie_token2') || null;
+let authUser2 = null;
 
 function netApiBase() {
   const q = new URLSearchParams(location.search).get('server');
@@ -6266,10 +6375,13 @@ function netDebugRender() {
   ].join('\n');
 }
 
-async function authApi(method, path, body) {
+// tokenOverride: undefined -> Erstkonto-Token; sonst genau dieses Token (auch null
+// für Login/Registrieren, die kein Token brauchen). Ermöglicht Spieler-2-Aufrufe.
+async function authApi(method, path, body, tokenOverride) {
+  const tok = tokenOverride !== undefined ? tokenOverride : authToken;
   const res = await fetch(netApiBase() + path, {
     method,
-    headers: { 'content-type': 'application/json', ...(authToken ? { authorization: 'Bearer ' + authToken } : {}) },
+    headers: { 'content-type': 'application/json', ...(tok ? { authorization: 'Bearer ' + tok } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
   const json = await res.json().catch(() => ({}));
@@ -6303,6 +6415,31 @@ async function authLogin(username, password, register) {
 async function authLogout() {
   try { await authApi('POST', '/logout'); } catch { /* Token wird lokal ohnehin verworfen */ }
   authSetToken(null); authUser = null;
+}
+
+// ---- Zweiter lokaler Spieler (Splitscreen): eigene, schlanke Anmeldung ----
+function authSetToken2(t) {
+  authToken2 = t;
+  if (t) localStorage.setItem('runordie_token2', t); else localStorage.removeItem('runordie_token2');
+}
+async function authRestore2() {
+  if (!authToken2) return;
+  const tok = authToken2;
+  try { const u = (await authApi('GET', '/me', null, tok)).user; if (authToken2 === tok) authUser2 = u; }
+  catch { if (authToken2 === tok) { authSetToken2(null); authUser2 = null; } }
+}
+async function authLogin2(username, password, register) {
+  const r = await authApi('POST', register ? '/register' : '/login', { username, password }, null);
+  // Nicht dasselbe Konto wie Spieler 1 — sonst doppelte Identität/Statistik
+  if (authUser && r.user && r.user.username === authUser.username) {
+    try { await authApi('POST', '/logout', null, r.token); } catch { /* egal */ }
+    throw new Error('Spieler 1 ist schon mit diesem Konto angemeldet');
+  }
+  authSetToken2(r.token); authUser2 = r.user;
+}
+async function authLogout2() {
+  try { await authApi('POST', '/logout', null, authToken2); } catch { /* Token lokal ohnehin verworfen */ }
+  authSetToken2(null); authUser2 = null;
 }
 
 // Solo-Rekord an die globale Bestenliste melden (nur angemeldet, best effort)
@@ -6402,18 +6539,37 @@ function authHeaderHtml() {
     `<button id="authboard">🏅 Bestenliste</button></span>`;
 }
 
+// Zweiter lokaler Spieler (nur im 2-Spieler-Splitscreen sichtbar): eigenes Konto
+// anmelden, damit auch sein Name/seine Statistik zählt. Optional — sonst „② …".
+function authP2Html() {
+  if (netLocalSeats !== 2) return '';
+  const box = (inner) => `<span style="display:block;margin:2px 0 8px;padding:4px 0;border-top:1px solid #ffffff14">${inner}</span>`;
+  if (authUser2) {
+    return box(`<span style="opacity:.85">Spieler 2: <b style="color:#ffd23d">${netEsc(authUser2.username)}</b>` +
+      ` · Siege ${authUser2.onlineWins | 0}</span> <button id="authlogout2">Abmelden</button>`);
+  }
+  return box(`<span style="opacity:.7">Spieler 2 spielt anonym.</span> ` +
+    `<button id="authloginshow2">🔑 Spieler 2 anmelden</button><button id="authregshow2">✨ Konto</button>`);
+}
+
 let netAuthRegister = false; // ob das Auth-Formular gerade im Registrier-Modus ist
-function netRenderAuth(register, err) {
+let netAuthPlayer = 1;       // welcher lokale Spieler (1 = Erstkonto, 2 = Splitscreen-Sitz)
+function netRenderAuth(register, err, player = 1) {
   netUiOpen = true;
   netAuthRegister = register;
-  const title = register ? '✨ KONTO ERSTELLEN' : '🔑 ANMELDEN';
+  netAuthPlayer = player === 2 ? 2 : 1;
+  const p2 = netAuthPlayer === 2;
+  const title = (p2 ? '② SPIELER 2 — ' : '') + (register ? '✨ KONTO ERSTELLEN' : '🔑 ANMELDEN');
+  // Umschalt-Knopf trägt den Spieler mit (…show2 bleibt bei Spieler 2)
+  const toggleId = (register ? 'authloginshow' : 'authregshow') + (p2 ? '2' : '');
   $('msg').innerHTML = netMenuShell(
     `<b class="mh">${title}</b><br>` +
     (err ? `<span style="color:#ff6b6b">⚠ ${netEsc(err)}</span><br>` : '') +
     `<span class="menurow"><input id="authname" maxlength="16" placeholder="NAME" autocomplete="username" value="${netEsc(netAuthName)}"></span>` +
     `<span class="menurow"><input id="authpass" type="password" maxlength="200" placeholder="PASSWORT" autocomplete="${register ? 'new-password' : 'current-password'}"></span>` +
     `<span class="menurow"><button id="authgo" class="bigbtn online">${register ? 'Konto erstellen' : 'Anmelden'}</button>` +
-    `<button id="${register ? 'authloginshow' : 'authregshow'}">${register ? 'Ich habe schon ein Konto' : 'Neues Konto'}</button></span>`
+    `<button id="${toggleId}">${register ? 'Ich habe schon ein Konto' : 'Neues Konto'}</button></span>` +
+    `<span class="menurow"><button id="netonlineback">← Zurück</button></span>`
   );
   $('msg').classList.remove('hidden');
   setTimeout(() => $('authname')?.focus(), 50);
@@ -6423,12 +6579,14 @@ let netAuthName = ''; // Eingegebener Name überlebt einen Fehlversuch-Rerender
 async function netDoAuth(register) {
   netAuthName = ($('authname')?.value || '').trim();
   const pass = $('authpass')?.value || '';
+  const player = netAuthPlayer;
   try {
-    await authLogin(netAuthName, pass, register);
+    if (player === 2) await authLogin2(netAuthName, pass, register);
+    else await authLogin(netAuthName, pass, register);
     netAuthName = '';
     netShowOnlineMenu();
   } catch (e) {
-    netRenderAuth(register, e.message);
+    netRenderAuth(register, e.message, player);
   }
 }
 
@@ -6473,7 +6631,7 @@ function netRenderOnlineMenu() {
     ? '👥 An diesem Gerät: 2 Spieler (Splitscreen)'
     : '👤 An diesem Gerät: 1 Spieler'}</button></span>`;
   $('msg').innerHTML = netMenuShell(
-    authHeaderHtml() + `<br>` + seatBtn +
+    authHeaderHtml() + `<br>` + authP2Html() + seatBtn +
     `<span class="menurow">` +
     `<button id="nethostgo" class="bigbtn online">🏠 RAUM ERSTELLEN<span>Du bist der Host — Freunde joinen per Code</span></button>` +
     `<button id="netjoinshow" class="bigbtn solo">🔑 RAUM BEITRETEN<span>Mit einem 4-stelligen Code</span></button>` +
@@ -6548,16 +6706,20 @@ function netBeginRoom() {
   }, 10000);
 }
 
+// Zweit-Token nur mitschicken, wenn dieses Gerät 2 lokale Sitze bringt UND für
+// Sitz 2 ein eigenes Konto angemeldet ist.
+const netToken2 = () => (netLocalSeats === 2 && authToken2) ? authToken2 : undefined;
+
 function netCreateRoom() {
   netBeginRoom();
-  netConnect(() => netWs.send(JSON.stringify({ t: 'create', token: authToken || undefined, seats: netLocalSeats })));
+  netConnect(() => netWs.send(JSON.stringify({ t: 'create', token: authToken || undefined, token2: netToken2(), seats: netLocalSeats })));
 }
 
 function netJoinRoom(code) {
   code = String(code || '').toUpperCase().trim();
   if (code.length !== 4) { netRenderJoin(code); return; }
   netBeginRoom();
-  netConnect(() => netWs.send(JSON.stringify({ t: 'join', code, token: authToken || undefined, seats: netLocalSeats })));
+  netConnect(() => netWs.send(JSON.stringify({ t: 'join', code, token: authToken || undefined, token2: netToken2(), seats: netLocalSeats })));
 }
 
 // Offline-Spielbarkeit: Service Worker cacht das Spiel samt CDN-Modulen.
@@ -6611,6 +6773,7 @@ parkPlayer(player3); parkPlayer(player4);
 // Gespeicherte Einstellungen wiederherstellen (Tag/Nacht, Dreh-Modus)
 if (localStorage.getItem('runordie_rotMode') === '1') toggleRotMode();
 authRestore(); // gespeicherte Anmeldung still prüfen (Konto-Header im Online-Menü)
+authRestore2(); // ebenso das Konto des zweiten lokalen Spielers (Splitscreen)
 animate();
 
 // Einmaliger Geräte-Benchmark beim allerersten Start: kurz warten (Menü sichtbar, Nutzer nicht
@@ -7130,7 +7293,9 @@ window.__game = { players, obstacles, powerups, world, cams, sky, fxRings, laser
   get netP2P() { return netPeer ? netPeer.fast?.readyState === 'open' : Object.fromEntries(Object.entries(netPeers).map(([s, p]) => [s, p.fast?.readyState])); },
   // Benutzerkonten (Test-Harness)
   authLogin, authLogout, authRestore, authApi,
-  get authUser() { return authUser; }, get authToken() { return authToken; } };
+  authLogin2, authLogout2, authRestore2,
+  get authUser() { return authUser; }, get authToken() { return authToken; },
+  get authUser2() { return authUser2; }, get authToken2() { return authToken2; } };
 </script>
 </body>
 </html>
