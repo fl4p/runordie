@@ -4336,9 +4336,27 @@ let profiling = false; // true während der GPU-Profiler die Szene einfriert und
 let cpuProf = false;   // true während der Live-Frame-Profiler echte Frames vermisst
 // 60-fps-Deckel (Standard AN): auf 90/120-Hz-Displays spart das Akku und Wärme, ohne dass man
 // über die 60 fps hinaus etwas sieht. Physik bleibt korrekt, da dt aus der Echtzeit kommt.
-let fpsCap = localStorage.getItem('runordie_fpscap') !== '0';
-const FPS_CAP_MS = 1000 / 60;
+// Akku-Modus: 0 = aus (volle Qualität), 60/30 = FPS-Cap + Sparmaßnahmen
+// (halbe Schatten-Rate, reduzierter pixelRatio). Migriert vom alten An/Aus-Schalter.
+let fpsMode = (() => {
+  const m = localStorage.getItem('runordie_fpsmode');
+  if (m === '0' || m === '30' || m === '60') return +m;
+  return localStorage.getItem('runordie_fpscap') === '0' ? 0 : 60;
+})();
+let FPS_CAP_MS = fpsMode ? 1000 / fpsMode : 0;
 let capLastT = 0;
+let shadowEvery = 1;   // Schattenpass jeden N-ten Frame (Akku-Modus: 2)
+let shadowFrame = 0;
+function applyPowerMode() {
+  FPS_CAP_MS = fpsMode ? 1000 / fpsMode : 0;
+  const eco = fpsMode !== 0;
+  shadowEvery = eco ? 2 : 1; // Schatten mit halber Rate: kaum sichtbar, halbiert den Depth-Pass
+  // pixelRatio im Akku-Modus auf 1.5 (auf High-DPI-Handys der teuerste GPU-Posten);
+  // setSize triggert die Neu-Dimensionierung des Zeichenpuffers
+  renderer.setPixelRatio(Math.min(devicePixelRatio, eco ? 1.5 : 2));
+  renderer.setSize(innerWidth, innerHeight);
+  capLastT = 0;
+}
 // Ringpuffer für das Live-Frame-Profil (echtes Gameplay): Frame-Intervall, CPU-JS-Zeit u. a.
 const cpuBuf = { top: 0, tr: 0, intervals: [], cpu: [], logic: [], rsub: [], heap: [] };
 let elapsed = 0, spawnTimer = 0, puTimer = 0, sharkTimer = 6, roundEndAt = 0, firstDeathAt = 0, spawnCount = 0;
@@ -4507,7 +4525,9 @@ function updateDiveBtn() {
   const bb = $('botdiffbtn');
   if (bb) bb.textContent = `🤖 Bot-Stärke: ${BOT_LABELS[botDiff]}`;
   const fc = $('fpscapbtn');
-  if (fc) fc.textContent = fpsCap ? '🔋 FPS-Limit: 60 (spart Akku)' : '⚡ FPS-Limit: AUS (volle Bildrate)';
+  if (fc) fc.textContent = fpsMode === 0 ? '⚡ Akku-Modus: AUS (volle Qualität)'
+    : fpsMode === 60 ? '🔋 Akku-Modus: 60 fps + Grafik-Spar'
+    : '🪫 Akku-Modus: 30 fps + Grafik-Spar (max.)';
   const rc = $('rotcambtn');
   if (rc) rc.textContent = rotMode ? '🎥 Freie Kamera: AN (Maus/Stick/Wischen dreht)' : '🎥 Freie Kamera: AUS';
   const bn = (i) => PAD_BTN_NAMES[i] ?? `Taste ${i}`;
@@ -4601,9 +4621,9 @@ document.addEventListener('click', (e) => {
   }
   if (id === 'rotcambtn') toggleRotMode();
   if (id === 'fpscapbtn') {
-    fpsCap = !fpsCap;
-    localStorage.setItem('runordie_fpscap', fpsCap ? '1' : '0');
-    capLastT = 0;
+    fpsMode = fpsMode === 60 ? 30 : fpsMode === 30 ? 0 : 60; // 60 -> 30 -> aus -> …
+    localStorage.setItem('runordie_fpsmode', String(fpsMode));
+    applyPowerMode();
     updateDiveBtn();
   }
   if (id === 'gpuprofbtn') runGpuProfile();
@@ -5035,8 +5055,8 @@ async function sendBugReport() {
 function animate() {
   requestAnimationFrame(animate);
   if (profiling) return; // Szene eingefroren: der Profiler steuert das Rendern selbst
-  if (fpsCap) {
-    // Frame überspringen, bis ~eine 60-fps-Periode vergangen ist (−1 ms Toleranz gegen
+  if (FPS_CAP_MS) {
+    // Frame überspringen, bis ~eine Cap-Periode vergangen ist (−1 ms Toleranz gegen
     // Vsync-Jitter, sonst würde ein knapp verfehlter Frame auf 30 fps halbieren).
     // Der Rest wird AKKUMULIERT (capLastT += Periode statt = jetzt): sonst rastet
     // das Gate auf den rAF-Takt ein und 90/144-Hz-Displays fallen auf 45/48 fps.
@@ -5230,8 +5250,9 @@ function animate() {
 
   if (cpuProf) cpuBuf.tr = performance.now(); // Grenze Logik/Physik ↔ Render-Submit
   const w = innerWidth, h = innerHeight, hw = Math.floor(w / 2);
-  // Refresh the shadow map once for this frame; both splitscreen eyes then reuse it.
-  renderer.shadowMap.needsUpdate = true;
+  // Schatten-Map für diesen Frame auffrischen (beide Splitscreen-Augen teilen sie);
+  // im Akku-Modus nur jeden 2. Frame — die Schatten laufen dann mit halber Rate.
+  if (++shadowFrame >= shadowEvery) { renderer.shadowMap.needsUpdate = true; shadowFrame = 0; }
   if ((soloMode || botMode || netRole) && !netSplit()) {
     // Einzelspieler / gegen Bot / Online-Einzelsicht: ein Vollbild-Viewport
     renderer.setScissorTest(false);
@@ -7086,6 +7107,7 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   });
 }
 
+applyPowerMode(); // Akku-Sparmaßnahmen (pixelRatio/Schatten) beim Laden setzen
 MENU_HTML = $('msg').innerHTML;
 updateDiveBtn();
 // Slots 3/4 starten geparkt (nur Online-Runden bzw. ?bot3/?bot4 aktivieren sie)
@@ -7309,7 +7331,7 @@ async function runGpuProfile(auto = false) {
     // Echten Display-Takt messen; bei aktivem 60-fps-Deckel ist das effektive Budget die
     // längere der beiden Perioden (sonst läse ein 120-Hz-Gerät mit Deckel fälschlich „GPU-gebunden").
     const nativeBudget = await profMeasureRefresh();
-    const trueBudget = fpsCap ? Math.max(nativeBudget, FPS_CAP_MS) : nativeBudget;
+    const trueBudget = FPS_CAP_MS ? Math.max(nativeBudget, FPS_CAP_MS) : nativeBudget;
     cpuBuf.top = 0;
     for (const k of ['intervals', 'cpu', 'logic', 'rsub', 'heap']) cpuBuf[k].length = 0;
     startGame(true);
