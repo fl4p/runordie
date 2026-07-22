@@ -1891,7 +1891,9 @@ function breachWallAt(netId, hitX) {
   // holeW 2.0: ergibt für botFindGapX eine 1.3-m-Lücke — 1.8 läge mit
   // 1.8 − 2×0.35 Pad exakt AUF der 1.1-m-Schwelle (Float-Münzwurf, ob
   // Bots das Loch sehen) und wäre auch für Menschen unnötig knapp
-  const holeW = 2.0, holeH = Math.min(he.y * 2, 2.3);
+  // holeH 2.8: die Öffnung reicht bis auf Einschlaghöhe des Hechtsprungs —
+  // 2.3 wirkte gedrungen, das Loch "klebte" optisch am Boden
+  const holeW = 2.0, holeH = Math.min(he.y * 2, 2.8);
   const hx = Math.max(cx - he.x + holeW / 2, Math.min(cx + he.x - holeW / 2, hitX));
   const rep = o.mesh.material.map?.repeat;
   const dxDen = rep ? rep.x / (he.x * 2) : 1, dyDen = rep ? rep.y / (he.y * 2) : 1;
@@ -1941,10 +1943,14 @@ function breachWallAt(netId, hitX) {
 
 // Host-/Offline-Seite: Ladung verbrauchen, Wand teilen, Replik informieren
 function tryBreach(p, body) {
+  if (perfNow() < (p.breachCd || 0)) return false; // 0.3 s Sprengpause
   const o = breachTarget(body);
   if (!o) return false;
   if (netRole === 'host' && !o.netId) return false; // ohne netId keine Replik-Sync
   p.breach--;
+  // Cooldown: ein einziger Hechtsprung soll nicht sofort auch die zweite
+  // Ladung in die frisch entstandenen Randsegmente verbrennen
+  p.breachCd = perfNow() + 0.3;
   updatePowerupHud();
   const hitX = p.torso.position.x;
   const id = o.netId ?? (o.netId = netNewId()); // offline: id nur für die lokale Suche
