@@ -3210,12 +3210,14 @@ function doDive(p) {
 // tryJump/tryPunch/tryTackle auf — exakt wie ein Mensch am Stick. Dadurch testet
 // er dieselben Codepfade wie echtes Gameplay (VS-BOT-Modus und Soak-Tests).
 const BOT_DIFFS = {
-  easy:   { react: 0.32, jitter: 0.20, gain: 1.2, aimErr: 1.2,  mistakeP: 0.15, horizon: 1.0, aggro: 0.20, tackleP: 0.05, puWant: 0.30, edgeMargin: 1.0 },
-  medium: { react: 0.18, jitter: 0.10, gain: 2.0, aimErr: 0.5,  mistakeP: 0.05, horizon: 2.0, aggro: 0.50, tackleP: 0.12, puWant: 0.60, edgeMargin: 1.5 },
+  // chase: einmal angebissen, bleibt der Bot so viele Sekunden am Gegner dran
+  // (statt jeden Denk-Takt neu zu würfeln) — das macht die Jagd fühlbar
+  easy:   { react: 0.32, jitter: 0.20, gain: 1.2, aimErr: 1.2,  mistakeP: 0.15, horizon: 1.0, aggro: 0.20, tackleP: 0.05, puWant: 0.30, edgeMargin: 1.0, chase: 0.8 },
+  medium: { react: 0.18, jitter: 0.10, gain: 2.0, aimErr: 0.5,  mistakeP: 0.05, horizon: 2.0, aggro: 0.50, tackleP: 0.12, puWant: 0.60, edgeMargin: 1.5, chase: 2.0 },
   // horizon 3.0: bei Tempo 16 m/s braucht die Querung zur Lücke bis zu ~2.3 s —
   // wer die Wand erst 2 s vorher sieht, wird eingeholt, gestunnt und über die
   // Hinterkante geschoben (Stun-Lock, aus den Soak-Trails)
-  hard:   { react: 0.10, jitter: 0.04, gain: 3.6, aimErr: 0.15, mistakeP: 0.01, horizon: 3.0, aggro: 0.85, tackleP: 0.22, puWant: 1.0, edgeMargin: 2.3 },
+  hard:   { react: 0.10, jitter: 0.04, gain: 3.6, aimErr: 0.15, mistakeP: 0.01, horizon: 3.0, aggro: 0.85, tackleP: 0.22, puWant: 1.0, edgeMargin: 2.3, chase: 3.5 },
 };
 const BOT_LABELS = { easy: 'LEICHT', medium: 'MITTEL', hard: 'SCHWER' };
 
@@ -3228,11 +3230,11 @@ function makeBot(diffName, sticky = false) {
   return {
     d: BOT_DIFFS[diffName] || BOT_DIFFS.medium, diffName, sticky,
     nextThink: 0, targetX: 0, targetZ: 2.5, plan: null,
-    noiseX: 0, noiseZ: 0, blunderUntil: 0, tnt: null, hangJumpAt: 0,
+    noiseX: 0, noiseZ: 0, blunderUntil: 0, tnt: null, hangJumpAt: 0, chaseUntil: 0,
   };
 }
 
-function botReset(b) { b.nextThink = 0; b.plan = null; b.tnt = null; b.blunderUntil = 0; }
+function botReset(b) { b.nextThink = 0; b.plan = null; b.tnt = null; b.blunderUntil = 0; b.chaseUntil = 0; }
 
 // Breiteste freie x-Lücke zwischen den Hinderniskörpern nahe zRef — Mitte der
 // besten Lücke (breit UND nah am Bot) oder null, wenn alles zu ist (TNT-Mauer)
@@ -3260,8 +3262,9 @@ function botFindGapX(p, zRef) {
 }
 
 // Akuteste Gefahr im Zeithorizont des Bots (kleinste Zeit bis zum Eintreffen)
-function botScanThreat(p, bot) {
+function botScanThreat(p, bot, horizonCap) {
   const t = p.torso;
+  const hz = Math.min(bot.d.horizon, horizonCap ?? Infinity);
   let best = null;
   const add = (kind, tta, o) => { if (!best || tta < best.tta) best = { kind, tta, o }; };
 
@@ -3278,7 +3281,7 @@ function botScanThreat(p, bot) {
     if (tta < -0.2) continue;
     // Katapult-Pad überstimmt die Mega-Wand dahinter: einfach drüberlaufen
     if (b.isJumpPad) { if (tta < 1.6) add('pad', tta - 0.01, o); continue; }
-    if (tta > bot.d.horizon) continue;
+    if (tta > hz) continue;
     if (o.wreck) { if (Math.abs(t.position.x) < 5.2) add('wreck', tta, o); continue; }
     if (o.piston) { if (Math.abs(t.position.x - b.position.x) < 3.6) add('piston', tta, o); continue; }
     if (o.sweep) { add('sweep', tta, o); continue; }
@@ -3294,7 +3297,7 @@ function botScanThreat(p, bot) {
     const closure = L.speed - t.velocity.z;
     if (closure < 0.3) continue;
     const tta = (t.position.z - L.z) / closure;
-    if (tta < -0.2 || tta > bot.d.horizon) continue;
+    if (tta < -0.2 || tta > hz) continue;
     add('laser', tta, L);
   }
   return best;
@@ -3505,11 +3508,17 @@ function botThink(p, bot) {
 
   // Aussetzer: schwächere Bots übersehen Gefahren kurzzeitig
   if (now >= bot.blunderUntil && Math.random() < d.mistakeP) bot.blunderUntil = now + 0.5;
-  const threat = now < bot.blunderUntil ? null : botScanThreat(p, bot);
+  // Verfolgungsjagd: einmal angebissen, bleibt der Bot d.chase Sekunden am
+  // Gegner dran und lässt sich nur noch von AKUTEN Gefahren (tta < 1 s)
+  // unterbrechen — wer jagt, nimmt Risiko in Kauf. Ohne Jagd gilt der volle
+  // Vorsichts-Horizont.
+  const foe = nearestFoe(p);
+  const chasing = foe && now < bot.chaseUntil;
+  const threat = now < bot.blunderUntil ? null : botScanThreat(p, bot, chasing ? 1.0 : undefined);
   if (threat) { botHandleThreat(p, bot, threat); botSecondaryJump(p, bot); return; }
 
-  const foe = nearestFoe(p);
-  if (foe && Math.random() < d.aggro) {
+  if (foe && (chasing || Math.random() < d.aggro)) {
+    if (!chasing) bot.chaseUntil = now + d.chase;
     const f = foe.torso.position;
     // Harte Bots stellen sich so, dass Schläge den Gegner Richtung Kante schieben
     bot.targetX = f.x + (bot.diffName === 'hard' ? -Math.sign(f.x || 1) * 0.8 : 0);
