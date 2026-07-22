@@ -2327,7 +2327,7 @@ function updateLasers(dt) {
   const target = elapsed < 8 ? 0 : Math.min(4, 1 + Math.floor((elapsed - 8) / 16));
   if (netRole !== 'client' && lasers.length < target) netCall('spawnLaser');
 
-  laserGlowMat.opacity = 0.14 + 0.09 * Math.sin(elapsed * 9); // Flackern
+  laserGlowMat.opacity = 0.24; // konstant an — die Laser lasern durchgehend (kein Flackern)
 
   for (let i = lasers.length - 1; i >= 0; i--) {
     const L = lasers[i];
