@@ -3010,24 +3010,24 @@ addEventListener('keydown', (e) => {
   }
   // Online steuern beide Tastaturhälften die EIGENE Figur
   const m = KEYMAP[e.code];
-  if (m) (netRole ? myP() : m[0]).keys[m[1]] = true;
+  if (m) (netRole ? netSeatFor(m[0]) : m[0]).keys[m[1]] = true;
   const jp = JUMPKEY[e.code];
-  if (jp && !e.repeat) tryJump(netRole ? myP() : jp);
+  if (jp && !e.repeat) tryJump(netRole ? netSeatFor(jp) : jp);
   // Boxen: E = Spieler 1, "-" = Spieler 2 (layoutunabhängig über e.key, plus Numpad)
   if (!e.repeat) {
-    if (e.code === 'KeyE') tryPunch(netRole ? myP() : player1);
-    if (e.key === '-' || e.code === 'NumpadSubtract') tryPunch(netRole ? myP() : player2);
-    if (e.key === '.' || e.code === 'NumpadDecimal') tryTackle(netRole ? myP() : player2);
+    if (e.code === 'KeyE') tryPunch(netRole ? netSeat(0) : player1);
+    if (e.key === '-' || e.code === 'NumpadSubtract') tryPunch(netRole ? netSeat(1) : player2);
+    if (e.key === '.' || e.code === 'NumpadDecimal') tryTackle(netRole ? netSeat(1) : player2);
     // 🌑 Tarnung zünden: Shift links = Spieler 1, Shift rechts = Spieler 2
-    if (e.code === 'ShiftLeft') tryGhost(netRole ? myP() : player1);
-    if (e.code === 'ShiftRight') tryGhost(netRole ? myP() : player2);
+    if (e.code === 'ShiftLeft') tryGhost(netRole ? netSeat(0) : player1);
+    if (e.code === 'ShiftRight') tryGhost(netRole ? netSeat(1) : player2);
   }
   if (m && netRole === 'client') netSendInput(); // Flanke sofort schicken (Latenz)
 });
 addEventListener('pointerdown', ensureAudio);
 addEventListener('keyup', (e) => {
   const m = KEYMAP[e.code];
-  if (m) (netRole ? myP() : m[0]).keys[m[1]] = false;
+  if (m) (netRole ? netSeatFor(m[0]) : m[0]).keys[m[1]] = false;
   if (m && netRole === 'client') netSendInput();
 });
 
@@ -3159,7 +3159,7 @@ function pollGamepads() {
     st.back = r.back;
 
     // Linker Stick (analog) + D-Pad — online steuert jedes Pad die eigene Figur
-    const p = netRole ? myP() : players[side];
+    const p = netRole ? netSeat(side) : players[side];
     const DEAD = 0.25;
     p.padX = Math.abs(r.ax) > DEAD ? Math.max(-1, Math.min(1, r.ax * padSens)) : 0;
     p.padZ = Math.abs(r.ay) > DEAD ? Math.max(-1, Math.min(1, r.ay * padSens)) : 0;
@@ -3227,8 +3227,8 @@ renderer.domElement.addEventListener('click', () => {
 addEventListener('mousedown', (e) => {
   ensureAudio();
   if (isTouch) return; // am Handy boxen die Touch-Buttons, nicht synthetische Maus-Events
-  if (e.button === 0) tryPunch(netRole ? myP() : player1);
-  if (e.button === 2) tryTackle(netRole ? myP() : player1);
+  if (e.button === 0) tryPunch(netRole ? netSeat(0) : player1);
+  if (e.button === 2) tryTackle(netRole ? netSeat(0) : player1);
 });
 addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -3254,7 +3254,7 @@ const touchVec = { x: 0, z: 0 };
 // Wird pro Frame nach pollGamepads() addiert — Touch nutzt denselben Analog-Pfad
 // wie der Gamepad-Stick (Bewegung, Hechtsprung- und Grätsch-Richtung inklusive)
 function applyTouchInput() {
-  const p = netRole ? myP() : player1;
+  const p = netRole ? netSeat(0) : player1;
   p.padX += touchVec.x;
   p.padZ += touchVec.z;
 }
@@ -3297,10 +3297,10 @@ function applyTouchInput() {
     ensureAudio();
     fn();
   });
-  bindBtn('btnJump', () => tryJump(netRole ? myP() : player1));
-  bindBtn('btnPunch', () => tryPunch(netRole ? myP() : player1));
-  bindBtn('btnSlide', () => tryTackle(netRole ? myP() : player1));
-  bindBtn('btnGhost', () => tryGhost(netRole ? myP() : player1)); // 🌑-Tarnung auch per Touch
+  bindBtn('btnJump', () => tryJump(netRole ? netSeat(0) : player1));
+  bindBtn('btnPunch', () => tryPunch(netRole ? netSeat(0) : player1));
+  bindBtn('btnSlide', () => tryTackle(netRole ? netSeat(0) : player1));
+  bindBtn('btnGhost', () => tryGhost(netRole ? netSeat(0) : player1)); // 🌑-Tarnung auch per Touch
   bindBtn('btnExit', () => { if (!benchRunning) backToMenu(); }); // nicht mitten im Benchmark abbrechen
 
   // Geister-Maus-Events der Touch-Bedienung unterdrücken (Scroll/Zoom sowieso)
@@ -3393,7 +3393,7 @@ function applyGhostVisual(p, on) {
   spawnSmokePuff(p.torso.position, on ? 12 : 8, true); // Auflösen/Auftauchen
 }
 function tryGhost(p) {
-  if (netRole === 'client') { netAct('ghost'); return; } // der Host entscheidet
+  if (netRole === 'client') { netAct('ghost', netSeatIndexOf(p)); return; } // der Host entscheidet
   if (!p.alive || p.ragdoll || state !== 'playing') return;
   if (!p.ghostCharges || perfNow() < p.ghostUntil) return;
   p.ghostCharges--;
@@ -3402,7 +3402,7 @@ function tryGhost(p) {
 }
 
 function tryPunch(p) {
-  if (netRole === 'client') { netAct('punch'); return; } // Aktion entscheidet der Host
+  if (netRole === 'client') { netAct('punch', netSeatIndexOf(p)); return; } // Aktion entscheidet der Host
   if (!p.alive || p.ragdoll || state !== 'playing') return;
   if (perfNow() < p.punchCooldown) return;
   p.punchCooldown = perfNow() + (punchStun ? PUNCH_CD * 2 : PUNCH_CD);
@@ -3492,7 +3492,7 @@ function tryPunch(p) {
 }
 
 function tryJump(p) {
-  if (netRole === 'client') { netAct('jump'); return; } // Aktion entscheidet der Host
+  if (netRole === 'client') { netAct('jump', netSeatIndexOf(p)); return; } // Aktion entscheidet der Host
   if (!p.alive || p.ragdoll || p.tackling || state !== 'playing') return;
   // Hängend: jede Sprungtaste zieht ein Stück hoch, oben angekommen -> über die Kante stemmen
   if (p.hanging) {
@@ -3579,7 +3579,7 @@ function tackleDirection(p) {
 }
 
 function tryTackle(p) {
-  if (netRole === 'client') { netAct('tackle'); return; } // Aktion entscheidet der Host
+  if (netRole === 'client') { netAct('tackle', netSeatIndexOf(p)); return; } // Aktion entscheidet der Host
   if (!p.alive || p.ragdoll || p.tackling || state !== 'playing') return;
   if (!p.grounded || perfNow() < p.tackleCd) return;
   p.tackleCd = perfNow() + TACKLE_CD;
@@ -4231,7 +4231,7 @@ function activePlayers() { return players.filter((p) => !p.parked); }
 // Rohtext-Label (kann Konto-Namen enthalten -> beim Rendern escapen)
 function playerLabel(p) {
   if (botMode) return p === player1 ? 'DU' : `🤖 BOT (${BOT_LABELS[botDiff]})`;
-  if (netRole) return (p === myP() ? 'DU: ' : '') + netSlotName(p.id - 1);
+  if (netRole) return (netMySeats.includes(p.id - 1) ? 'DU: ' : '') + netSlotName(p.id - 1);
   return `SPIELER ${p.id}`;
 }
 
@@ -4246,8 +4246,9 @@ function renderScoreBar() {
 }
 
 function applySoloLayout() {
-  // GEGEN BOT und Online rendern wie Solo in Vollbild (eine Kamera)
-  const single = soloMode || botMode || !!netRole;
+  // GEGEN BOT und Online-Einzelsicht rendern in Vollbild (eine Kamera);
+  // Online mit 2 lokalen Sitzen dagegen im Splitscreen wie lokales 2-Spieler.
+  const single = (soloMode || botMode || !!netRole) && !netSplit();
   $('divider').style.display = single ? 'none' : '';
   $('l1').classList.toggle('hidden', !!netRole); // Online: Steuerlabels sind irreführend
   $('l2').classList.toggle('hidden', single);
@@ -4261,6 +4262,7 @@ function applySoloLayout() {
   }
   cams[0].aspect = (single ? innerWidth : innerWidth / 2) / innerHeight;
   applyFov(cams[0]);
+  if (netSplit()) { cams[1].aspect = (innerWidth / 2) / innerHeight; applyFov(cams[1]); }
 }
 
 function startGame(solo = false, vsBot = false) {
@@ -4392,6 +4394,7 @@ document.addEventListener('click', (e) => {
     if (id === 'netstartgo') { ensureAudio(); netStartOnline(); }
     if (id === 'netback') backToMenu();
     if (id === 'netonlineback') netShowOnlineMenu();
+    if (id === 'netseats') { netLocalSeats = netLocalSeats === 2 ? 1 : 2; localStorage.setItem('runordie_localseats', netLocalSeats); netRenderOnlineMenu(); }
     // Benutzerkonten
     if (id === 'authloginshow') netRenderAuth(false);
     if (id === 'authregshow') netRenderAuth(true);
@@ -4500,7 +4503,7 @@ function endRound() {
 function showRoundEndMsg(w) {
   const text = !w ? 'UNENTSCHIEDEN!'
     : botMode ? (w === player1 ? 'DU GEWINNST DIE RUNDE!' : '🤖 DER BOT GEWINNT DIE RUNDE!')
-    : netRole && w === myP() ? 'DU GEWINNST DIE RUNDE!'
+    : netRole && netMySeats.includes(w.id - 1) ? 'DU GEWINNST DIE RUNDE!'
     : netRole ? `${netEsc(netSlotName(w.id - 1))} GEWINNT DIE RUNDE!`
     : `SPIELER ${w.id} GEWINNT DIE RUNDE!`;
   const m = $('msg');
@@ -4902,15 +4905,15 @@ function animate() {
   }
 
   syncMeshes();
-  updateCam(cams[0], netRole ? myP() : player1, dt);
-  if (!soloMode && !botMode && !netRole) updateCam(cams[1], player2, dt);
+  updateCam(cams[0], netRole ? netSeat(0) : player1, dt);
+  if ((!soloMode && !botMode && !netRole) || netSplit()) updateCam(cams[1], netRole ? netSeat(1) : player2, dt);
 
   if (cpuProf) cpuBuf.tr = performance.now(); // Grenze Logik/Physik ↔ Render-Submit
   const w = innerWidth, h = innerHeight, hw = Math.floor(w / 2);
   // Refresh the shadow map once for this frame; both splitscreen eyes then reuse it.
   renderer.shadowMap.needsUpdate = true;
-  if (soloMode || botMode || netRole) {
-    // Einzelspieler / gegen Bot / Online: ein Vollbild-Viewport
+  if ((soloMode || botMode || netRole) && !netSplit()) {
+    // Einzelspieler / gegen Bot / Online-Einzelsicht: ein Vollbild-Viewport
     renderer.setScissorTest(false);
     renderer.setViewport(0, 0, w, h);
     centerSkyOn(cams[0]);
@@ -4937,7 +4940,7 @@ function animate() {
 
 addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
-  cams[0].aspect = ((soloMode || botMode || netRole) ? innerWidth : innerWidth / 2) / innerHeight;
+  cams[0].aspect = (((soloMode || botMode || netRole) && !netSplit()) ? innerWidth : innerWidth / 2) / innerHeight;
   cams[1].aspect = (innerWidth / 2) / innerHeight;
   for (const c of cams) applyFov(c);
 });
@@ -4957,7 +4960,9 @@ addEventListener('resize', () => {
 //    läuft lokal weiter und wird per Korrektur nachgezogen.
 let netRole = null;      // null | 'host' | 'client'
 let netWs = null;
-let netMySlot = 0;
+let netMySeats = [0];    // absolute Slots, die ICH lokal steuere (1–2 = Splitscreen an einem Gerät)
+let netMySlot = 0;       // = netMySeats[0] (Host-Erkennung, Kamera-Primärsicht)
+let netLocalSeats = +localStorage.getItem('runordie_localseats') === 2 ? 2 : 1; // gewünschte lokale Spielerzahl
 let netRoster = [0];     // Slots im Raum (Host pflegt, Clients per 'lobby'-Event)
 let netNames = {};       // slot -> Anzeigename (angemeldete Spieler) oder undefined
 let netOnlineUsers = []; // [{id,name,busy}] — angemeldete Spieler im Online-Bereich
@@ -4973,7 +4978,7 @@ let netSnapTimer = 0;   // zeitbasierter Snapshot-Takt (20 Hz, unabhängig von d
 let netInputTimer = 0;
 let netStaleWarnAt = 0; // Snapshot-Watchdog: frühester Zeitpunkt der nächsten Warnung
 let netLastSnapAt = 0;  // Watchdog-Basis, solange noch kein Snapshot ankam
-const NET_PROTO = 3;    // v3: 🌑-Tarnung (2 Snapshot-Bytes + 'ghost'-Aktion)
+const NET_PROTO = 4;    // v4: Sitz-Byte im Input-Frame (gemischter Splitscreen+Online)
 let netRoundNo = 0;      // Runden-Zähler: filtert Snapshots alter Runden aus
 const netInputs = {};    // slot -> { keys, padX, padZ }
 const netActQueue = [];  // [slot, 'jump'|'punch'|'tackle']
@@ -4988,15 +4993,24 @@ const netSnaps = [];     // decodierte Snapshots für die Interpolation
 const NET_INTERP = 0.12; // s Interpolationspuffer der Replik
 
 const myP = () => players[netRole ? netMySlot : 0];
+// Sitz i (0/1) -> gesteuerter Spieler. Bei nur 1 Sitz zeigen beide auf denselben,
+// damit ein Solo-Online-Spieler wahlweise WASD ODER Pfeiltasten nutzen kann.
+const netSeat = (i) => players[netMySeats[Math.min(i, netMySeats.length - 1)]];
+// Lokales Steuer-Layout (player1/player2) -> Sitz: player1 = Sitz 0, player2 = Sitz 1
+const netSeatFor = (p) => netSeat(p === player2 ? 1 : 0);
+const netSeatIndexOf = (p) => { const i = netMySeats.indexOf(p.id - 1); return i < 0 ? 0 : i; };
+// Online mit 2 lokalen Sitzen -> Splitscreen (2 Viewports) wie lokales 2-Spieler
+const netSplit = () => netRole && netMySeats.length === 2;
 
 function netSendJson(obj) {
   if (netWs && netWs.readyState === 1) netWs.send(JSON.stringify(obj));
 }
 // Aktionen (Sprung/Schlag/Grätsche) sind latenzkritisch: möglichst direkt per
 // WebRTC-Kanal zum Host, sonst über das Relay
-function netAct(a) {
-  if (netPeer?.rel?.readyState === 'open') netPeer.rel.send(JSON.stringify({ k: 'act', a }));
-  else netSendJson({ k: 'act', a });
+function netAct(a, seat = 0) {
+  const msg = { k: 'act', a, seat };
+  if (netPeer?.rel?.readyState === 'open') netPeer.rel.send(JSON.stringify(msg));
+  else netSendJson(msg);
 }
 
 // ---- WebRTC: direkte P2P-Datenkanäle Host <-> Client (niedrigere Latenz) ----
@@ -5013,20 +5027,24 @@ const netInputSeqSeen = {};      // Host: letzte Sequenz je Slot
 
 function netRtcWireHost(slot, peer) {
   peer.fast.binaryType = 'arraybuffer';
-  peer.fast.onmessage = (ev) => netHandleInputFrame(slot, new DataView(ev.data), 0);
+  // Input-Frame trägt den Sitz (Byte 1) -> auf den absoluten Slot des Peers mappen
+  peer.fast.onmessage = (ev) => {
+    const dv = new DataView(ev.data);
+    netHandleInputFrame(peer.slots?.[dv.getUint8(1)], dv, 0);
+  };
   peer.rel.onmessage = (ev) => {
     let m; try { m = JSON.parse(ev.data); } catch { return; }
-    if (m.k === 'act' && netRole === 'host') netActPush(slot, m.a);
+    if (m.k === 'act' && netRole === 'host') netActPush(peer.slots?.[m.seat | 0] ?? slot, m.a);
   };
   peer.fast.onopen = () => flashPad(`🔗 Direktverbindung zu Spieler ${slot + 1}`, '#6ee75c');
 }
 
-// Host: baut die P2P-Verbindung zu einem frisch gejointen Client auf
-async function netRtcOffer(slot) {
+// Host: baut die P2P-Verbindung zu einem frisch gejointen Client auf (slots = dessen Sitze)
+async function netRtcOffer(slot, slots) {
   try {
     const pc = new RTCPeerConnection(NET_RTC_CFG);
     const peer = {
-      pc,
+      pc, slots: slots || [slot],
       fast: pc.createDataChannel('fast', { ordered: false, maxRetransmits: 0 }),
       rel: pc.createDataChannel('rel'),
     };
@@ -5115,17 +5133,19 @@ function netRtcCloseAll() {
   if (netPeer) { try { netPeer.pc.close(); } catch { /* egal */ } netPeer = null; }
 }
 
-// Eingabe-Frame des Hosts verarbeiten (via RTC direkt oder via Relay gestempelt)
+// Eingabe-Frame des Hosts verarbeiten. Layout ab `off`: [type=2, seat, seq(4),
+// bits, padX, padZ] = 9 Bytes. `slot` ist der bereits aufgelöste absolute Slot
+// (vom Relay gestempelt bzw. beim P2P aus den Sitzen des Peers gemappt).
 function netHandleInputFrame(slot, dv, off) {
-  if (dv.byteLength < off + 8 || dv.getUint8(off) !== 2) return;
-  const seq = dv.getUint32(off + 1);
+  if (slot === undefined || dv.byteLength < off + 9 || dv.getUint8(off) !== 2) return;
+  const seq = dv.getUint32(off + 2);
   if (netInputSeqSeen[slot] !== undefined && seq <= netInputSeqSeen[slot]) return; // veraltet (unordered)
   netInputSeqSeen[slot] = seq;
-  const bits = dv.getUint8(off + 5);
+  const bits = dv.getUint8(off + 6);
   netInputs[slot] = {
     at: perfNow(), // für den Staleness-Check in netTick
     keys: { f: !!(bits & 1), b: !!(bits & 2), l: !!(bits & 4), r: !!(bits & 8) },
-    padX: dv.getInt8(off + 6) / 127, padZ: dv.getInt8(off + 7) / 127,
+    padX: dv.getInt8(off + 7) / 127, padZ: dv.getInt8(off + 8) / 127,
   };
 }
 
@@ -5234,16 +5254,20 @@ function netApplySpawn(m) {
 }
 
 // ---- Binärprotokoll: Eingaben (Client->Host) und Snapshots (Host->Clients) ----
+// Sendet je LOKALEM Sitz einen Frame: [type=2, seat, seq(4), bits, padX, padZ].
 function netSendInput() {
-  const p = myP();
-  const dv = new DataView(new ArrayBuffer(8));
-  dv.setUint8(0, 2);
-  dv.setUint32(1, ++netInputSeq);
-  dv.setUint8(5, (p.keys.f ? 1 : 0) | (p.keys.b ? 2 : 0) | (p.keys.l ? 4 : 0) | (p.keys.r ? 8 : 0));
-  dv.setInt8(6, Math.round(Math.max(-1, Math.min(1, p.padX)) * 127));
-  dv.setInt8(7, Math.round(Math.max(-1, Math.min(1, p.padZ)) * 127));
-  if (netPeer?.fast?.readyState === 'open') netPeer.fast.send(dv.buffer);      // direkt (P2P)
-  else if (netWs?.readyState === 1) netWs.send(dv.buffer);                     // Relay-Fallback
+  for (let seat = 0; seat < netMySeats.length; seat++) {
+    const p = players[netMySeats[seat]];
+    const dv = new DataView(new ArrayBuffer(9));
+    dv.setUint8(0, 2);
+    dv.setUint8(1, seat);
+    dv.setUint32(2, ++netInputSeq);
+    dv.setUint8(6, (p.keys.f ? 1 : 0) | (p.keys.b ? 2 : 0) | (p.keys.l ? 4 : 0) | (p.keys.r ? 8 : 0));
+    dv.setInt8(7, Math.round(Math.max(-1, Math.min(1, p.padX)) * 127));
+    dv.setInt8(8, Math.round(Math.max(-1, Math.min(1, p.padZ)) * 127));
+    if (netPeer?.fast?.readyState === 'open') netPeer.fast.send(dv.buffer);      // direkt (P2P)
+    else if (netWs?.readyState === 1) netWs.send(dv.buffer);                     // Relay-Fallback
+  }
 }
 
 const netI16 = (v) => Math.max(-32767, Math.min(32767, Math.round(v * 100)));
@@ -5562,6 +5586,11 @@ function netConnectTo(url, onReady, allowFallback) {
 // fremden Relay zeigen): alles validieren, bevor es in Zustand oder innerHTML
 // landet — sonst wäre ein XSS über {t:'err',msg:'<img onerror=…>'} möglich.
 const netValidSlot = (s) => Number.isInteger(s) && s >= 0 && s < 4 ? s : null;
+// Sitz-Array vom Server (1–2 Slots) säubern; leer -> [0] als Rückfall
+const netSanitizeSeats = (a) => {
+  const out = Array.isArray(a) ? [...new Set(a.map(netValidSlot).filter((s) => s !== null))].slice(0, 2) : [];
+  return out.length ? out : [0];
+};
 // Scores kommen als JSON vom Host/Relay — vor Zustand/DOM auf Integer klemmen
 const netValidScore = (s) => Number.isInteger(s) ? Math.max(0, Math.min(255, s)) : 0;
 const netValidCode = (c) => (typeof c === 'string' && /^[A-Z0-9]{4}$/.test(c)) ? c : null;
@@ -5607,16 +5636,19 @@ function netOnMessage(ev) {
     case 'created': {
       const code = netValidCode(m.code);
       if (!code) return;
-      netCode = code; netMySlot = 0; netRoster = [0];
-      netNames = {}; netNames[0] = netValidName(m.name);
+      netCode = code;
+      netMySeats = netSanitizeSeats(m.slots); netMySlot = netMySeats[0]; // 1–2 lokale Sitze
+      netRoster = [...netMySeats].sort((a, b) => a - b);
+      netNames = {}; netMySeats.forEach((s, i) => { netNames[s] = i === 0 ? netValidName(m.name) : (netValidName(m.name) ? netValidName(m.name) + ' ②' : undefined); });
       netRenderLobby();
       return;
     }
     case 'joined': {
-      const code = netValidCode(m.code), slot = netValidSlot(m.slot);
-      if (!code || slot === null) return;
-      netCode = code; netMySlot = slot;
-      if (!netRoster.includes(slot)) netRoster.push(slot);
+      const code = netValidCode(m.code);
+      const seats = netSanitizeSeats(m.slots);
+      if (!code) return;
+      netCode = code; netMySeats = seats; netMySlot = seats[0];
+      for (const s of seats) if (!netRoster.includes(s)) netRoster.push(s);
       netRoster.sort((a, b) => a - b);
       netNames = netSanitizeNames(m.names); // bekannte Namen der schon Anwesenden
       netRenderLobby();
@@ -5629,25 +5661,25 @@ function netOnMessage(ev) {
       netRenderError(m.msg || 'Unbekannter Fehler');
       return;
     case 'peer': {
-      // peer/left sind reine Host-Ereignisse (Server schickt sie nur an den Host)
+      // peer/left sind reine Host-Ereignisse (Server schickt sie nur an den Host).
+      // Ein Mitspieler kann 1–2 Sitze mitbringen -> m.slots ist ein Array.
       if (netMySlot !== 0 || !netCode) return;
-      const slot = netValidSlot(m.slot);
-      if (slot === null) return;
-      if (!netRoster.includes(slot)) netRoster.push(slot);
+      const seats = netSanitizeSeats(m.slots);
+      const pnames = netSanitizeNames(m.names);
+      for (const s of seats) { if (!netRoster.includes(s)) netRoster.push(s); netNames[s] = pnames[s]; }
       netRoster.sort((a, b) => a - b);
-      netNames[slot] = netValidName(m.name); // Name des neuen Mitspielers merken
       netSendJson({ k: 'lobby', roster: netRoster, names: netNames }); // an alle verteilen
-      netRtcOffer(slot); // P2P-Verbindung zum neuen Mitspieler aufbauen
+      netRtcOffer(seats[0], seats); // eine P2P-Verbindung je Mitspieler (mit seinen Sitzen)
       if (netUiOpen) netRenderLobby();
       return;
     }
     case 'left': {
       if (netMySlot !== 0 || !netCode) return; // nur der Host verarbeitet 'left'
-      const slot = netValidSlot(m.slot);
-      if (slot === null) return;
-      netRtcClose(slot);
-      delete netInputs[slot]; delete netInputSeqSeen[slot]; delete netNames[slot];
-      netOnPeerLeft(slot);
+      const seats = Array.isArray(m.slots) ? m.slots.map(netValidSlot).filter((s) => s !== null) : [];
+      if (!seats.length) return;
+      netRtcClose(seats[0]); // eine Verbindung je Mitspieler
+      for (const s of seats) { delete netInputs[s]; delete netInputSeqSeen[s]; delete netNames[s]; }
+      netOnPeerLeft(seats);
       return;
     }
     case 'closed':
@@ -5772,12 +5804,12 @@ function netStartOnline() {
   applySoloLayout(); // Vollbild-Kamera + Online-Scorebar
 }
 
-function netOnPeerLeft(slot) {
-  netRoster = netRoster.filter((s) => s !== slot);
+function netOnPeerLeft(seats) {
+  seats = Array.isArray(seats) ? seats : [seats]; // eine Verbindung kann 1–2 Sitze belegen
+  netRoster = netRoster.filter((s) => !seats.includes(s));
   if (netRole === 'host' && state !== 'menu') {
-    const p = players[slot];
-    if (p && !p.parked && p.alive) killPlayer(p);
-    flashPad(`🌐 SPIELER ${slot + 1} hat das Spiel verlassen`, PLAYER_DEFS[slot]?.css || '#e6edf3');
+    for (const slot of seats) { const p = players[slot]; if (p && !p.parked && p.alive) killPlayer(p); }
+    flashPad(`🌐 SPIELER ${seats.map((s) => s + 1).join('/')} hat das Spiel verlassen`, PLAYER_DEFS[seats[0]]?.css || '#e6edf3');
     if (netRoster.length < 2) { flashPad('🌐 Alle Mitspieler weg — zurück zum Menü', '#ff6b6b'); backToMenu(); }
   } else {
     netSendJson({ k: 'lobby', roster: netRoster });
@@ -5800,7 +5832,7 @@ function netResetState() {
     netSavedSettings = null;
   }
   netRtcCloseAll();
-  netRole = null; netUiOpen = false; netMySlot = 0; netCode = null;
+  netRole = null; netUiOpen = false; netMySlot = 0; netMySeats = [0]; netCode = null;
   netRoster = [0]; netNames = {}; netOnlineUsers = []; netHelloSent = false; netInvitedIds.clear(); netRoomWaitAt = 0;
   netSnaps.length = 0; netActQueue.length = 0; netInputSeq = 0; netRoundNo = 0; netNextId = 1;
   netLastSnapAt = 0; netStaleWarnAt = 0;
@@ -6029,14 +6061,18 @@ function netShowOnlineMenu() {
 }
 
 function netRenderOnlineMenu() {
+  const seatBtn = `<span class="menurow"><button id="netseats">${netLocalSeats === 2
+    ? '👥 An diesem Gerät: 2 Spieler (Splitscreen)'
+    : '👤 An diesem Gerät: 1 Spieler'}</button></span>`;
   $('msg').innerHTML = netMenuShell(
-    authHeaderHtml() + `<br>` +
+    authHeaderHtml() + `<br>` + seatBtn +
     `<span class="menurow">` +
     `<button id="nethostgo" class="bigbtn online">🏠 RAUM ERSTELLEN<span>Du bist der Host — Freunde joinen per Code</span></button>` +
     `<button id="netjoinshow" class="bigbtn solo">🔑 RAUM BEITRETEN<span>Mit einem 4-stelligen Code</span></button>` +
     `</span>` +
     (authToken ? `<span style="display:block;margin:6px 0">${netOnlineListHtml(false)}</span>` : '') +
     `<span style="opacity:.6">Der Host simuliert das Spiel — am besten hostet, wer die beste Verbindung hat.` +
+    (netLocalSeats === 2 ? ` Zwei Spieler teilen sich dieses Gerät (Splitscreen): W A S D + Pfeiltasten.` : '') +
     (authToken ? ` Erstelle einen Raum, um Online-Spieler einzuladen.` : ` Melde dich an, um Online-Spieler zu sehen und einzuladen.`) + `</span>`
   );
   $('msg').classList.remove('hidden');
@@ -6106,14 +6142,14 @@ function netBeginRoom() {
 
 function netCreateRoom() {
   netBeginRoom();
-  netConnect(() => netWs.send(JSON.stringify({ t: 'create', token: authToken || undefined })));
+  netConnect(() => netWs.send(JSON.stringify({ t: 'create', token: authToken || undefined, seats: netLocalSeats })));
 }
 
 function netJoinRoom(code) {
   code = String(code || '').toUpperCase().trim();
   if (code.length !== 4) { netRenderJoin(code); return; }
   netBeginRoom();
-  netConnect(() => netWs.send(JSON.stringify({ t: 'join', code, token: authToken || undefined })));
+  netConnect(() => netWs.send(JSON.stringify({ t: 'join', code, token: authToken || undefined, seats: netLocalSeats })));
 }
 
 // Offline-Spielbarkeit: Service Worker cacht das Spiel samt CDN-Modulen.
@@ -6670,6 +6706,7 @@ window.__game = { players, obstacles, powerups, world, cams, sky, fxRings, laser
   get netFallback() { return NET_FALLBACK_WS; }, set netFallback(v) { NET_FALLBACK_WS = v; },
   get netRole() { return netRole; }, get netCode() { return netCode; },
   get netRoster() { return netRoster.slice(); }, get netMySlot() { return netMySlot; },
+  get netMySeats() { return netMySeats.slice(); }, get netLocalSeats() { return netLocalSeats; }, set netLocalSeats(v) { netLocalSeats = v === 2 ? 2 : 1; },
   get netSnaps() { return netSnaps.length; }, get netNames() { return { ...netNames }; },
   netInvite, get netOnline() { return netOnlineUsers.slice(); },
   get netP2P() { return netPeer ? netPeer.fast?.readyState === 'open' : Object.fromEntries(Object.entries(netPeers).map(([s, p]) => [s, p.fast?.readyState])); },

@@ -96,6 +96,27 @@ function clearOnline(ws) {
   return false;
 }
 
+// ---------- Sitzplätze (seats) ----------
+// Eine Verbindung kann 1–2 lokale Spieler mitbringen (Splitscreen an einem Gerät,
+// gemischt mit Online). ws.slots hält ihre absoluten Raum-Slots; ws.slot bleibt der
+// erste davon (Host-Erkennung: slot===0). r.clients bildet JEDEN Client-Slot -> ws ab
+// (bei 2 Sitzen zeigen zwei Keys auf dieselbe ws).
+const roomClientSockets = (room) => new Set(room.clients.values()); // dedupliziert 2-Sitz-Clients
+function usedSlots(room) {
+  const used = new Set(room.host.slots || []);
+  for (const s of room.clients.keys()) used.add(s);
+  return used;
+}
+function freeSlots(room, n) {
+  const used = usedSlots(room);
+  const out = [];
+  for (let s = 0; s < MAX_PLAYERS && out.length < n; s++) if (!used.has(s)) out.push(s);
+  return out.length === n ? out : null;
+}
+const seatCount = (msg) => (msg.seats | 0) === 2 ? 2 : 1;
+// Anzeigename je Sitz: zweiter Sitz bekommt eine ②-Markierung
+const seatName = (name, i) => name ? (i === 0 ? name : name + ' ②') : null;
+
 function newCode() {
   for (let tries = 0; tries < 50; tries++) {
     let c = '';
@@ -147,7 +168,7 @@ wss.on('connection', (ws, req) => {
   const nIp = (ipConns.get(ws.ip) || 0) + 1;
   if (nIp > MAX_CONNS_PER_IP) { ws.close(1013, 'too many connections'); return; }
   ipConns.set(ws.ip, nIp);
-  ws.roomCode = null; ws.slot = null; ws.missedPongs = 0;
+  ws.roomCode = null; ws.slot = null; ws.slots = null; ws.missedPongs = 0;
   ws.joinCount = 0; ws.joinWindowAt = 0;
   ws.on('pong', () => { ws.missedPongs = 0; });
 
@@ -178,10 +199,14 @@ function handleMessage(ws, data, isBinary) {
     if (isBinary) {
       if (!room) return;
       if (ws.slot === 0) {
-        for (const c of room.clients.values()) send(c, data, true);
+        for (const c of roomClientSockets(room)) send(c, data, true); // Snapshot an alle Clients
       } else {
-        // Absender-Slot voranstellen, damit der Host weiß, wessen Input das ist
-        const stamped = Buffer.concat([Buffer.from([ws.slot]), data]);
+        // Client-Input-Frame: [type=2, seat, seq…]. Den Sitz auf den absoluten Slot
+        // abbilden und diesen voranstellen (so kann ein Client nur SEINE Slots ansprechen).
+        if (data.length < 2 || data[0] !== 2) return;
+        const absSlot = ws.slots?.[data[1] | 0];
+        if (absSlot === undefined) return;
+        const stamped = Buffer.concat([Buffer.from([absSlot]), data]);
         send(room.host, stamped, true);
       }
       return;
@@ -209,7 +234,7 @@ function handleMessage(ws, data, isBinary) {
       if ((ws.inviteCount = (ws.inviteCount || 0) + 1) > 10) return; // Gesamt-Spam-Bremse
       const r = ws.roomCode ? rooms.get(ws.roomCode) : null;
       if (!ws.user || !r || r.locked) return;                    // nur aus einem offenen Raum
-      if (r.clients.size >= MAX_PLAYERS - 1) return;             // kein freier Slot
+      if (usedSlots(r).size >= MAX_PLAYERS) return;              // kein freier Slot
       const tId = msg.to | 0;
       const target = online.get(tId);
       if (!target || target === ws || target.roomCode) return;   // offline / man selbst / schon im Raum
@@ -239,10 +264,14 @@ function handleMessage(ws, data, isBinary) {
       const code = newCode();
       if (!code) { sendJson(ws, { t: 'err', msg: 'Server voll' }); return; }
       authWs(ws, msg.token); // optionale Anmeldung -> ws.user / ws.name
-      rooms.set(code, { host: ws, clients: new Map(), locked: false, names: { 0: ws.name } });
-      ws.roomCode = code; ws.slot = 0;
+      const seats = seatCount(msg);
+      const slots = seats === 2 ? [0, 1] : [0]; // Host nimmt die untersten Slots
+      const names = {};
+      slots.forEach((s, i) => { names[s] = seatName(ws.name, i); });
+      rooms.set(code, { host: ws, clients: new Map(), locked: false, names });
+      ws.roomCode = code; ws.slots = slots; ws.slot = 0;
       setOnline(ws);
-      sendJson(ws, { t: 'created', code, name: ws.name });
+      sendJson(ws, { t: 'created', code, name: ws.name, slots });
       broadcastPresence(); // Ersteller ist jetzt (evtl. neu) online
       return;
     }
@@ -253,16 +282,21 @@ function handleMessage(ws, data, isBinary) {
       const r = rooms.get(code);
       if (!r) { sendJson(ws, { t: 'err', msg: 'Raum nicht gefunden' }); return; }
       if (r.locked) { sendJson(ws, { t: 'err', msg: 'Spiel läuft schon' }); return; }
-      let slot = -1; // kleinster freier Slot 1..3
-      for (let s = 1; s < MAX_PLAYERS; s++) if (!r.clients.has(s)) { slot = s; break; }
-      if (slot < 0) { sendJson(ws, { t: 'err', msg: 'Raum ist voll (4 Spieler)' }); return; }
       authWs(ws, msg.token);
-      r.clients.set(slot, ws);
-      r.names[slot] = ws.name;
-      ws.roomCode = code; ws.slot = slot;
+      // Man kann nicht dem EIGENEN Raum (aus einer zweiten Sitzung) beitreten:
+      // die Sitzungsübernahme in setOnline würde ihn sonst mitten im Beitritt löschen.
+      if (r.host?.user && ws.user && r.host.user.id === ws.user.id) {
+        sendJson(ws, { t: 'err', msg: 'Du hostest diesen Raum bereits' }); return;
+      }
+      const seats = seatCount(msg);
+      const slots = freeSlots(r, seats);
+      if (!slots) { sendJson(ws, { t: 'err', msg: seats === 2 ? 'Nicht genug Platz für 2 Spieler' : 'Raum ist voll (4 Spieler)' }); return; }
+      const names = {};
+      slots.forEach((s, i) => { r.clients.set(s, ws); r.names[s] = seatName(ws.name, i); names[s] = seatName(ws.name, i); });
+      ws.roomCode = code; ws.slots = slots; ws.slot = slots[0];
       setOnline(ws);
-      sendJson(ws, { t: 'joined', code, slot, names: { ...r.names } }); // bekannte Namen mitschicken
-      sendJson(r.host, { t: 'peer', slot, name: ws.name });
+      sendJson(ws, { t: 'joined', code, slots, names: { ...r.names } }); // bekannte Namen mitschicken
+      sendJson(r.host, { t: 'peer', slots, names }); // Host lernt die neuen Slots + Namen
       broadcastPresence();
       return;
     }
@@ -279,12 +313,12 @@ function handleMessage(ws, data, isBinary) {
       const slot = msg.slot | 0;
       const target = room.clients.get(slot);
       if (!target || slot < 1) return;
-      room.clients.delete(slot);
-      if (room.names) delete room.names[slot];
-      target.roomCode = null; target.slot = null;
-      sendJson(target, { t: 'kicked' });        // der Geworfene fällt ins Menü
-      sendJson(ws, { t: 'left', slot });         // der Host aktualisiert seine Lobby wie bei 'left'
-      broadcastPresence();                       // der Geworfene ist wieder frei/einladbar
+      const gone = target.slots || [slot]; // eine ganze Verbindung fliegt (beide Sitze)
+      for (const s of gone) { room.clients.delete(s); if (room.names) delete room.names[s]; }
+      target.roomCode = null; target.slots = null; target.slot = null;
+      sendJson(target, { t: 'kicked' });         // der Geworfene fällt ins Menü
+      sendJson(ws, { t: 'left', slots: gone });   // der Host aktualisiert seine Lobby wie bei 'left'
+      broadcastPresence();                        // der Geworfene ist wieder frei/einladbar
       return;
     }
 
@@ -294,21 +328,22 @@ function handleMessage(ws, data, isBinary) {
       if (msg.k === 'round') room.tallied = false;
       // Rundenende: Statistik für angemeldete Spieler buchen. Der Host meldet den
       // Sieger-Slot (w); er ist die einzige Vertrauensstelle (Party-Spiel). Nur in
-      // einem echten, gestarteten Spiel mit Mitspielern und nur einmal pro Runde —
-      // sonst könnte ein Host in einem leeren Raum beliebig Siege erzeugen.
+      // einem echten, gestarteten Spiel mit Mitspielern und nur einmal pro Runde.
       if (msg.k === 'end' && room.locked && room.clients.size >= 1 && !room.tallied) {
         room.tallied = true;
         tallyRound(room, msg.w);
       }
       const s = JSON.stringify(msg);
-      for (const c of room.clients.values()) send(c, s);
+      for (const c of roomClientSockets(room)) send(c, s); // 2-Sitz-Clients nur einmal
     } else {
       // Nur echte Spiel-Nachrichten (k) durchlassen und das Steuer-Feld t
       // strippen: sonst könnte ein Client dem Host Server-Nachrichten wie
       // {"t":"closed"} unterschieben und damit die Runde für alle beenden
       if (typeof msg.k !== 'string') return;
       delete msg.t;
-      msg.from = ws.slot;
+      // Aktionen tragen einen Sitz (0/1) -> auf den absoluten Slot abbilden, damit
+      // der Host weiß, WELCHEN Spieler die Aktion betrifft. Sonst der erste Slot.
+      msg.from = (msg.k === 'act' && ws.slots) ? (ws.slots[msg.seat | 0] ?? ws.slot) : ws.slot;
       sendJson(room.host, msg);
     }
 }
@@ -332,10 +367,11 @@ function authWs(ws, token) {
 // Rundenergebnis buchen: jede/r angemeldete aktive Spieler/in bekommt eine
 // gespielte Runde, der Sieger-Slot zusätzlich einen Sieg.
 function tallyRound(room, winnerSlot) {
-  const members = [room.host, ...room.clients.values()];
+  const members = [room.host, ...roomClientSockets(room)]; // 2-Sitz-Clients nur einmal
   for (const c of members) {
     if (!c?.user) continue;
-    try { recordOnline(c.user.id, c.slot === winnerSlot); } catch (err) { console.error('stats:', err); }
+    // Ein Konto gewinnt, wenn EINER seiner Sitze der Sieger-Slot ist
+    try { recordOnline(c.user.id, (c.slots || []).includes(winnerSlot)); } catch (err) { console.error('stats:', err); }
   }
 }
 
@@ -344,14 +380,14 @@ function leaveRoom(ws) {
   if (!room) return;
   if (ws.slot === 0) {
     // Host weg -> Raum stirbt, alle Clients zurück ins Menü
-    for (const c of room.clients.values()) { sendJson(c, { t: 'closed' }); c.roomCode = null; c.slot = null; }
+    for (const c of roomClientSockets(room)) { sendJson(c, { t: 'closed' }); c.roomCode = null; c.slots = null; c.slot = null; }
     rooms.delete(ws.roomCode);
   } else {
-    room.clients.delete(ws.slot);
-    if (room.names) delete room.names[ws.slot];
-    sendJson(room.host, { t: 'left', slot: ws.slot });
+    const gone = ws.slots || [ws.slot];
+    for (const s of gone) { room.clients.delete(s); if (room.names) delete room.names[s]; }
+    sendJson(room.host, { t: 'left', slots: gone });
   }
-  ws.roomCode = null; ws.slot = null;
+  ws.roomCode = null; ws.slots = null; ws.slot = null;
 }
 
 // ---------- Heartbeat: tote Verbindungen zügig trennen ----------
