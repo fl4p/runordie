@@ -2,10 +2,13 @@
 // Bewusst synchron (better-sqlite3): der Relay ist ein einzelner Node-Prozess,
 // die Datenmengen sind klein, und synchroner Code erspart Race-Conditions.
 import Database from 'better-sqlite3';
-import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+const scryptAsync = promisify(scrypt);
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DB_PATH = process.env.DB_PATH || join(HERE, 'data', 'runordie.db');
@@ -38,15 +41,18 @@ db.exec(`
 `);
 
 // ---------- Passwörter: scrypt (aus node:crypto, keine Extra-Abhängigkeit) ----------
+// ASYNC: scrypt braucht ~50–100 ms; synchron würde es den einzigen Node-Thread
+// blockieren und damit ALLE laufenden Spiele einfrieren (das Relay teilt sich
+// den Prozess). Die Callback-Variante rechnet im libuv-Threadpool.
 const SCRYPT_LEN = 64;
-export function hashPassword(password) {
+export async function hashPassword(password) {
   const salt = randomBytes(16).toString('hex');
-  const hash = scryptSync(password, salt, SCRYPT_LEN).toString('hex');
+  const hash = (await scryptAsync(password, salt, SCRYPT_LEN)).toString('hex');
   return { hash, salt };
 }
-export function verifyPassword(password, hash, salt) {
+export async function verifyPassword(password, hash, salt) {
   let derived;
-  try { derived = scryptSync(password, salt, SCRYPT_LEN); } catch { return false; }
+  try { derived = await scryptAsync(password, salt, SCRYPT_LEN); } catch { return false; }
   const stored = Buffer.from(hash, 'hex');
   // Länge zuerst prüfen: timingSafeEqual wirft bei ungleicher Länge
   return stored.length === derived.length && timingSafeEqual(stored, derived);
@@ -78,8 +84,8 @@ const USERNAME_RE = /^[A-Za-z0-9_]{3,16}$/;
 export function validUsername(u) { return typeof u === 'string' && USERNAME_RE.test(u); }
 export function validPassword(p) { return typeof p === 'string' && p.length >= 6 && p.length <= 200; }
 
-export function createUser(username, password) {
-  const { hash, salt } = hashPassword(password);
+export async function createUser(username, password) {
+  const { hash, salt } = await hashPassword(password);
   const info = stmt.insertUser.run(username, hash, salt, Date.now());
   return stmt.userById.get(info.lastInsertRowid);
 }

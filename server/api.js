@@ -24,18 +24,36 @@ function loginFail(ip) {
   b.n++; loginFails.set(ip, b);
 }
 
+// Registrierungen pro IP drosseln: sonst könnte ein Angreifer die DB fluten und
+// (über scrypt je Aufruf) CPU verbrennen. JEDER Versuch zählt, nicht nur Fehler.
+const regHits = new Map(); // ip -> { n, at }
+const REG_MAX = 8, REG_WINDOW_MS = 60 * 60 * 1000;
+function regBlocked(ip) {
+  const now = Date.now();
+  const b = regHits.get(ip) || { n: 0, at: now };
+  if (now - b.at > REG_WINDOW_MS) { b.n = 0; b.at = now; }
+  b.n++; regHits.set(ip, b);
+  return b.n > REG_MAX;
+}
+
+// Speicher der Rate-Limiter gelegentlich säubern (verwaiste IP-Einträge)
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, b] of loginFails) if (now - b.at > LOGIN_WINDOW_MS) loginFails.delete(ip);
+  for (const [ip, b] of regHits) if (now - b.at > REG_WINDOW_MS) regHits.delete(ip);
+}, 10 * 60 * 1000).unref?.();
+
 function readJson(req) {
   return new Promise((resolve) => {
-    let buf = '', tooBig = false;
+    let buf = '', done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
     req.on('data', (c) => {
       buf += c;
-      if (buf.length > MAX_BODY) { tooBig = true; req.destroy(); }
+      if (buf.length > MAX_BODY) { req.destroy(); finish(null); } // Überlänge: sofort abbrechen
     });
-    req.on('end', () => {
-      if (tooBig) return resolve(null);
-      try { resolve(JSON.parse(buf || '{}')); } catch { resolve(null); }
-    });
-    req.on('error', () => resolve(null));
+    req.on('end', () => { try { finish(JSON.parse(buf || '{}')); } catch { finish(null); } });
+    req.on('error', () => finish(null));
+    req.on('close', () => finish(null)); // hängt kein end/error nach -> Promise trotzdem lösen
   });
 }
 
@@ -64,10 +82,11 @@ export async function handleApi(req, res, path, ip) {
       const password = String(body.password || '');
 
       if (route === '/register') {
+        if (regBlocked(ip)) { sendJson(res, 429, { error: 'Zu viele Registrierungen, bitte später erneut' }); return true; }
         if (!validUsername(username)) { sendJson(res, 400, { error: 'Name: 3–16 Zeichen, nur A–Z, 0–9, _' }); return true; }
         if (!validPassword(password)) { sendJson(res, 400, { error: 'Passwort: mindestens 6 Zeichen' }); return true; }
         if (findUser(username)) { sendJson(res, 409, { error: 'Name ist bereits vergeben' }); return true; }
-        const user = createUser(username, password);
+        const user = await createUser(username, password);
         const token = newSession(user.id);
         sendJson(res, 200, { token, user: publicUser(user) });
         return true;
@@ -78,8 +97,8 @@ export async function handleApi(req, res, path, ip) {
       // Immer scrypt rechnen (auch bei unbekanntem Namen), um Timing-Leaks zu
       // vermeiden, die Namen enumerierbar machen würden
       const ok = user
-        ? verifyPassword(password, user.pass_hash, user.pass_salt)
-        : verifyPassword(password, '00', 'ff');
+        ? await verifyPassword(password, user.pass_hash, user.pass_salt)
+        : await verifyPassword(password, '00', 'ff');
       if (!user || !ok) { loginFail(ip); sendJson(res, 401, { error: 'Name oder Passwort falsch' }); return true; }
       const token = newSession(user.id);
       sendJson(res, 200, { token, user: publicUser(user) });

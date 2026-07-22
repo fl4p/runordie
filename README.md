@@ -52,6 +52,31 @@ Hinweise: Online sind Rush- und Dreh-Modus deaktiviert; die übrigen
 Einstellungen (Hechtsprung, Stun, Eiszonen) bestimmt der Host. Clients sehen
 die eigene Figur mit ~Ping-Latenz — die Umgebung bleibt davon unberührt.
 
+## 👤 Benutzerkonten (optional)
+
+Im **🌐 ONLINE**-Menü kann man sich **anmelden** oder ein **Konto erstellen**
+(Name 3–16 Zeichen A–Z/0–9/_, Passwort ab 6 Zeichen). Angemeldet:
+
+- der **Name** erscheint in Lobby, Punktebalken und Sieg-Meldung statt „SPIELER n",
+- **Solo-Rekorde** landen in einer **globalen Bestenliste** (🏅-Knopf),
+- **Online-Siege** und gespielte Runden werden gezählt.
+
+Online-Spielen geht **weiterhin komplett anonym** — ein Konto ist nie Pflicht.
+
+Serverseitig (im `server/`-Node-Prozess, hinter demselben Relay/Proxy):
+
+- Passwörter werden mit **scrypt** (aus `node:crypto`) gesalzen gehasht, nie im
+  Klartext gespeichert. Session-Token liegen in SQLite (`server/data/runordie.db`,
+  aus dem Repo ausgeschlossen) und im `localStorage` des Browsers.
+- API same-origin unter `/api/` (`register`, `login`, `logout`, `me`, `score`,
+  `leaderboard`); Login-Fehlversuche sind pro IP gedrosselt.
+- Statistik: der Host meldet den Rundensieger, der Server bucht die Zahlen für
+  alle angemeldeten Mitspieler (Vertrauensmodell eines Party-Spiels).
+
+Nötige Abhängigkeit: `better-sqlite3` (Prebuilt-Binary, kein Compiler nötig) —
+`npm install` im `server/`-Ordner zieht sie mit. Die Datenbank legt der Server
+beim ersten Start selbst an.
+
 ## ❄️ Eiszonen
 
 Ab ca. 30 Sekunden zieht regelmäßig eine **Eiszone** auf: Der Schneefall setzt

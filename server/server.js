@@ -188,9 +188,16 @@ function handleMessage(ws, data, isBinary) {
 
     // Alles andere: JSON-Relay (Events vom Host, Aktionen von Clients)
     if (ws.slot === 0) {
+      // Jede neue Runde macht genau EIN Rundenende wieder buchbar
+      if (msg.k === 'round') room.tallied = false;
       // Rundenende: Statistik für angemeldete Spieler buchen. Der Host meldet den
-      // Sieger-Slot (w); er ist die einzige Vertrauensstelle (Party-Spiel).
-      if (msg.k === 'end') tallyRound(room, msg.w);
+      // Sieger-Slot (w); er ist die einzige Vertrauensstelle (Party-Spiel). Nur in
+      // einem echten, gestarteten Spiel mit Mitspielern und nur einmal pro Runde —
+      // sonst könnte ein Host in einem leeren Raum beliebig Siege erzeugen.
+      if (msg.k === 'end' && room.locked && room.clients.size >= 1 && !room.tallied) {
+        room.tallied = true;
+        tallyRound(room, msg.w);
+      }
       const s = JSON.stringify(msg);
       for (const c of room.clients.values()) send(c, s);
     } else {

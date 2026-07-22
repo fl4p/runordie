@@ -2779,6 +2779,12 @@ addEventListener('keydown', (e) => {
     else if (e.code === 'Escape') { document.activeElement.blur(); backToMenu(); }
     return;
   }
+  // Login-/Registrier-Formular: Enter meldet an, ESC zurück ins Menü
+  if (document.activeElement?.id === 'authname' || document.activeElement?.id === 'authpass') {
+    if (e.code === 'Enter' || e.code === 'NumpadEnter') $('authgo')?.click();
+    else if (e.code === 'Escape') { document.activeElement.blur(); backToMenu(); }
+    return;
+  }
   if (['Space', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
   if (e.code === 'Escape') { backToMenu(); return; }
   // Einstellungs-Tasten funktionieren auch im Menü (starten das Spiel nicht)
@@ -3950,9 +3956,10 @@ function unparkPlayer(p) {
 
 function activePlayers() { return players.filter((p) => !p.parked); }
 
+// Rohtext-Label (kann Konto-Namen enthalten -> beim Rendern escapen)
 function playerLabel(p) {
   if (botMode) return p === player1 ? 'DU' : `🤖 BOT (${BOT_LABELS[botDiff]})`;
-  if (netRole && p === myP()) return `DU (S${p.id})`;
+  if (netRole) return (p === myP() ? 'DU: ' : '') + netSlotName(p.id - 1);
   return `SPIELER ${p.id}`;
 }
 
@@ -3961,7 +3968,7 @@ function renderScoreBar() {
   // Aus rosterSlots (nicht p.parked) rendern: die Park-Flags werden erst im
   // nächsten resetRound synchronisiert, die Anzeige soll sofort stimmen
   $('score').innerHTML = rosterSlots.slice().sort((a, b) => a - b).map((i) => players[i]).map((p) =>
-    `<span style="color:${PLAYER_DEFS[p.id - 1].css};font-weight:700">${playerLabel(p)}</span> ` +
+    `<span style="color:${PLAYER_DEFS[p.id - 1].css};font-weight:700">${netEsc(playerLabel(p))}</span> ` +
     `<span id="s${p.id}">${Number(p.score) || 0}</span>`
   ).join(' <span style="opacity:.45">·</span> ');
 }
@@ -4112,6 +4119,13 @@ document.addEventListener('click', (e) => {
     if (id === 'netjoingo') netJoinRoom($('netcode')?.value || '');
     if (id === 'netstartgo') { ensureAudio(); netStartOnline(); }
     if (id === 'netback') backToMenu();
+    if (id === 'netonlineback') netShowOnlineMenu();
+    // Benutzerkonten
+    if (id === 'authloginshow') netRenderAuth(false);
+    if (id === 'authregshow') netRenderAuth(true);
+    if (id === 'authgo') netDoAuth(netAuthRegister);
+    if (id === 'authlogout') authLogout().then(netShowOnlineMenu);
+    if (id === 'authboard') netShowLeaderboard();
   }
 });
 
@@ -4183,6 +4197,7 @@ function endRound() {
   state = 'roundEnd';
   if (soloMode) {
     const t = Math.floor(elapsed);
+    if (t >= 1) authSubmitScore(t); // angemeldet: in die globale Bestenliste
     const isRecord = t > bestSolo;
     const qualifies = t >= 1 && (soloScores.length < 8 || t > soloScores[soloScores.length - 1].t);
     const m = $('msg');
@@ -4217,6 +4232,7 @@ function showRoundEndMsg(w) {
   const text = !w ? 'UNENTSCHIEDEN!'
     : botMode ? (w === player1 ? 'DU GEWINNST DIE RUNDE!' : '🤖 DER BOT GEWINNT DIE RUNDE!')
     : netRole && w === myP() ? 'DU GEWINNST DIE RUNDE!'
+    : netRole ? `${netEsc(netSlotName(w.id - 1))} GEWINNT DIE RUNDE!`
     : `SPIELER ${w.id} GEWINNT DIE RUNDE!`;
   const m = $('msg');
   m.innerHTML = `${text}<small>Nächste Runde in 3 Sekunden …</small>`;
@@ -4662,6 +4678,7 @@ let netRole = null;      // null | 'host' | 'client'
 let netWs = null;
 let netMySlot = 0;
 let netRoster = [0];     // Slots im Raum (Host pflegt, Clients per 'lobby'-Event)
+let netNames = {};       // slot -> Anzeigename (angemeldete Spieler) oder undefined
 let netCode = null;
 let netUiOpen = false;   // Online-Menü sichtbar -> keine "Taste startet Spiel"-Pfade
 let netReplaying = false;
@@ -5260,6 +5277,18 @@ const netSanitizeRoster = (r) => Array.isArray(r)
   : null;
 const netEsc = (s) => String(s).replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// Namen kommen vom Server; escaped werden sie beim Rendern, hier nur auf einen
+// vernünftigen String begrenzen (undefined = anonymer Slot)
+const netValidName = (n) => (typeof n === 'string' && n.length && n.length <= 24) ? n : undefined;
+function netSanitizeNames(obj) {
+  const out = {};
+  if (obj && typeof obj === 'object') for (let s = 0; s < 4; s++) {
+    const n = netValidName(obj[s]); if (n) out[s] = n;
+  }
+  return out;
+}
+// Anzeigename für einen Slot: Konto-Name, sonst „SPIELER n"
+const netSlotName = (s) => netNames[s] || `SPIELER ${s + 1}`;
 
 function netOnMessage(ev) {
   if (typeof ev.data !== 'string') {
@@ -5277,6 +5306,7 @@ function netOnMessage(ev) {
       const code = netValidCode(m.code);
       if (!code) return;
       netCode = code; netMySlot = 0; netRoster = [0];
+      netNames = {}; netNames[0] = netValidName(m.name);
       netRenderLobby();
       return;
     }
@@ -5286,6 +5316,7 @@ function netOnMessage(ev) {
       netCode = code; netMySlot = slot;
       if (!netRoster.includes(slot)) netRoster.push(slot);
       netRoster.sort((a, b) => a - b);
+      netNames = netSanitizeNames(m.names); // bekannte Namen der schon Anwesenden
       netRenderLobby();
       return;
     }
@@ -5300,7 +5331,8 @@ function netOnMessage(ev) {
       if (slot === null) return;
       if (!netRoster.includes(slot)) netRoster.push(slot);
       netRoster.sort((a, b) => a - b);
-      netSendJson({ k: 'lobby', roster: netRoster });
+      netNames[slot] = netValidName(m.name); // Name des neuen Mitspielers merken
+      netSendJson({ k: 'lobby', roster: netRoster, names: netNames }); // an alle verteilen
       netRtcOffer(slot); // P2P-Verbindung zum neuen Mitspieler aufbauen
       if (netUiOpen) netRenderLobby();
       return;
@@ -5309,7 +5341,7 @@ function netOnMessage(ev) {
       const slot = netValidSlot(m.slot);
       if (slot === null) return;
       netRtcClose(slot);
-      delete netInputs[slot]; delete netInputSeqSeen[slot];
+      delete netInputs[slot]; delete netInputSeqSeen[slot]; delete netNames[slot];
       netOnPeerLeft(slot);
       return;
     }
@@ -5332,6 +5364,7 @@ function netApplyEvent(m) {
   switch (m.k) {
     case 'lobby':
       netRoster = netSanitizeRoster(m.roster) || netRoster;
+      if ('names' in m) netNames = netSanitizeNames(m.names);
       if (netUiOpen) netRenderLobby();
       return;
     case 'rtc': if (m.to === netMySlot) netRtcAnswer(m); return;
@@ -5400,6 +5433,7 @@ function netOnStart(m) {
   netLastSnapAt = perfNow();
   snowZones = !!m.settings?.snowZones;
   rosterSlots = netSanitizeRoster(m.roster) || rosterSlots;
+  if ('names' in m) netNames = netSanitizeNames(m.names); // Namen für den Punktebalken
   $('touchui').classList.toggle('hidden', !isTouch);
   ensureAudio();
   // Das 'round'-Event des Hosts folgt direkt und startet die Runde
@@ -5415,7 +5449,7 @@ function netStartOnline() {
   rushMode = false;
   if (rotMode) toggleRotMode();
   for (let i = 0; i < botCtl.length; i++) botCtl[i] = null;
-  netSendJson({ k: 'start', v: NET_PROTO, roster: netRoster, settings: { diveAlways, noStun, snowZones, sky: dayMode ? 1 : 0 } });
+  netSendJson({ k: 'start', v: NET_PROTO, roster: netRoster, names: netNames, settings: { diveAlways, noStun, snowZones, sky: dayMode ? 1 : 0 } });
   $('touchui').classList.toggle('hidden', !isTouch);
   resetRound();      // setzt state='playing' und broadcastet das 'round'-Event
   applySoloLayout(); // Vollbild-Kamera + Online-Scorebar
@@ -5450,7 +5484,7 @@ function netResetState() {
   }
   netRtcCloseAll();
   netRole = null; netUiOpen = false; netMySlot = 0; netCode = null;
-  netRoster = [0];
+  netRoster = [0]; netNames = {};
   netSnaps.length = 0; netActQueue.length = 0; netInputSeq = 0; netRoundNo = 0; netNextId = 1;
   netLastSnapAt = 0; netStaleWarnAt = 0;
   for (const k of Object.keys(netInputs)) delete netInputs[k];
@@ -5467,14 +5501,141 @@ function netLeave() {
 }
 
 // ---- Online-Menü / Lobby ----
+// ---------- Benutzerkonten (Login/Registrierung, Bestenliste, Statistik) ----------
+// Optional: Online-Spielen geht auch anonym. Ist man angemeldet, erscheint der
+// Name in der Lobby und im Punktebalken, Solo-Rekorde landen in der globalen
+// Bestenliste und Online-Siege werden gezählt. Das Session-Token liegt in
+// localStorage; API-Aufrufe gehen same-origin an /api/… (bzw. das ?server=-Ziel).
+let authToken = localStorage.getItem('runordie_token') || null;
+let authUser = null; // { username, bestTime, games, onlineRounds, onlineWins }
+
+function netApiBase() {
+  const q = new URLSearchParams(location.search).get('server');
+  if (q) return q.replace(/^ws/, 'http').replace(/\/ws$/, '') + '/api';
+  return new URL('api', location.href).href.replace(/\/$/, '');
+}
+
+async function authApi(method, path, body) {
+  const res = await fetch(netApiBase() + path, {
+    method,
+    headers: { 'content-type': 'application/json', ...(authToken ? { authorization: 'Bearer ' + authToken } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || 'Serverfehler');
+  return json;
+}
+
+function authSetToken(t) {
+  authToken = t;
+  if (t) localStorage.setItem('runordie_token', t); else localStorage.removeItem('runordie_token');
+}
+
+// Gespeicherte Session beim Start prüfen (still — bei ungültigem Token abmelden)
+async function authRestore() {
+  if (!authToken) return;
+  try { authUser = (await authApi('GET', '/me')).user; }
+  catch { authSetToken(null); authUser = null; }
+}
+
+async function authLogin(username, password, register) {
+  const r = await authApi('POST', register ? '/register' : '/login', { username, password });
+  authSetToken(r.token);
+  authUser = r.user;
+}
+
+async function authLogout() {
+  try { await authApi('POST', '/logout'); } catch { /* Token wird lokal ohnehin verworfen */ }
+  authSetToken(null); authUser = null;
+}
+
+// Solo-Rekord an die globale Bestenliste melden (nur angemeldet, best effort)
+function authSubmitScore(time) {
+  if (!authToken) return;
+  authApi('POST', '/score', { time: time | 0 }).then((r) => { if (r.user) authUser = r.user; }).catch(() => {});
+}
+
 function netMenuShell(inner) {
   return `RUN OR DIE<small><b class="mh">🌐 ONLINE — 2 BIS 4 SPIELER</b><br>${inner}` +
     `<span class="menurow"><button id="netback">← Zurück</button></span></small>`;
 }
 
+// Kopfzeile im Online-Menü: angemeldet -> Name + Konto-Buttons, sonst Login/Registrieren
+function authHeaderHtml() {
+  if (authUser) {
+    return `<span style="opacity:.85">Angemeldet als <b style="color:#6ee75c">${netEsc(authUser.username)}</b>` +
+      ` · 🏆 ${authUser.bestTime | 0}s · Siege ${authUser.onlineWins | 0}</span> ` +
+      `<span class="menurow"><button id="authboard">🏅 Bestenliste</button><button id="authlogout">Abmelden</button></span>`;
+  }
+  return `<span style="opacity:.7">Spiele anonym oder melde dich an (Name in der Lobby, globale Rekorde).</span>` +
+    `<span class="menurow"><button id="authloginshow">🔑 Anmelden</button><button id="authregshow">✨ Konto erstellen</button>` +
+    `<button id="authboard">🏅 Bestenliste</button></span>`;
+}
+
+let netAuthRegister = false; // ob das Auth-Formular gerade im Registrier-Modus ist
+function netRenderAuth(register, err) {
+  netUiOpen = true;
+  netAuthRegister = register;
+  const title = register ? '✨ KONTO ERSTELLEN' : '🔑 ANMELDEN';
+  $('msg').innerHTML = netMenuShell(
+    `<b class="mh">${title}</b><br>` +
+    (err ? `<span style="color:#ff6b6b">⚠ ${netEsc(err)}</span><br>` : '') +
+    `<span class="menurow"><input id="authname" maxlength="16" placeholder="NAME" autocomplete="username" value="${netEsc(netAuthName)}"></span>` +
+    `<span class="menurow"><input id="authpass" type="password" maxlength="200" placeholder="PASSWORT" autocomplete="${register ? 'new-password' : 'current-password'}"></span>` +
+    `<span class="menurow"><button id="authgo" class="bigbtn online">${register ? 'Konto erstellen' : 'Anmelden'}</button>` +
+    `<button id="${register ? 'authloginshow' : 'authregshow'}">${register ? 'Ich habe schon ein Konto' : 'Neues Konto'}</button></span>`
+  );
+  $('msg').classList.remove('hidden');
+  setTimeout(() => $('authname')?.focus(), 50);
+}
+let netAuthName = ''; // Eingegebener Name überlebt einen Fehlversuch-Rerender
+
+async function netDoAuth(register) {
+  netAuthName = ($('authname')?.value || '').trim();
+  const pass = $('authpass')?.value || '';
+  try {
+    await authLogin(netAuthName, pass, register);
+    netAuthName = '';
+    netShowOnlineMenu();
+  } catch (e) {
+    netRenderAuth(register, e.message);
+  }
+}
+
+async function netShowLeaderboard() {
+  netUiOpen = true;
+  $('msg').innerHTML = netMenuShell('<span style="opacity:.7">Lade Bestenliste …</span>');
+  let rows = '<span style="opacity:.6">Noch keine Einträge.</span>';
+  try {
+    const { top } = await authApi('GET', '/leaderboard');
+    if (top.length) rows = `<table style="margin:8px auto 0;border-collapse:collapse;font-size:15px">` +
+      `<tr style="opacity:.6"><td style="padding:2px 10px"></td><td style="padding:2px 10px;text-align:left">NAME</td>` +
+      `<td style="padding:2px 10px;text-align:right">REKORD</td><td style="padding:2px 10px;text-align:right">SIEGE</td></tr>` +
+      top.map((u, i) => `<tr${authUser && u.username === authUser.username ? ' style="color:#6ee75c;font-weight:800"' : ''}>` +
+        `<td style="padding:1px 10px;text-align:right">${i + 1}.</td>` +
+        `<td style="padding:1px 10px;text-align:left">${netEsc(u.username)}</td>` +
+        `<td style="padding:1px 10px;text-align:right">${u.best_time | 0} s</td>` +
+        `<td style="padding:1px 10px;text-align:right">${u.online_wins | 0}</td></tr>`).join('') + `</table>`;
+  } catch (e) { rows = `<span style="color:#ff6b6b">⚠ ${netEsc(e.message)}</span>`; }
+  $('msg').innerHTML = netMenuShell(`<b class="mh">🏅 GLOBALE BESTENLISTE</b><br>${rows}` +
+    `<span class="menurow"><button id="netonlineback">← Online-Menü</button></span>`);
+  $('msg').classList.remove('hidden');
+}
+
 function netShowOnlineMenu() {
   netUiOpen = true;
+  netRenderOnlineMenu();
+  // Frische Statistik EINMAL nachladen (Online-Siege ändern sich serverseitig)
+  // und nur den Header neu zeichnen — kein Rück-Aufruf, sonst Endlos-Poll
+  if (authToken) authApi('GET', '/me').then((r) => {
+    authUser = r.user;
+    if (netUiOpen && !netCode && $('msg').querySelector('#nethostgo')) netRenderOnlineMenu();
+  }).catch(() => {});
+}
+
+function netRenderOnlineMenu() {
   $('msg').innerHTML = netMenuShell(
+    authHeaderHtml() + `<br>` +
     `<span class="menurow">` +
     `<button id="nethostgo" class="bigbtn online">🏠 RAUM ERSTELLEN<span>Du bist der Host — Freunde joinen per Code</span></button>` +
     `<button id="netjoinshow" class="bigbtn solo">🔑 RAUM BEITRETEN<span>Mit einem 4-stelligen Code</span></button>` +
@@ -5505,7 +5666,7 @@ function netRenderError(msg) {
 function netRenderLobby() {
   netUiOpen = true;
   const rows = netRoster.map((s) =>
-    `<span style="color:${PLAYER_DEFS[s].css};font-weight:700">● SPIELER ${s + 1}${s === netMySlot ? ' — DU' : ''}${s === 0 ? ' (Host)' : ''}</span>`
+    `<span style="color:${PLAYER_DEFS[s].css};font-weight:700">● ${netEsc(netSlotName(s))}${s === netMySlot ? ' — DU' : ''}${s === 0 ? ' (Host)' : ''}</span>`
   ).join('<br>');
   const joinUrl = location.origin + location.pathname + '?room=' + netCode;
   const info = netMySlot === 0
@@ -5523,16 +5684,18 @@ function netRenderLobby() {
 
 function netCreateRoom() {
   netUiOpen = true;
+  netNames = {};
   $('msg').innerHTML = netMenuShell('<span style="opacity:.7">Verbinde mit dem Server …</span>');
-  netConnect(() => netWs.send(JSON.stringify({ t: 'create' })));
+  netConnect(() => netWs.send(JSON.stringify({ t: 'create', token: authToken || undefined })));
 }
 
 function netJoinRoom(code) {
   code = String(code || '').toUpperCase().trim();
   if (code.length !== 4) { netRenderJoin(code); return; }
   netUiOpen = true;
+  netNames = {};
   $('msg').innerHTML = netMenuShell('<span style="opacity:.7">Verbinde mit dem Server …</span>');
-  netConnect(() => netWs.send(JSON.stringify({ t: 'join', code })));
+  netConnect(() => netWs.send(JSON.stringify({ t: 'join', code, token: authToken || undefined })));
 }
 
 // Offline-Spielbarkeit: Service Worker cacht das Spiel samt CDN-Modulen
@@ -5546,6 +5709,7 @@ updateDiveBtn();
 parkPlayer(player3); parkPlayer(player4);
 // Gespeicherte Einstellungen wiederherstellen (Tag/Nacht, Dreh-Modus)
 if (localStorage.getItem('runordie_rotMode') === '1') toggleRotMode();
+authRestore(); // gespeicherte Anmeldung still prüfen (Konto-Header im Online-Menü)
 animate();
 
 // Einmaliger Geräte-Benchmark beim allerersten Start: kurz warten (Menü sichtbar, Nutzer nicht
@@ -6056,8 +6220,11 @@ window.__game = { players, obstacles, powerups, world, cams, sky, fxRings, laser
   get netFallback() { return NET_FALLBACK_WS; }, set netFallback(v) { NET_FALLBACK_WS = v; },
   get netRole() { return netRole; }, get netCode() { return netCode; },
   get netRoster() { return netRoster.slice(); }, get netMySlot() { return netMySlot; },
-  get netSnaps() { return netSnaps.length; },
-  get netP2P() { return netPeer ? netPeer.fast?.readyState === 'open' : Object.fromEntries(Object.entries(netPeers).map(([s, p]) => [s, p.fast?.readyState])); } };
+  get netSnaps() { return netSnaps.length; }, get netNames() { return { ...netNames }; },
+  get netP2P() { return netPeer ? netPeer.fast?.readyState === 'open' : Object.fromEntries(Object.entries(netPeers).map(([s, p]) => [s, p.fast?.readyState])); },
+  // Benutzerkonten (Test-Harness)
+  authLogin, authLogout, authRestore, authApi,
+  get authUser() { return authUser; }, get authToken() { return authToken; } };
 </script>
 </body>
 </html>
