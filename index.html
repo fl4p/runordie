@@ -5431,7 +5431,11 @@ const netSeatIndexOf = (p) => { const i = netMySeats.indexOf(p.id - 1); return i
 const netSplit = () => netRole && netMySeats.length === 2;
 
 function netSendJson(obj) {
-  if (netWs && netWs.readyState === 1) netWs.send(JSON.stringify(obj));
+  const s = JSON.stringify(obj);
+  // maxPayload-Diagnose: übergroße Nachrichten melden (killten früher die Sitzung
+  // mit 1009). k = Nachrichtentyp, damit die Telemetrie den Ausreißer verrät.
+  if (s.length > 40000) netReport('bigmsg', { k: obj.k || obj.t, bytes: s.length, obN: obstacles.length, laN: lasers.length });
+  if (netWs && netWs.readyState === 1) netWs.send(s);
 }
 // Aktionen (Sprung/Schlag/Grätsche) sind latenzkritisch: möglichst direkt per
 // WebRTC-Kanal zum Host, sonst über das Relay

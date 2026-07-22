@@ -185,10 +185,16 @@ function originAllowed(req) {
   return sameOrigin || localOrigin || ALLOWED_ORIGINS.includes(origin);
 }
 
-// Spielframes sind klein (Snapshots < 2 KB, Spawn-Events wenige KB) — das
-// ws-Default von 100 MiB wäre ein Speicher-Verstärker für böswillige Clients
+// Spielframes sind klein (Snapshots < 8 KB, typische Spawn-Events wenige KB) — das
+// ws-Default von 100 MiB wäre ein Speicher-Verstärker für böswillige Clients.
+// ABER: 64 KB war zu knapp — ein einzelnes großes Host-Ereignis (dichte Welle +
+// Graffiti-Zufälle, gebündelte WebRTC-Signalisierung) überschritt es gelegentlich,
+// worauf ws die HOST-Verbindung mit 1009 schloss → der Raum starb und ALLE fielen
+// wortlos ins Menü. 512 KB gibt großzügig Luft und bleibt eine harte Obergrenze.
+// (Der Client meldet zusätzlich übergroße Nachrichten per Telemetrie, damit ein
+// echter Ausreißer auffällt.)
 const wss = new WebSocketServer({
-  server: http, path: '/ws', maxPayload: 64 * 1024,
+  server: http, path: '/ws', maxPayload: 512 * 1024,
   verifyClient: (info) => originAllowed(info.req),
 });
 
