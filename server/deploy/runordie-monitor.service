@@ -1,0 +1,18 @@
+# Oneshot: ein Überwachungslauf (Fehler + Gesundheit) -> ntfy. Vom Timer getriggert.
+#   sudo cp runordie-monitor.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now runordie-monitor.timer
+[Unit]
+Description=RUN OR DIE monitor run (errors + health -> ntfy)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=fab
+WorkingDirectory=/opt/runordie/server
+ExecStart=/usr/bin/env node monitor.js
+# ntfy-Topic hier bei Bedarf ändern (dasselbe Topic im ntfy-Client abonnieren):
+Environment=NTFY_URL=https://ntfy.sh/runordie-mon-fl4p-3v9k2x8
+Environment=HEALTH_URL=http://127.0.0.1:18931/api/leaderboard
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true

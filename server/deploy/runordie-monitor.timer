@@ -1,0 +1,12 @@
+# Alle 5 Minuten die Überwachung laufen lassen.
+[Unit]
+Description=RUN OR DIE monitor timer (every 5 min)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
