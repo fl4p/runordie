@@ -2373,8 +2373,12 @@ function spawnLaser(forceType) {
   L.light = acquireLaserLight();
   if (type === 'spin') L.light2 = acquireLaserLight();
 
-  // Bodenschein entlang des Strahls: breit über die Straße, mit z-Streuung.
-  L.scatter = makeLaserScatter(PLATFORM_HALF_W * 2 + 1, type === 'spin' ? 3.6 : 3.2);
+  // Bodenschein-Pool: line = volle Breite (fixe Quer-Wäsche), spin/wiper bekommen einen
+  // SCHMALEN Pool, der pro Frame der Boden-Projektion des Strahls folgt (position.x/scale.x
+  // unten) — ein volle-Breite-Streifen verschluckt die Bewegung, weil er ohnehin die ganze
+  // Straße bedeckt. (L.len steht hier bereits, wird oben je Typ gesetzt.)
+  const scatterW = type === 'line' ? PLATFORM_HALF_W * 2 + 1 : type === 'spin' ? 4.5 : L.len;
+  L.scatter = makeLaserScatter(scatterW, type === 'spin' ? 3.6 : 3.2);
   scene.add(L.scatter);
 
   scene.add(grp);
@@ -2463,10 +2467,15 @@ function updateLasers(dt) {
         light.position.set(tx, Math.max(0.25, ty), L.z);
         light.intensity = Math.max(0.1, 2.2 - Math.max(0, ty) * 0.9);
       }
-      // Bodenwäsche pulsiert: hell, wenn der Balken senkrecht steht (Spitze fegt
-      // tief über die Bahn), matt wenn er waagerecht liegt (Spitzen hoch an der Nabe)
+      // Bodenpool folgt der TIEF fegenden Balkenspitze: sie wandert mit der Drehung
+      // seitlich über die Bahn (x) und leuchtet heller, je näher sie dem Deck kommt.
+      // Der Seitenwechsel bei waagerechtem Balken fällt in die dunkelste Phase (kaum
+      // sichtbar). r = halbe Balkenlänge, s/c aus dem Dreh-Winkel oben.
+      const lowX = -Math.sign(s) * c * r;      // x der unteren Spitze
+      const lowY = L.hubY - Math.abs(s) * r;   // ihre Höhe (taucht bei senkrecht unter 0)
+      L.scatter.position.x = lowX;
       L.scatter.position.z = L.z;
-      L.scatter.material.opacity = Math.min(0.55, 0.12 + 0.5 * Math.abs(s)) * scatterFlick;
+      L.scatter.material.opacity = Math.min(0.55, Math.max(0.06, (1.5 - lowY) * 0.24)) * scatterFlick;
     } else { // wiper
       const a = 0.06 + (Math.sin(elapsed * 0.9 + L.phase) * 0.5 + 0.5) * 0.85;
       const px = L.side * (PLATFORM_HALF_W - 0.2), py = 0.3;
@@ -2480,9 +2489,14 @@ function updateLasers(dt) {
         L.light.position.set(mx, Math.max(0.25, Math.min(my, 2.5)), L.z);
         L.light.intensity = Math.max(0.12, 2.4 - my * 0.55);
       }
-      // Bodenwäsche über die Bahn bei z; hell wenn der Strahl flach übers Deck fegt (a klein)
+      // Bodenpool folgt der Strahl-Projektion vom Rand-Posten nach innen: Mitte bei
+      // px + ddx*len/2, Länge = horizontale Reichweite (scale.x = |ddx|). Hell, wenn der
+      // Strahl flach übers Deck fegt (Strahlmitte tief). ddx/ddy/px/py aus dem Block oben.
+      const smidX = px + ddx * L.len * 0.5, smidY = py + ddy * L.len * 0.5;
+      L.scatter.position.x = smidX;
       L.scatter.position.z = L.z;
-      L.scatter.material.opacity = Math.max(0.08, 0.55 * (1 - a / 1.1)) * scatterFlick;
+      L.scatter.scale.x = Math.max(0.35, Math.abs(ddx));
+      L.scatter.material.opacity = Math.min(0.55, Math.max(0.08, (2.4 - smidY) * 0.34)) * scatterFlick;
     }
 
     for (const p of players) {
