@@ -4250,12 +4250,25 @@ function botThink(p, bot) {
     bot.targetZ = f.z;
     const dist = f.vsub(t.position).length();
     if (dist < PUNCH_RANGE * 0.9 + d.aimErr * 0.3) bot.plan = { type: 'punch' };
-    else if (dist > 2.0 && dist < 7 && p.grounded && Math.random() < d.tackleP) { // Slide trifft bis ~7 m — breites Fenster, öfter würfeln
-      // Grätsche = ~7 m ungebremster Slide: nur, wenn der Auslauf auf der Bahn bleibt
-      const len = Math.hypot(f.x - t.position.x, f.z - t.position.z) || 1;
-      const lx = t.position.x + ((f.x - t.position.x) / len) * 8.5;
-      const lz = t.position.z + ((f.z - t.position.z) / len) * 8.5;
-      bot.plan = (Math.abs(lx) < PLATFORM_HALF_W - 0.8 && lz < PLATFORM_Z_MAX - 0.8) ? { type: 'tackle' } : null;
+    else if (dist > 2.0 && dist < 7 && p.grounded) { // Slide trifft bis ~7 m
+      bot.plan = null;
+      // Grätschen-Würfel höchstens alle 0.6 s: pro Denk-Takt gewürfelt wäre die
+      // Grätsche bei hoher Denkrate (hard ~8/s) praktisch IMMER der Eröffnungszug
+      // und würde den tödlicheren Schlag verdrängen — die Grätsche wirft nur
+      // hoch (+3 seitlich), der Punch (7+) schubst von der Plattform.
+      // Steht der Gegner nahe der Kante, gar nicht grätschen: dort ringt der
+      // Bot per Schlag aus (der Auslauf-Check bräche die Grätsche eh meist ab).
+      const foeNearEdge = Math.abs(f.x) > PLATFORM_HALF_W - 2.5 || f.z > PLATFORM_Z_MAX - 2.5;
+      if (now > (bot.tackleRollAt || 0)) {
+        bot.tackleRollAt = now + 0.6;
+        if (!foeNearEdge && Math.random() < d.tackleP) {
+          // Grätsche = ~7 m ungebremster Slide: nur, wenn der Auslauf auf der Bahn bleibt
+          const len = Math.hypot(f.x - t.position.x, f.z - t.position.z) || 1;
+          const lx = t.position.x + ((f.x - t.position.x) / len) * 8.5;
+          const lz = t.position.z + ((f.z - t.position.z) / len) * 8.5;
+          if (Math.abs(lx) < PLATFORM_HALF_W - 0.8 && lz < PLATFORM_Z_MAX - 0.8) bot.plan = { type: 'tackle' };
+        }
+      }
     }
     else bot.plan = null;
     botCatchupDive(p, bot, now); // weit entfernten Gegner per Hechtsprung einholen
