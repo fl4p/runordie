@@ -39,6 +39,9 @@ jobs:
       - name: Smoke — frontend features (index.html)
         run: npm run test:smoke
 
+      - name: Spectator-Kamera — Zuschauer-Ziel nach Tod (index.html)
+        run: npm run test:spectatorcam
+
       - name: E2E — reconnect
         run: npm run test:e2e
 
