@@ -52,7 +52,10 @@ async function makeRoom(browser, { hostSeats = 1 } = {}) {
   const mk = async () => {
     const p = await browser.newPage();
     await p.addInitScript(() => localStorage.setItem('runordie_gpuprof_v1', 'done'));
-    await p.goto(BASE, { waitUntil: 'load' });
+    // Relay erzwingen: WebRTC ist auf headless-CI-Runnern flakig (langsamer ICE-
+    // Aufbau) und würde den Reconnect-Test verrauschen — die Reconnect-Logik ist
+    // transportunabhängig, also deterministisch über das Relay testen.
+    await p.goto(BASE + '?nop2p=1', { waitUntil: 'load' });
     await p.waitForFunction(() => window.__game);
     return p;
   };
@@ -75,7 +78,11 @@ async function dropAndRecover(cli, label, ms = 22000) {
   return until(async () => {
     const s = await cli.evaluate(() => ({ rc: __game.netReconnecting, st: __game.state, slot: __game.netMySlot, code: __game.netCode }));
     return (!s.rc && s.st === 'playing' && s.code) ? s : null;
-  }, label + ' recovers', ms);
+  }, label + ' recovers', ms).catch(async (e) => {
+    const s = await cli.evaluate(() => ({ rc: __game.netReconnecting, st: __game.state, code: __game.netCode, slot: __game.netMySlot, snaps: __game.netStat().snaps })).catch(() => ({}));
+    console.log(`  \x1b[2m${label} state at timeout: ${JSON.stringify(s)}\x1b[0m`);
+    throw e;
+  });
 }
 
 async function main() {
