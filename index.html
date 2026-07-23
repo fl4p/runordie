@@ -5923,20 +5923,30 @@ function netDecodeSnapshot(dv) {
       p.ghostUntil = ghostT ? perfNow() + ghostT / 10 : 0;
     }
   }
-  // Umwelt-Korrekturen (nur bekannte netIds; Spawn-Events kommen per TCP vorher an)
+  // Umwelt-Korrekturen (nur bekannte netIds; Spawn-Events kommen per TCP vorher an).
+  // Auf JETZT korrigiert, nicht auf die interpolierte Spielerzeit (-NET_INTERP) wie
+  // früher: seit die eigene Figur lokal vorhergesagt wird (netPredictSeat), rendert
+  // sie absichtlich ~NET_INTERP VOR den interpoliert-geglätteten Fremden — Umwelt auf
+  // deren Renderzeit zu halten hieß, die eigene Figur clippt sichtbar in Hindernisse
+  // (bei ~8 m/s ~1 m Versatz). Fremde bekommen ohnehin nie lokale Kollisionsantwort
+  // (rein Host-entschieden, nur abgespielt) — ein paar Frames Fremd-Clip sind
+  // kosmetisch, die eigene Figur sichtbar durch eine Wand laufen zu sehen nicht.
+  // (Kehrt damit den Teil von 6a8f6f3 um, der Fremd-Clipping fixte, bevor es lokale
+  // Vorhersage gab — mit Vorhersage ist "Umwelt = Spieler-Renderzeit" nicht mehr
+  // für alle gleichzeitig richtig, s. auch netPredictSeat weiter unten.)
   const obMap = netIdMap(obstacles);
   let cnt = dv.getUint8(o++);
   for (let i = 0; i < cnt; i++) {
     const ob = obMap.get(dv.getUint16(o)); o += 2;
     const z = dv.getInt16(o) / 100; o += 2;
-    if (ob) ob.body.position.z = z - ob.body.velocity.z * NET_INTERP; // auf Renderzeit der Spieler
+    if (ob) ob.body.position.z = z;
   }
   const laMap = netIdMap(lasers);
   cnt = dv.getUint8(o++);
   for (let i = 0; i < cnt; i++) {
     const L = laMap.get(dv.getUint16(o)); o += 2;
     const z = dv.getInt16(o) / 100; o += 2;
-    if (L) L.z = z - L.speed * NET_INTERP; // auf Renderzeit der Spieler
+    if (L) L.z = z;
   }
   const shMap = netIdMap(sharks);
   cnt = dv.getUint8(o++);
@@ -5945,7 +5955,7 @@ function netDecodeSnapshot(dv) {
     const px = dv.getInt16(o) / 100, py = dv.getInt16(o + 2) / 100, pz = dv.getInt16(o + 4) / 100;
     const vx = dv.getInt16(o + 6) / 100, vy = dv.getInt16(o + 8) / 100, vz = dv.getInt16(o + 10) / 100;
     o += 12;
-    if (S) { S.body.position.set(px - vx * NET_INTERP, py - vy * NET_INTERP, pz - vz * NET_INTERP); S.body.velocity.set(vx, vy, vz); }
+    if (S) { S.body.position.set(px, py, pz); S.body.velocity.set(vx, vy, vz); }
   }
   const puMap = netIdMap(powerups);
   cnt = dv.getUint8(o++);
@@ -5955,10 +5965,10 @@ function netDecodeSnapshot(dv) {
     o += 4;
     if (pu) { pu.netX = x; pu.netZ = z; }
   }
-  // Spieluhr sachte an den Host angleichen (treibt Sweeper-/Laser-Formeln) —
-  // um NET_INTERP zurück, damit formelgetriebene Hindernisse (Sweeper/Wrecker)
-  // zur selben Renderzeit stehen wie die interpolierten Spieler
-  const d = (el - NET_INTERP) - elapsed;
+  // Spieluhr sachte an den Host angleichen (treibt Sweeper-/Laser-Formeln) — auf
+  // JETZT, nicht auf -NET_INTERP (s. Umwelt-Korrekturen oben: formelgetriebene
+  // Hindernisse sollen mit den handintegrierten konsistent bleiben)
+  const d = el - elapsed;
   elapsed += Math.abs(d) > 0.3 ? d : d * 0.15;
   netSnaps.push(snap);
   if (netSnaps.length > 24) netSnaps.shift();
