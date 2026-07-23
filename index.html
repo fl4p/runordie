@@ -6037,12 +6037,30 @@ function netApplySnapshots() {
 // ließ die eigene Figur wie durch Hindernisse "phasen", bis die Korrektur eintraf.
 // Statt vollständiger Physik (Rollback/Replay wäre bei 10 Ragdoll-Körpern + Gelenken
 // riskant und aufwendig) wird nur die Torso-TRANSLATION lokal per Raycast simuliert
-// — dieselben Formeln wie updatePlayer() — und als Offset auf die weiterhin vom Host
-// gelieferte Pose gelegt (Gliedmaßenhaltung/Rotation bleiben server-getrieben). Ein
-// stetiger Korrekturterm zieht die Vorhersage weich Richtung Host-Wahrheit zurück,
-// statt hart zu snappen — dasselbe Prinzip wie die Drift-Korrekturen für Hindernisse.
+// — dieselben Formeln wie updatePlayer(), inkl. grober Kollision mit (auch
+// bewegten) Hindernissen — und als Offset auf die weiterhin vom Host gelieferte
+// Pose gelegt (Gliedmaßenhaltung/Rotation bleiben server-getrieben). Ein stetiger
+// Korrekturterm zieht die Vorhersage weich Richtung Host-Wahrheit zurück, statt
+// hart zu snappen — dasselbe Prinzip wie die Drift-Korrekturen für Hindernisse.
+// Render-Basis und Korrektur-Ziel sind bewusst ZWEI verschiedene Posen: der Offset
+// läuft gegen die verzögerte Renderpose (macht daraus "gerade eben" -> die eigene
+// Figur rendert absichtlich ~NET_INTERP vor den interpoliert-geglätteten Fremden),
+// die Korrektur selbst zielt auf die frischeste rohe Snapshot-Pose (sonst würde
+// ein soeben vorhergesagter Sprung gegen eine Host-Wahrheit korrigiert, die ihn
+// noch gar nicht kennt).
 const NET_PRED_CORRECT = 6;  // 1/s Angleichrate an die Host-Position (exponentiell)
 const NET_PRED_SNAP = 2.5;   // m — größere Ausreißer (Runde/Reconnect/Tod) hart resyncen
+const NET_PRED_JUMP_GRACE = 0.2; // s nach einem vorhergesagten Sprung: Y-Korrektur pausiert
+
+// Frischeste ROHE (nicht auf Renderzeit interpolierte) Torso-Pose eines Slots aus
+// dem Snapshot-Puffer — als Korrektur-Ziel besser als die um NET_INTERP verzögerte
+// Renderpose: sonst korrigiert die eigene Vorhersage gegen eine Host-Wahrheit, die
+// vom gerade erst sofort ausgeführten lokalen Sprung noch gar nichts weiß.
+function netLatestRawTorso(slot) {
+  const snap = netSnaps[netSnaps.length - 1];
+  const pl = snap?.players.find((x) => x.slot === slot);
+  return pl ? { x: pl.pose[0], y: pl.pose[1], z: pl.pose[2] } : null;
+}
 
 // Sofortiges lokales Feedback für den häufigsten Fall (Bodensprung); Doppelsprung,
 // Hechtsprung und Kantenhochziehen bleiben allein Sache des Hosts (seltener/komplexer)
@@ -6052,12 +6070,17 @@ function netPredictJump(p) {
   if ((pr.jumps || 0) > 0) return;
   pr.vy = JUMP_V;
   pr.jumps = 1;
+  pr.jumpAt = perfNow();
+  pr.jumpLock = perfNow() + 0.25; // wie p.jumpLock in updatePlayer: Schwebe-Feder sonst noch "grounded" -> klemmt vy sofort zurück
 }
 
 function netPredictSeat(p, dt) {
   const pr = p.pred;
   if (!pr) return;
   const t = p.torso;
+  // Render-Basis: die (absichtlich um NET_INTERP verzögerte) interpolierte Pose,
+  // dieselbe wie für Fremde — der Offset macht daraus "gerade eben" statt "vor
+  // 120ms", die Fremd-Figuren bleiben bewusst bei ihrer geglätteten Renderzeit.
   const authX = t.position.x, authY = t.position.y, authZ = t.position.z;
   const predictable = p.alive && !p.ragdoll && !p.hanging && !p.tackling && state === 'playing';
 
@@ -6065,8 +6088,14 @@ function netPredictSeat(p, dt) {
     // Ragdoll/Grätsche/Hängen entscheidet ohnehin allein der Host — kein Offset
     pr.x = authX; pr.y = authY; pr.z = authZ; pr.vx = pr.vy = pr.vz = 0; pr.jumps = 0;
   } else {
-    if (Math.hypot(pr.x - authX, pr.y - authY, pr.z - authZ) > NET_PRED_SNAP) {
-      pr.x = authX; pr.y = authY; pr.z = authZ; pr.vx = pr.vy = pr.vz = 0;
+    // Korrektur-Ziel: frischeste rohe Snapshot-Pose (nur Netzlaufzeit, kein
+    // zusätzlicher Interpolationspuffer) — fällt auf die Renderpose zurück,
+    // solange noch kein Snapshot da ist (z.B. Rundenstart)
+    const raw = netLatestRawTorso(p.id - 1);
+    const rawX = raw ? raw.x : authX, rawY = raw ? raw.y : authY, rawZ = raw ? raw.z : authZ;
+
+    if (Math.hypot(pr.x - rawX, pr.y - rawY, pr.z - rawZ) > NET_PRED_SNAP) {
+      pr.x = rawX; pr.y = rawY; pr.z = rawZ; pr.vx = pr.vy = pr.vz = 0;
     }
 
     _rayFrom.set(pr.x, pr.y, pr.z);
@@ -6085,33 +6114,45 @@ function netPredictSeat(p, dt) {
     const k = grounded ? 0.28 + (ICE_GRIP - 0.28) * iceLevel : 0.07;
     pr.vx += (dx * spd - pr.vx) * k;
     pr.vz += (dz * spd - pr.vz) * k;
-    pr.vy = grounded ? Math.max(-6, Math.min(6, (RIDE_HEIGHT - _rayRes.distance) * 14)) : pr.vy + GRAVITY * dt;
+    // Schwebe-Feder nur außerhalb des Jump-Locks — sonst liest der Raycast direkt
+    // nach dem Sprung noch "grounded" (Position hat sich ja noch nicht bewegt) und
+    // klemmt vy in genau dem Frame wieder auf ~0, in dem JUMP_V gerade gesetzt wurde
+    pr.vy = (grounded && perfNow() > (pr.jumpLock || 0))
+      ? Math.max(-6, Math.min(6, (RIDE_HEIGHT - _rayRes.distance) * 14))
+      : pr.vy + GRAVITY * dt;
 
-    // Grobe Wand-Kollision je Achse (kurzer Raycast in Bewegungsrichtung) — reicht
-    // für "läuft nicht durch Wände", ohne echte Kontakt-/Gelenkphysik nachzubauen
+    // Grobe Wand-Kollision je Achse (kurzer Raycast in Bewegungsrichtung): bei
+    // Treffer die Geschwindigkeit des getroffenen Körpers übernehmen statt hart
+    // auf 0 zu setzen — vereint "Wand blockt" (Geschwindigkeit ~0) und "Schieber/
+    // Walze schiebt mich" (Geschwindigkeit ungleich 0) in einer Regel; Haie zählen
+    // mit (selbe Kollisionsgruppe), keine echte Kontakt-/Gelenkphysik nötig
     if (Math.abs(pr.vx) > 0.01) {
       _rayFrom.set(pr.x, pr.y + 0.15, pr.z);
       _rayTo.set(pr.x + Math.sign(pr.vx) * (Math.abs(pr.vx) * dt + 0.32), pr.y + 0.15, pr.z);
       _rayRes.reset();
       world.raycastClosest(_rayFrom, _rayTo, { collisionFilterMask: GROUP.OBST, skipBackfaces: true }, _rayRes);
-      if (_rayRes.hasHit && !_rayRes.body?.isJumpPad) pr.vx = 0;
+      if (_rayRes.hasHit && !_rayRes.body?.isJumpPad) pr.vx = _rayRes.body.velocity.x;
     }
     if (Math.abs(pr.vz) > 0.01) {
       _rayFrom.set(pr.x, pr.y + 0.15, pr.z);
       _rayTo.set(pr.x, pr.y + 0.15, pr.z + Math.sign(pr.vz) * (Math.abs(pr.vz) * dt + 0.32));
       _rayRes.reset();
       world.raycastClosest(_rayFrom, _rayTo, { collisionFilterMask: GROUP.OBST, skipBackfaces: true }, _rayRes);
-      if (_rayRes.hasHit && !_rayRes.body?.isJumpPad) pr.vz = 0;
+      if (_rayRes.hasHit && !_rayRes.body?.isJumpPad) pr.vz = _rayRes.body.velocity.z;
     }
 
     pr.x += pr.vx * dt;
     pr.y += pr.vy * dt;
     pr.z += pr.vz * dt;
 
+    // Weich Richtung Host-Wahrheit nachziehen — gegen die ROHE Pose, nicht die
+    // verzögerte Renderpose (s.o.). Y pausiert kurz nach einem lokalen Sprung:
+    // sonst korrigiert dieser Term den Sprung weg, bevor der Host überhaupt davon
+    // gehört haben kann (Größenordnung RTT/2 + eine Snapshot-Periode).
     const c = Math.min(1, NET_PRED_CORRECT * dt);
-    pr.x += (authX - pr.x) * c;
-    pr.y += (authY - pr.y) * c;
-    pr.z += (authZ - pr.z) * c;
+    pr.x += (rawX - pr.x) * c;
+    if (perfNow() - (pr.jumpAt || -Infinity) > NET_PRED_JUMP_GRACE) pr.y += (rawY - pr.y) * c;
+    pr.z += (rawZ - pr.z) * c;
   }
 
   const ox = pr.x - authX, oy = pr.y - authY, oz = pr.z - authZ;
