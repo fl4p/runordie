@@ -4898,7 +4898,8 @@ function resetRound() {
   if (netRole === 'host') {
     netSnapTimer = 0;
     netRoundNo = (netRoundNo + 1) & 255;
-    netSendJson({ k: 'round', n: netRoundNo, roster: rosterSlots, scores: players.map((p) => p.score) });
+    netLastRoundMsg = { k: 'round', n: netRoundNo, roster: rosterSlots, scores: players.map((p) => p.score) };
+    netSendJson(netLastRoundMsg);
   }
 }
 
@@ -4953,7 +4954,10 @@ function endRound() {
   if (w) { w.score++; renderScoreBar(); }
   showRoundEndMsg(w);
   // dur = Rundendauer (s) für die Spielzeit-Statistik jedes angemeldeten Spielers
-  if (netRole === 'host') netSendJson({ k: 'end', w: w ? w.id - 1 : -1, scores: players.map((p) => p.score), dur: Math.max(0, Math.round(elapsed)) });
+  if (netRole === 'host') {
+    netLastRoundMsg = { k: 'end', w: w ? w.id - 1 : -1, scores: players.map((p) => p.score), dur: Math.max(0, Math.round(elapsed)) };
+    netSendJson(netLastRoundMsg);
+  }
 }
 
 // Runden-Ende-Banner (auch von der Client-Replik mit dem Host-Sieger aufgerufen)
@@ -5533,6 +5537,7 @@ let netMySeats = [0];    // absolute Slots, die ICH lokal steuere (1–2 = Split
 let netMySlot = 0;       // = netMySeats[0] (Host-Erkennung, Kamera-Primärsicht)
 let netLocalSeats = +localStorage.getItem('runordie_localseats') === 2 ? 2 : 1; // gewünschte lokale Spielerzahl
 let netRoster = [0];     // Slots im Raum (Host pflegt, Clients per 'lobby'-Event)
+let netLastRoundMsg = null; // Host: letzte 'round'/'end'-Nachricht — Resync für rejoignende Clients (siehe 'peer')
 let netNames = {};       // slot -> Anzeigename (angemeldete Spieler) oder undefined
 let netOnlineUsers = []; // [{id,name,busy}] — angemeldete Spieler im Online-Bereich
 let netPublicRooms = []; // [{code,host,count,max}] — öffentliche, offene Räume
@@ -6596,7 +6601,11 @@ function netReconnectAttempt(delay) {
     clearTimeout(attemptTimer);
     netWsOpenedAt = perfNow();
     // Wiedereintritt in den laufenden Raum (rk umgeht den Lock beim Server)
-    try { ws.send(JSON.stringify({ t: 'join', code: netCode, token: authToken || undefined, token2: (netMySeats.length === 2 && authToken2) ? authToken2 : undefined, seats: netMySeats.length, rk: netRkey || undefined })); }
+    // n/st = eigener letzter Rundenstand -> der Host resynct NUR, wenn das
+    // tatsächlich vom aktuellen Stand abweicht (siehe 'peer'-Handler), statt bei
+    // JEDEM Reconnect pauschal resetRound() zu triggern (würde sonst Hindernisse/
+    // Laser/Powerups auch bei einem sauberen, nichts-verpasst-Reconnect wegwischen).
+    try { ws.send(JSON.stringify({ t: 'join', code: netCode, token: authToken || undefined, token2: (netMySeats.length === 2 && authToken2) ? authToken2 : undefined, seats: netMySeats.length, rk: netRkey || undefined, n: netRoundNo, st: state })); }
     catch { try { ws.close(); } catch { /* egal */ } }
   };
   ws.onmessage = netOnMessage;
@@ -6743,6 +6752,14 @@ function netOnMessage(ev) {
       netSendJson({ k: 'lobby', roster: netRoster, names: netNames }); // an alle verteilen
       netBroadcastLobbySettings(); // der/die Neue sieht sofort die aktuellen Regeln
       netRtcOffer(seats[0], seats); // eine P2P-Verbindung je Mitspieler (mit seinen Sitzen)
+      // Wiedereintritt mitten in der Runde: NUR nachreichen, wenn der/die
+      // Rejoignende laut eigenem letzten Stand (m.n/m.st) tatsächlich einen
+      // Rundenwechsel verpasst hat — sonst würde JEDER Reconnect (auch ein
+      // sauberer, der nichts verpasst hat) resetRound() auslösen und Hindernisse/
+      // Laser/Powerups für den Rest der laufenden Runde grundlos wegwischen.
+      if (m.reconnect && netLastRoundMsg && state !== 'menu' && (m.n !== netRoundNo || m.st !== state)) {
+        netSendJson({ ...netLastRoundMsg, to: seats });
+      }
       if (netUiOpen) netRenderLobby();
       return;
     }
@@ -6810,6 +6827,9 @@ function netApplyEvent(m) {
     case 'rtc': if (m.to === netMySlot) netRtcAnswer(m); return;
     case 'start': netOnStart(m); return;
     case 'round':
+      // m.to = gezielter Resync für einen einzelnen rejoignenden Sitz (siehe 'peer'),
+      // sonst ein normaler Rundenwechsel-Broadcast (kein to-Feld) — für alle.
+      if (Array.isArray(m.to) && !m.to.includes(netMySlot)) return;
       netRoundNo = m.n ?? netRoundNo;
       rosterSlots = netSanitizeRoster(m.roster) || rosterSlots;
       resetRound();
@@ -6823,6 +6843,7 @@ function netApplyEvent(m) {
       return;
     case 'death': { const s = netValidSlot(m.slot); const p = s !== null ? players[s] : null; if (p) p.alive = false; return; }
     case 'end': {
+      if (Array.isArray(m.to) && !m.to.includes(netMySlot)) return; // siehe 'round'
       state = 'roundEnd';
       (Array.isArray(m.scores) ? m.scores : []).slice(0, players.length)
         .forEach((s, i) => { if (players[i]) players[i].score = netValidScore(s); });

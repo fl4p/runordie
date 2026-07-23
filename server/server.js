@@ -346,7 +346,14 @@ function handleMessage(ws, data, isBinary) {
       ws.roomCode = code; ws.slots = slots; ws.slot = slots[0]; ws.rkey = randomUUID();
       setOnline(ws);
       sendJson(ws, { t: 'joined', code, slots, names: { ...r.names }, rk: ws.rkey }); // bekannte Namen mitschicken
-      sendJson(r.host, { t: 'peer', slots, names }); // Host lernt die neuen Slots + Namen
+      // reconnect=true: r.locked heißt, dieser Beitritt kam NUR über den Grace-Pfad
+      // (Zeile 324-329) durch. n/st = der eigene letzte Rundenstand des rejoignenden
+      // Clients — der Host resynct nur, wenn das vom AKTUELLEN Stand abweicht (sonst
+      // triggerte jeder Reconnect grundlos ein resetRound()). Nur roh durchgereicht:
+      // der Host vergleicht bloß per ===, nie gerendert oder indiziert.
+      const n = Number.isInteger(msg.n) ? msg.n : -1;
+      const st = typeof msg.st === 'string' ? msg.st : '';
+      sendJson(r.host, { t: 'peer', slots, names, reconnect: r.locked, n, st }); // Host lernt die neuen Slots + Namen
       broadcastPresence();
       if (r.public) broadcastRooms(); // Belegung geändert -> Liste auffrischen
       return;
