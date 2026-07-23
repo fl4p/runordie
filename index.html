@@ -3234,6 +3234,17 @@ addEventListener('keyup', (e) => {
   if (m && netRole === 'client') netSendInput();
 });
 
+// Fokusverlust (Alt-Tab, App-Wechsel, System-Dialog): ein noch gehaltener
+// Bewegungstaster bekommt kein keyup mehr und bliebe "gedrückt" — die Figur
+// liefe endlos in eine Richtung ("manchmal geht man nur nach hinten", Bug #8,
+// und der Splitscreen-Rückwärts-Report). Beim Verlassen alle Taster lösen.
+function releaseHeldKeys() {
+  for (const p of players) { p.keys.f = p.keys.b = p.keys.l = p.keys.r = false; }
+  if (netRole === 'client') netSendInput(); // Host über die losgelassenen Taster informieren
+}
+addEventListener('blur', releaseHeldKeys);
+addEventListener('visibilitychange', () => { if (document.hidden) releaseHeldKeys(); });
+
 // ---------- Gamepads (Xbox): erkannte Controller wählen ihre Seite selbst ----------
 const padAssign = {}; // gamepad.index -> 0 (Spieler 1) | 1 (Spieler 2)
 const padEdge = {};   // gamepad.index -> Flankenzustände
