@@ -5529,19 +5529,24 @@ function netActPush(slot, a) {
   netActQueue.push([slot, a]);
 }
 const netSnaps = [];     // decodierte Snapshots für die Interpolation
-const NET_INTERP = 0.12; // s Interpolationspuffer der Replik
+// Interpolationspuffer der Replik. Von 0.12 auf 0.08 gesenkt: er dominiert die Eingabe-
+// verzögerung unter Option A; 0.08 = 1.6 Snapshot-Perioden (20 Hz) puffern noch Jitter,
+// sparen aber ~40 ms Lag. Per ?interp=<ms> (20–300) justierbar — stottert es auf einer
+// ruckeligen Verbindung, hochsetzen; für minimale Latenz runter (Risiko: Umwelt-Ruckler).
+let NET_INTERP = 0.08;
+{ const _ip = +new URLSearchParams(location.search).get('interp'); if (_ip >= 20 && _ip <= 300) NET_INTERP = _ip / 1000; }
 // Test/Diagnose: P2P abschalten -> alles läuft übers Relay (nur so greift die
 // künstliche Server-Latenz LAG, WebRTC ginge direkt an ihr vorbei).
 const netNoP2P = new URLSearchParams(location.search).get('nop2p') === '1';
 // Test/Diagnose: net #1 (Umwelt-Einfrieren bei Unterlauf) abschalten -> A/B-Vergleich
 const netNoFreeze = new URLSearchParams(location.search).get('nofreeze') === '1';
-// ?predict=0 -> Option A: KEINE lokale Spielervorhersage. Die eigene Figur rendert
-// exakt auf der Host-Wahrheit (interpoliert, ~NET_INTERP+RTT/2 verzögert) wie die
-// Fremden — und die (deterministischen) Hindernis-MESHES werden um GENAU dieselbe
-// Zeit zurückgespult (syncMeshes), sodass Figur und Wände immer zur selben Zeit
-// gerendert werden. Ergebnis: NIE Clipping, dafür ~1/5 s Eingabeverzögerung.
-// Default an (Vorhersage), damit sich für niemanden etwas ändert.
-const NET_PREDICT = new URLSearchParams(location.search).get('predict') !== '0';
+// Option A ist jetzt STANDARD: KEINE lokale Spielervorhersage. Die eigene Figur rendert
+// exakt auf der Host-Wahrheit (interpoliert, ~NET_INTERP+RTT/2 verzögert) wie die Fremden
+// — und die (deterministischen) Hindernis-MESHES werden um GENAU dieselbe Zeit zurück-
+// gespult (syncMeshes), sodass Figur und Wände immer zur selben Zeit gerendert werden:
+// NIE Clipping, dafür etwas Eingabeverzögerung (vom Interp-Puffer dominiert, s. NET_INTERP).
+// ?predict=1 stellt die alte Vorhersage (reaktiver, kann clippen) zum Vergleich wieder her.
+const NET_PREDICT = new URLSearchParams(location.search).get('predict') === '1';
 let netClipFrames = 0; // Test-Metrik: Client-Frames mit Torso IN einem Hindernis
 
 const myP = () => players[netRole ? netMySlot : 0];
