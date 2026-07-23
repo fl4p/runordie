@@ -3463,9 +3463,9 @@ function playerForward(p) {
   return { x: -Math.sin(p.yaw), z: -Math.cos(p.yaw) };
 }
 
-function toggleRotMode() {
+function toggleRotMode(persist = true) {
   rotMode = !rotMode;
-  localStorage.setItem('runordie_rotMode', rotMode ? '1' : '0');
+  if (persist) localStorage.setItem('runordie_rotMode', rotMode ? '1' : '0');
   if (!rotMode) {
     document.exitPointerLock?.();
     for (const p of players) {
@@ -6810,7 +6810,7 @@ function netApplyEvent(m) {
     case 'lobbyset': { // Host stellt Regeln um — in der Lobby nur Anzeige, im
       // laufenden Spiel (Spiel-Menü des Hosts) werden sie sofort angewendet
       const s = m.s || {};
-      netLobbySettings = { dive: !!s.dive, stun: !!s.stun, snow: !!s.snow, sky: !!s.sky, punch: !!s.punch, p2p: s.p2p !== false };
+      netLobbySettings = { dive: !!s.dive, stun: !!s.stun, snow: !!s.snow, sky: !!s.sky, punch: !!s.punch, cam: !!s.cam, p2p: s.p2p !== false };
       // Transport (P2P) folgt dem Host in JEDEM Zustand, nicht nur im Spiel: schaltet
       // der Host P2P ab, die eigene Direktverbindung kappen -> zurück aufs Relay.
       if (netRole === 'client') {
@@ -6823,6 +6823,7 @@ function netApplyEvent(m) {
         if (snowZones !== netLobbySettings.snow) { snowZones = netLobbySettings.snow; if (!snowZones && snowActive) endSnow(true); }
         dayMode = netLobbySettings.sky;
         punchStun = netLobbySettings.punch;
+        if (netLobbySettings.cam !== rotMode) toggleRotMode(false); // 🎥 Kamera-Regel live (in-memory)
       }
       if (netUiOpen && netCode) netRenderLobby();
       return;
@@ -6850,7 +6851,7 @@ function netOnStart(m) {
   soloMode = false; botMode = false;
   netSavedSettings ??= { rushMode, rotMode, diveAlways, noStun, snowZones };
   rushMode = false;
-  if (rotMode) toggleRotMode();
+  if (!!m.settings?.cam !== rotMode) toggleRotMode(false); // 🎥 Kamera-Regel des Hosts (in-memory, wie dive/stun)
   diveAlways = !!m.settings?.diveAlways;
   noStun = !!m.settings?.noStun;
   punchStun = !!m.settings?.punch; // Boxen-Regel des Hosts übernehmen
@@ -6870,11 +6871,12 @@ function netStartOnline() {
   netRole = 'host';
   netUiOpen = false;
   soloMode = false; botMode = false;
-  netSavedSettings ??= { rushMode, rotMode };
+  netSavedSettings ??= { rushMode }; // rotMode NICHT sichern -> der Host behält
+  // seinen zuletzt gesetzten Kamera-Wert (wie dive/stun), nicht den Lobby-Wert.
+  // Die freie Kamera reist als Raumregel über settings.cam mit.
   rushMode = false;
-  if (rotMode) toggleRotMode();
   for (let i = 0; i < botCtl.length; i++) botCtl[i] = null;
-  netSendJson({ k: 'start', v: NET_PROTO, roster: netRoster, names: netNames, settings: { diveAlways, noStun, snowZones, sky: dayMode ? 1 : 0, punch: punchStun ? 1 : 0 } });
+  netSendJson({ k: 'start', v: NET_PROTO, roster: netRoster, names: netNames, settings: { diveAlways, noStun, snowZones, sky: dayMode ? 1 : 0, punch: punchStun ? 1 : 0, cam: rotMode ? 1 : 0 } });
   $('touchui').classList.toggle('hidden', !isTouch);
   resetRound();      // setzt state='playing' und broadcastet das 'round'-Event
   applySoloLayout(); // Vollbild-Kamera + Online-Scorebar
@@ -6941,7 +6943,7 @@ function updateNetPause() {
 
 // ---- Regeln in der Lobby (Host stellt ein, Clients sehen sie) ----
 // Die fünf online-relevanten Regeln, die der Host schon VOR dem Start setzen kann.
-const NET_SETTING_KEYS = ['dive', 'stun', 'snow', 'sky', 'punch', 'p2p'];
+const NET_SETTING_KEYS = ['dive', 'stun', 'snow', 'sky', 'punch', 'cam', 'p2p'];
 function netLobbySettingLabel(key, v) {
   switch (key) {
     case 'dive':  return v ? '🤸 Hechtsprung: IMMER' : '🤸 Hechtsprung: nur mit 💎';
@@ -6949,6 +6951,7 @@ function netLobbySettingLabel(key, v) {
     case 'snow':  return v ? '❄️ Eiszonen: AN' : '🌤️ Eiszonen: AUS';
     case 'sky':   return v ? '☀️ Tag' : '🌙 Nacht';
     case 'punch': return v ? '🥊 Boxen: STUN' : '🥊 Boxen: NORMAL';
+    case 'cam':   return v ? '🎥 Kamera: DREHBAR' : '🎥 Kamera: FEST';
     case 'p2p':   return v ? '📡 P2P: AN' : '📡 P2P: AUS (nur Relay)'; // Transport, keine Spielregel
   }
   return '';
@@ -6956,7 +6959,7 @@ function netLobbySettingLabel(key, v) {
 // Aktuelle Regeln des Hosts als kompaktes Objekt (aus den lokalen Flags). p2p ist
 // Transport (P2P an = !netNoP2P), reist über denselben lobbyset-Kanal mit.
 function netLobbySettingsObj() {
-  return { dive: diveAlways, stun: noStun, snow: snowZones, sky: dayMode, punch: punchStun, p2p: !netNoP2P };
+  return { dive: diveAlways, stun: noStun, snow: snowZones, sky: dayMode, punch: punchStun, cam: rotMode, p2p: !netNoP2P };
 }
 let netLobbySettings = null; // vom Host empfangene Regeln (Client-Anzeige in der Lobby)
 function netBroadcastLobbySettings() {
@@ -6969,6 +6972,7 @@ function netToggleLobbySetting(key) {
   else if (key === 'snow') { snowZones = !snowZones; localStorage.setItem('runordie_snow', snowZones ? '1' : '0'); if (!snowZones && snowActive) endSnow(true); }
   else if (key === 'sky') { toggleDaySky(); }
   else if (key === 'punch') { punchStun = !punchStun; localStorage.setItem('runordie_punchStun', punchStun ? '1' : '0'); }
+  else if (key === 'cam') { toggleRotMode(); } // 🎥 freie Kamera — setzt yaw/Torso mit zurück + speichert
   else if (key === 'p2p') {
     netNoP2P = !netNoP2P; // Transport, keine Spielregel
     // Beim Abschalten laufende Direktverbindungen kappen -> alles fällt sofort aufs
@@ -6994,7 +6998,7 @@ function netResetState() {
   }
   if (netSavedSettings) {
     rushMode = netSavedSettings.rushMode;
-    if (netSavedSettings.rotMode && !rotMode) toggleRotMode();
+    if ('rotMode' in netSavedSettings && !!netSavedSettings.rotMode !== rotMode) toggleRotMode(false);
     if ('diveAlways' in netSavedSettings) diveAlways = netSavedSettings.diveAlways;
     if ('noStun' in netSavedSettings) noStun = netSavedSettings.noStun;
     if ('snowZones' in netSavedSettings) snowZones = netSavedSettings.snowZones;
