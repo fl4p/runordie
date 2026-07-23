@@ -5337,9 +5337,12 @@ function animate() {
     hudTimer -= dt;
     if (hudTimer <= 0) {
       hudTimer = 0.25;
-      // Online-Client: Ping (Rundlaufzeit zum Host) mit anzeigen; Testraum: simuliert
-      const ping = netRole === 'client' ? ` · 📶 ${netPing || '…'} ms` : netTest ? ` · 📶 ~${NET_TEST_PING} ms (Test)` : '';
-      $('speed').textContent = `Tempo ${baseSpeed().toFixed(1)} m/s · ${elapsed.toFixed(0)} s${ping}`;
+      // Online-Client: Ping (Rundlaufzeit zum Host) + Transport (P2P/Relay); Testraum: simuliert
+      let netInfo = '';
+      if (netRole === 'client') netInfo = ` · 📶 ${netPing || '…'} ms · ${netTransportLabel()}`;
+      else if (netTest) netInfo = ` · 📶 ~${NET_TEST_PING} ms (Test)`;
+      else if (netRole === 'host') { const t = netTransportLabel(); if (t) netInfo = ` · ${t}`; }
+      $('speed').textContent = `Tempo ${baseSpeed().toFixed(1)} m/s · ${elapsed.toFixed(0)} s${netInfo}`;
       if (netDebugOn) netDebugRender();
     }
     if (soloMode) { const st = $('solotime'); if (st) st.textContent = Math.floor(elapsed); }
@@ -5549,6 +5552,17 @@ function netSendPing() {
 function netApplyPong(ts) {
   const rtt = Math.round((perfNow() - ts) * 1000);
   if (rtt >= 0 && rtt < 60000) netPing = rtt;
+}
+// Kompakte Transport-Anzeige neben dem Ping: direkte P2P-Verbindung (🔗) oder Relay (📡).
+// Client: der eigene Kanal. Host: 🔗 wenn mind. ein Client direkt hängt, sonst 📡 (falls
+// überhaupt Clients da sind). '' wenn nichts anzuzeigen ist (kein Netzspiel).
+function netTransportLabel() {
+  if (netRole === 'client') return netPeer?.fast?.readyState === 'open' ? '🔗 P2P' : '📡 Relay';
+  if (netRole === 'host') {
+    if (netRoster.length <= 1) return ''; // keine Clients verbunden
+    return Object.values(netPeers).some((p) => p.fast?.readyState === 'open') ? '🔗 P2P' : '📡 Relay';
+  }
+  return '';
 }
 // P2P-Gesundheitswächter gegen "Silent Death": ein DataChannel kann readyState
 // 'open' behalten und trotzdem ins Leere senden/empfangen (v.a. auf Mobil bei
@@ -8209,6 +8223,15 @@ window.__game = { players, obstacles, powerups, world, cams, sky, fxRings, laser
   get netSnaps() { return netSnaps.length; }, get netNames() { return { ...netNames }; },
   netInvite, get netOnline() { return netOnlineUsers.slice(); },
   get netP2P() { return netPeer ? netPeer.fast?.readyState === 'open' : Object.fromEntries(Object.entries(netPeers).map(([s, p]) => [s, p.fast?.readyState])); },
+  netTransportLabel, // Anzeige-Text neben dem Ping (🔗 P2P / 📡 Relay)
+  // Test-Harness: "Silent Death" simulieren — Kanal bleibt 'open', liefert aber nichts
+  // mehr (onmessage entfernt), sodass lastRecv einfriert und netP2PProbe nach dem Timeout
+  // greift. Optionaler slot: nur EINEN Host-Peer verstummen lassen (für den m.to-Filtertest).
+  netTestSilenceP2P: (slot) => {
+    const mute = (p) => { if (p?.fast) p.fast.onmessage = null; if (p?.rel) p.rel.onmessage = null; };
+    if (netRole === 'host') { if (slot != null) mute(netPeers[slot]); else Object.values(netPeers).forEach(mute); }
+    else mute(netPeer);
+  },
   // Bug-Recorder (Test-Harness)
   get bugRec() { return netRec.slice(); }, openBugPanel, closeBugPanel, sendBugReport,
   // Benutzerkonten (Test-Harness)
