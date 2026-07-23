@@ -6105,6 +6105,12 @@ function netLatestRawTorso(slot) {
   return pl ? { x: pl.pose[0], y: pl.pose[1], z: pl.pose[2] } : null;
 }
 
+// Geschätzte Einweg-Netzlaufzeit: um so viel ist die jüngste Host-Pose schon alt,
+// wenn sie hier ankommt. Testraum kennt sie exakt, online ~RTT/2 aus dem Ping.
+function netOneWay() {
+  return netTest ? NET_TEST_ONEWAY : Math.min(0.2, (netPing || 120) / 2000);
+}
+
 // Sofortiges lokales Feedback für den häufigsten Fall (Bodensprung); Doppelsprung,
 // Hechtsprung und Kantenhochziehen bleiben allein Sache des Hosts (seltener/komplexer)
 function netPredictJump(p) {
@@ -6137,15 +6143,27 @@ function netPredictSeat(p, dt) {
     const raw = netLatestRawTorso(p.id - 1);
     const rawX = raw ? raw.x : authX, rawY = raw ? raw.y : authY, rawZ = raw ? raw.z : authZ;
 
+    // Uhr-Angleich: der rohe Korrektur-Anker ist die tHost-Pose und damit ~age alt
+    // (Netzlaufzeit + Alter des jüngsten Snapshots), während die Umwelt (Hindernisse)
+    // lokal bis JETZT weiterläuft. Ohne Ausgleich zieht die weiche Korrektur die Figur
+    // konstant ~age in die Vergangenheit relativ zu den Wänden -> sie clippt bzw. wird
+    // "von etwas getroffen, dem sie ausgewichen ist". Das horizontale Ziel darum mit der
+    // eigenen vorhergesagten Geschwindigkeit auf die Gegenwart vorziehen (glatt, schon da;
+    // nur x/z — Y trägt die Sprunglogik). Fällt bei fehlendem Snapshot sauber auf raw zurück.
+    const latest = netSnaps[netSnaps.length - 1];
+    const age = latest ? Math.min(0.3, Math.max(0, perfNow() - latest.arrived) + netOneWay()) : 0;
+    const rawXp = rawX + pr.vx * age;
+    const rawZp = rawZ + pr.vz * age;
+
     const inJumpGrace = perfNow() - (pr.jumpAt || -Infinity) <= NET_PRED_JUMP_GRACE;
-    pr.rawOffsetH = Math.hypot(pr.x - rawX, pr.z - rawZ); // Debug/Telemetrie: Abstand zum Snap-H-Schwellwert
+    pr.rawOffsetH = Math.hypot(pr.x - rawXp, pr.z - rawZp); // Debug/Telemetrie: Abstand zum Snap-H-Schwellwert
     if (Math.hypot(pr.x - rawX, pr.y - rawY, pr.z - rawZ) > NET_PRED_SNAP) {
-      // Katastrophaler Ausreißer: alle Achsen hart zurück
+      // Katastrophaler Ausreißer: alle Achsen hart zurück (roh, ohne Extrapolation)
       pr.x = rawX; pr.y = rawY; pr.z = rawZ; pr.vx = pr.vy = pr.vz = 0;
-    } else if (Math.hypot(pr.x - rawX, pr.z - rawZ) > NET_PRED_SNAP_H) {
-      // Nur horizontal snappen (s. Kommentar an NET_PRED_SNAP_H) — Y bleibt der
-      // weichen Korrektur überlassen, damit vorhergesagte Sprünge nicht ruckeln.
-      pr.x = rawX; pr.z = rawZ; pr.vx = 0; pr.vz = 0;
+    } else if (Math.hypot(pr.x - rawXp, pr.z - rawZp) > NET_PRED_SNAP_H) {
+      // Nur horizontal snappen (s. Kommentar an NET_PRED_SNAP_H) — aufs gegenwarts-
+      // angeglichene Ziel, Y bleibt der weichen Korrektur (Sprünge sollen nicht ruckeln).
+      pr.x = rawXp; pr.z = rawZp; pr.vx = 0; pr.vz = 0;
     }
 
     _rayFrom.set(pr.x, pr.y, pr.z);
@@ -6206,9 +6224,9 @@ function netPredictSeat(p, dt) {
     // sonst korrigiert dieser Term den Sprung weg, bevor der Host überhaupt davon
     // gehört haben kann (Größenordnung RTT/2 + eine Snapshot-Periode).
     const c = Math.min(1, NET_PRED_CORRECT * dt);
-    pr.x += (rawX - pr.x) * c;
-    if (!inJumpGrace) pr.y += (rawY - pr.y) * c;
-    pr.z += (rawZ - pr.z) * c;
+    pr.x += (rawXp - pr.x) * c; // gegenwarts-angeglichenes Ziel (s.o.), damit die
+    if (!inJumpGrace) pr.y += (rawY - pr.y) * c; // Figur nicht ~age hinter den Wänden liegt
+    pr.z += (rawZp - pr.z) * c;
 
     // Entpenetration als LETZTER Schritt: die weiche Korrektur oben zieht pr blind
     // Richtung Host-Wahrheit (RTT-alt) und ist NICHT kollisionsgeprüft — sie kann
