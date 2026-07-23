@@ -6083,8 +6083,16 @@ function netApplySnapshots() {
 // ein soeben vorhergesagter Sprung gegen eine Host-Wahrheit korrigiert, die ihn
 // noch gar nicht kennt).
 const NET_PRED_CORRECT = 6;  // 1/s Angleichrate an die Host-Position (exponentiell)
-const NET_PRED_SNAP = 2.5;   // m — größere Ausreißer (Runde/Reconnect/Tod) hart resyncen
-const NET_PRED_JUMP_GRACE = 0.2; // s nach einem vorhergesagten Sprung: Y-Korrektur pausiert
+const NET_PRED_SNAP = 2.5;   // m — katastrophaler Ausreißer, alle Achsen (Runde/Reconnect/Tod) hart resyncen
+// Ungemodelltes Ereignis (Schubs/Schild-Block/Grätschen-Schleuder/Hindernis-Stun —
+// von hier aus nicht vorhergesagt): eng und SOFORT zurücksetzen statt über hunderte
+// ms weich nachzuziehen — ein kurzer sichtbarer Sprung schlägt spürbar falsches
+// Stehen ("von etwas getroffen, dem ich ausgewichen bin"). Getrennt von Y: ein
+// vorhergesagter Sprung führt LEGITIM weit vor rawY her, bis der Host-Sprung im
+// Snapshot ankommt — ein gemeinsamer Skalar-Snap würde jeden Sprung zurückreißen.
+const NET_PRED_SNAP_H = 0.6; // m — horizontale Abweichung (x/z)
+const NET_PRED_SNAP_V = 0.8; // m — vertikale Abweichung AUSSERHALB des Sprung-Grace
+const NET_PRED_JUMP_GRACE = 0.2; // s nach einem vorhergesagten Sprung: Y-Korrektur/-Snap pausiert
 
 // Frischeste ROHE (nicht auf Renderzeit interpolierte) Torso-Pose eines Slots aus
 // dem Snapshot-Puffer — als Korrektur-Ziel besser als die um NET_INTERP verzögerte
@@ -6128,8 +6136,18 @@ function netPredictSeat(p, dt) {
     const raw = netLatestRawTorso(p.id - 1);
     const rawX = raw ? raw.x : authX, rawY = raw ? raw.y : authY, rawZ = raw ? raw.z : authZ;
 
+    const inJumpGrace = perfNow() - (pr.jumpAt || -Infinity) <= NET_PRED_JUMP_GRACE;
+    pr.rawOffsetH = Math.hypot(pr.x - rawX, pr.z - rawZ); // Debug/Telemetrie: Abstand zum Snap-H-Schwellwert
     if (Math.hypot(pr.x - rawX, pr.y - rawY, pr.z - rawZ) > NET_PRED_SNAP) {
+      // Katastrophaler Ausreißer: alle Achsen hart zurück
       pr.x = rawX; pr.y = rawY; pr.z = rawZ; pr.vx = pr.vy = pr.vz = 0;
+    } else {
+      if (Math.hypot(pr.x - rawX, pr.z - rawZ) > NET_PRED_SNAP_H) {
+        pr.x = rawX; pr.z = rawZ; pr.vx = 0; pr.vz = 0;
+      }
+      if (!inJumpGrace && Math.abs(pr.y - rawY) > NET_PRED_SNAP_V) {
+        pr.y = rawY; pr.vy = 0;
+      }
     }
 
     _rayFrom.set(pr.x, pr.y, pr.z);
@@ -6191,7 +6209,7 @@ function netPredictSeat(p, dt) {
     // gehört haben kann (Größenordnung RTT/2 + eine Snapshot-Periode).
     const c = Math.min(1, NET_PRED_CORRECT * dt);
     pr.x += (rawX - pr.x) * c;
-    if (perfNow() - (pr.jumpAt || -Infinity) > NET_PRED_JUMP_GRACE) pr.y += (rawY - pr.y) * c;
+    if (!inJumpGrace) pr.y += (rawY - pr.y) * c;
     pr.z += (rawZ - pr.z) * c;
   }
 
