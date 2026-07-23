@@ -5538,9 +5538,11 @@ let NET_INTERP = 0.05;
 // Jeden angegebenen Wert übernehmen (nicht still ignorieren), aber auf [30,300] ms
 // klemmen: unter ~30 ms bleibt vom 20-Hz-Puffer nichts, die Umwelt fängt an zu ruckeln.
 { const _ip = +new URLSearchParams(location.search).get('interp'); if (Number.isFinite(_ip) && _ip > 0) NET_INTERP = Math.max(0.03, Math.min(0.3, _ip / 1000)); }
-// Test/Diagnose: P2P abschalten -> alles läuft übers Relay (nur so greift die
-// künstliche Server-Latenz LAG, WebRTC ginge direkt an ihr vorbei).
-const netNoP2P = new URLSearchParams(location.search).get('nop2p') === '1';
+// P2P abschalten -> alles läuft übers Relay (stabiler, wenn WebRTC auf Mobil
+// "still stirbt"; und nur so greift die künstliche Server-Latenz LAG). Startwert aus
+// ?nop2p=1; der Host kann es zur Laufzeit im Raum-Menü umschalten (netToggleLobbySetting
+// 'p2p'), was auf den Clients ankommt und laufende Direktverbindungen kappt.
+let netNoP2P = new URLSearchParams(location.search).get('nop2p') === '1';
 // Test/Diagnose: net #1 (Umwelt-Einfrieren bei Unterlauf) abschalten -> A/B-Vergleich
 const netNoFreeze = new URLSearchParams(location.search).get('nofreeze') === '1';
 // Option A ist jetzt STANDARD: KEINE lokale Spielervorhersage. Die eigene Figur rendert
@@ -6738,7 +6740,13 @@ function netApplyEvent(m) {
     case 'lobbyset': { // Host stellt Regeln um — in der Lobby nur Anzeige, im
       // laufenden Spiel (Spiel-Menü des Hosts) werden sie sofort angewendet
       const s = m.s || {};
-      netLobbySettings = { dive: !!s.dive, stun: !!s.stun, snow: !!s.snow, sky: !!s.sky, punch: !!s.punch };
+      netLobbySettings = { dive: !!s.dive, stun: !!s.stun, snow: !!s.snow, sky: !!s.sky, punch: !!s.punch, p2p: s.p2p !== false };
+      // Transport (P2P) folgt dem Host in JEDEM Zustand, nicht nur im Spiel: schaltet
+      // der Host P2P ab, die eigene Direktverbindung kappen -> zurück aufs Relay.
+      if (netRole === 'client') {
+        const noP2P = s.p2p === false;
+        if (noP2P !== netNoP2P) { netNoP2P = noP2P; if (netNoP2P) netRtcCloseAll(); }
+      }
       if (netRole === 'client' && state !== 'menu') {
         diveAlways = netLobbySettings.dive;
         noStun = netLobbySettings.stun;
@@ -6863,7 +6871,7 @@ function updateNetPause() {
 
 // ---- Regeln in der Lobby (Host stellt ein, Clients sehen sie) ----
 // Die fünf online-relevanten Regeln, die der Host schon VOR dem Start setzen kann.
-const NET_SETTING_KEYS = ['dive', 'stun', 'snow', 'sky', 'punch'];
+const NET_SETTING_KEYS = ['dive', 'stun', 'snow', 'sky', 'punch', 'p2p'];
 function netLobbySettingLabel(key, v) {
   switch (key) {
     case 'dive':  return v ? '🤸 Hechtsprung: IMMER' : '🤸 Hechtsprung: nur mit 💎';
@@ -6871,12 +6879,14 @@ function netLobbySettingLabel(key, v) {
     case 'snow':  return v ? '❄️ Eiszonen: AN' : '🌤️ Eiszonen: AUS';
     case 'sky':   return v ? '☀️ Tag' : '🌙 Nacht';
     case 'punch': return v ? '🥊 Boxen: STUN' : '🥊 Boxen: NORMAL';
+    case 'p2p':   return v ? '📡 P2P: AN' : '📡 P2P: AUS (nur Relay)'; // Transport, keine Spielregel
   }
   return '';
 }
-// Aktuelle Regeln des Hosts als kompaktes Objekt (aus den lokalen Flags)
+// Aktuelle Regeln des Hosts als kompaktes Objekt (aus den lokalen Flags). p2p ist
+// Transport (P2P an = !netNoP2P), reist über denselben lobbyset-Kanal mit.
 function netLobbySettingsObj() {
-  return { dive: diveAlways, stun: noStun, snow: snowZones, sky: dayMode, punch: punchStun };
+  return { dive: diveAlways, stun: noStun, snow: snowZones, sky: dayMode, punch: punchStun, p2p: !netNoP2P };
 }
 let netLobbySettings = null; // vom Host empfangene Regeln (Client-Anzeige in der Lobby)
 function netBroadcastLobbySettings() {
@@ -6889,6 +6899,13 @@ function netToggleLobbySetting(key) {
   else if (key === 'snow') { snowZones = !snowZones; localStorage.setItem('runordie_snow', snowZones ? '1' : '0'); if (!snowZones && snowActive) endSnow(true); }
   else if (key === 'sky') { toggleDaySky(); }
   else if (key === 'punch') { punchStun = !punchStun; localStorage.setItem('runordie_punchStun', punchStun ? '1' : '0'); }
+  else if (key === 'p2p') {
+    netNoP2P = !netNoP2P; // Transport, keine Spielregel
+    // Beim Abschalten laufende Direktverbindungen kappen -> alles fällt sofort aufs
+    // Relay zurück. Beim Einschalten nutzen NEU verbundene Clients wieder P2P.
+    if (netNoP2P) netRtcCloseAll();
+    flashPad(netNoP2P ? '📡 P2P aus — nur Relay' : '📡 P2P an', '#4dd2ff');
+  }
   else return;
   netBroadcastLobbySettings();
   if (netUiOpen && netCode) netRenderLobby();
