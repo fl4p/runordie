@@ -6347,6 +6347,7 @@ function netStartReconnect() {
   netShowReconnect(true);
   netReconnectAttempt(0.4);
 }
+const NET_RECONNECT_ATTEMPT_TIMEOUT = 2.5; // s — s.u.
 function netReconnectAttempt(delay) {
   if (!netReconnect) return;                                   // abgebrochen (netResetState)
   if (perfNow() >= netReconnect.until) return netReconnectGiveUp();
@@ -6355,14 +6356,26 @@ function netReconnectAttempt(delay) {
   try { ws = new WebSocket(netWsUrl()); } catch { return netReconnectRetry(delay); }
   ws.binaryType = 'arraybuffer';
   netWs = ws;
+  // Eigenes Timeout je Versuch: ohne das kann ein hängender Verbindungsaufbau
+  // (Mobilfunk-Handover, Funkschlaf) Sekunden bis über eine Minute dauern, bevor
+  // der Browser selbst aufgibt — das until-Budget oben greift dann nie, weil es
+  // nur ZWISCHEN Versuchen geprüft wird, nie gegen einen laufenden. Beobachtet in
+  // Produktion: tries:1 bei 16s bzw. 96s Gesamtdauer (ein einziger hängender
+  // Versuch, kein Retry kam je zum Zug). Erzwingt zügige, mehrfache Retries
+  // innerhalb des bestehenden 10s-Budgets, statt es an einen Versuch zu verlieren.
+  const attemptTimer = setTimeout(() => {
+    if (netWs !== ws) return;
+    try { ws.close(); } catch { /* egal */ } // -> onclose -> netReconnectRetry
+  }, NET_RECONNECT_ATTEMPT_TIMEOUT * 1000);
   ws.onopen = () => {
+    clearTimeout(attemptTimer);
     netWsOpenedAt = perfNow();
     // Wiedereintritt in den laufenden Raum (rk umgeht den Lock beim Server)
     try { ws.send(JSON.stringify({ t: 'join', code: netCode, token: authToken || undefined, token2: (netMySeats.length === 2 && authToken2) ? authToken2 : undefined, seats: netMySeats.length, rk: netRkey || undefined })); }
     catch { try { ws.close(); } catch { /* egal */ } }
   };
   ws.onmessage = netOnMessage;
-  ws.onclose = (ev) => { if (netWs !== ws) return; netLastClose = String(ev.code || '?'); netWs = null; netReconnectRetry(delay); };
+  ws.onclose = (ev) => { clearTimeout(attemptTimer); if (netWs !== ws) return; netLastClose = String(ev.code || '?'); netWs = null; netReconnectRetry(delay); };
   ws.onerror = () => { /* onclose folgt */ };
 }
 function netReconnectRetry(delay) {
