@@ -5115,15 +5115,23 @@ function syncMeshes() {
       mesh.position.copy(body.position);
       mesh.quaternion.copy(body.quaternion);
     }
+  // Option A (?predict=0): die eigene Figur rendert um GENAU (NET_INTERP + Einweg)
+  // hinter der Gegenwart (die perfNow-Terme in tRender kürzen sich exakt weg). Die
+  // Hindernisse sind deterministisch (kinematisch), also die MESHES um dieselbe Zeit
+  // zurückspulen (Position minus Geschwindigkeit·Zeit) -> Figur und Wände zur selben
+  // Zeit gerendert, kein Clipping. Nur als Replik (Client/Testraum); der Host/Offline
+  // rendert die echte Gegenwart. rw=0 lässt den Normalpfad unverändert.
+  const rw = (!NET_PREDICT && (netRole === 'client' || netTest)) ? (NET_INTERP + netOneWay()) : 0;
   for (const o of obstacles) {
+    const v = o.body.velocity;
     if (o.wreck) {
       // Gestell steht bei x=0, nur der Arm rotiert
-      o.mesh.position.set(0, 0, o.body.position.z);
+      o.mesh.position.set(0, 0, o.body.position.z - v.z * rw);
       o.wreck.arm.rotation.z = o.wreck.angle;
       continue;
     }
     if (o.piston) {
-      o.mesh.position.set(o.body.position.x, 0, o.body.position.z);
+      o.mesh.position.set(o.body.position.x - v.x * rw, 0, o.body.position.z - v.z * rw);
       o.piston.block.position.y = o.body.position.y;
       const hovering = (o.piston.t % 2.75) < 1.2;
       o.piston.marker.material.opacity = hovering ? 0.22 + 0.16 * Math.sin(elapsed * 12) : 0.06;
@@ -5131,6 +5139,7 @@ function syncMeshes() {
     }
     if (o.instanced) continue; // TNT-Kisten: Matrizen schreibt updateBoomInstances
     o.mesh.position.copy(o.body.position);
+    if (rw) { o.mesh.position.x -= v.x * rw; o.mesh.position.z -= v.z * rw; }
     if (o.spin) o.mesh.children[0].rotation.x += o.spin * 0.016;
     else o.mesh.quaternion.copy(o.body.quaternion);
     if (o.pulse) o.mesh.material.emissiveIntensity = 0.75 + 0.45 * Math.sin(elapsed * 6);
@@ -5526,6 +5535,13 @@ const NET_INTERP = 0.12; // s Interpolationspuffer der Replik
 const netNoP2P = new URLSearchParams(location.search).get('nop2p') === '1';
 // Test/Diagnose: net #1 (Umwelt-Einfrieren bei Unterlauf) abschalten -> A/B-Vergleich
 const netNoFreeze = new URLSearchParams(location.search).get('nofreeze') === '1';
+// ?predict=0 -> Option A: KEINE lokale Spielervorhersage. Die eigene Figur rendert
+// exakt auf der Host-Wahrheit (interpoliert, ~NET_INTERP+RTT/2 verzögert) wie die
+// Fremden — und die (deterministischen) Hindernis-MESHES werden um GENAU dieselbe
+// Zeit zurückgespult (syncMeshes), sodass Figur und Wände immer zur selben Zeit
+// gerendert werden. Ergebnis: NIE Clipping, dafür ~1/5 s Eingabeverzögerung.
+// Default an (Vorhersage), damit sich für niemanden etwas ändert.
+const NET_PREDICT = new URLSearchParams(location.search).get('predict') !== '0';
 let netClipFrames = 0; // Test-Metrik: Client-Frames mit Torso IN einem Hindernis
 
 const myP = () => players[netRole ? netMySlot : 0];
@@ -6126,6 +6142,10 @@ function netPredictJump(p) {
 function netPredictSeat(p, dt) {
   const pr = p.pred;
   if (!pr) return;
+  // Option A (?predict=0): keine Vorhersage — die interpolierte Host-Pose (schon in
+  // den Bodies) bleibt stehen, kein Offset. Figur rendert exakt auf der Host-Wahrheit;
+  // syncMeshes spult die Wände um dieselbe Zeit zurück, damit nichts clippt.
+  if (!NET_PREDICT) { pr.offset = 0; return; }
   const t = p.torso;
   // Render-Basis: die (absichtlich um NET_INTERP verzögerte) interpolierte Pose,
   // dieselbe wie für Fremde — der Offset macht daraus "gerade eben" statt "vor
