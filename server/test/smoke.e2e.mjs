@@ -69,8 +69,8 @@ async function main() {
     // ---- 1. Menü lädt, alle interaktiven IDs vorhanden (Klick-Delegation/Redesign) ----
     let page = await freshPage(browser);
     const IDS = ['startsolo', 'startbot', 'startduo', 'startonline', 'divebtn', 'stunbtn',
-      'punchbtn', 'rushbtn', 'snowbtn', 'botdiffbtn', 'fpscapbtn', 'gpuprofbtn', 'sensrange',
-      'sensval', 'rotcambtn', 'padmapjump', 'padmappunch', 'padmaptackle', 'padmapghost', 'padmapreset'];
+      'punchbtn', 'rushbtn', 'snowbtn', 'laserkillbtn', 'botdiffbtn', 'fpscapbtn', 'gpuprofbtn',
+      'sensrange', 'sensval', 'rotcambtn', 'padmapjump', 'padmappunch', 'padmaptackle', 'padmapghost', 'padmapreset'];
     const idsPresent = await page.evaluate((ids) => {
       for (const d of document.querySelectorAll('#msg details')) d.open = true;
       return ids.filter((i) => !document.getElementById(i));
