@@ -426,7 +426,7 @@
           2× Springen = Doppelsprung · Hechtsprung braucht 💎<br>
           💥-Blöcke explodieren bei Berührung (Kettenreaktion!)<br>
           Rote Laser überspringen — mit der Zeit werden es mehr<br>
-          ❄️ Eiszonen machen die Fahrbahn spiegelglatt
+          🌦️ Wetter zieht auf: Eis (spiegelglatt), Nebel, Seitenwind oder Schlamm (zäh)
         </span>
       </span>
       <b class="mh">🃏 Alle Details: Power-ups, Spezialmoves &amp; Modi</b>
@@ -456,7 +456,7 @@
   <!-- Build-Kennung: Commit-Zeitpunkt (UTC), automatisch gestempelt vom pre-commit-
        Hook (.githooks/). Die folgende mver-Zeile bitte einzeilig lassen — der Hook
        ersetzt ihren Inhalt per sed anhand des Klassennamens. -->
-  <span class="mver">RUN OR DIE · v2026.07.23 · 20:58 UTC</span></div>
+  <span class="mver">RUN OR DIE · v2026.07.23 · 20:59 UTC</span></div>
 
 <script type="importmap">
 { "imports": {
@@ -1192,8 +1192,8 @@ function updateLanternGlow() {
   lampGlowMat.visible = on > 0.01; // Opacity 0 würde weiter rastern: bis ~36 additive 4x5-m-Quads Overdraw
 }
 
-// ---------- Eiszonen: Schnee-Sektoren mit spiegelglatter Fahrbahn ----------
-// Zieht periodisch auf: Schneefall, vereiste Bahn (kaum Grip), kalte Nebelstimmung.
+// ---------- Wetter: periodisch eine von vier Zonen (Eis/Nebel/Wind/Schlamm) ----------
+// Eis: Schneefall + vereiste Bahn (kaum Grip). Die anderen drei s. startWeather/updateWeather unten.
 function makeIceTexture() {
   const S = 512;
   const c = document.createElement('canvas');
@@ -1237,12 +1237,35 @@ function makeIceTexture() {
 const iceTex = makeIceTexture();
 iceTex.repeat.set(3.5, 14); // wie der Asphalt gekachelt
 
+// snowZones/snowActive sind der historisch gewachsene Name des generellen
+// Wetter-Schalters/-Status — er gilt inzwischen für alle vier Wetterarten
+// (snow/fog/wind/mud), nicht nur Schnee; weatherKind hält, welche gerade läuft.
 let snowZones = localStorage.getItem('runordie_snow') !== '0'; // Menü-Schalter
 let snowActive = false, nextSnowAt = 30, snowEndAt = 0;
-// Stufenlose Übergänge: snowLevel = Schneefall-Intensität, iceLevel = Vereisung
-// der Fahrbahn (hinkt dem Schnee etwas hinterher). Beide steuern Optik UND Grip.
-let snowLevel = 0, iceLevel = 0;
+let weatherKind = 'snow', windDir = 1;
+// Stufenlose Übergänge je Wetterart: snowLevel = Schneefall-Intensität, iceLevel =
+// Vereisung (hinkt dem Schnee etwas hinterher), fogLevel/windLevel/mudLevel analog
+// für die drei neuen Arten. Alle steuern Optik UND (außer fog) Grip/Bewegung.
+let snowLevel = 0, iceLevel = 0, fogLevel = 0, windLevel = 0, mudLevel = 0;
 const ICE_GRIP = 0.035; // Boden-Lenkfaktor bei Volleis (trocken: 0.28)
+const MUD_GRIP = 0.09;  // Boden-Lenkfaktor bei vollem Schlamm — träge statt rutschig
+const WIND_ACCEL = 3.2; // seitliche Beschleunigung bei vollem Wind (m/s²)
+const FOG_NORMAL = { near: 25, far: 70 };  // aus dem scene.fog-Konstruktor unten
+const FOG_ZONE = { near: 12, far: 34 };    // dichter Nebel bei voller Wetterzone
+const WEATHER_KINDS = ['snow', 'fog', 'wind', 'mud'];
+const WEATHER_MSG = {
+  snow: '❄️ EISZONE — die Fahrbahn friert zu!',
+  fog: '🌫️ NEBEL — die Sicht wird kürzer!',
+  wind: '💨 SEITENWIND — hält euch quer zur Bahn!',
+  mud: '🟤 SCHLAMM — die Bahn wird zäh!',
+};
+const WEATHER_END_MSG = {
+  snow: '☀️ Eiszone überstanden — die Bahn taut auf!',
+  fog: '☀️ Nebel überstanden — klare Sicht!',
+  wind: '☀️ Wind überstanden — ruhige Luft!',
+  mud: '☀️ Schlamm überstanden — feste Bahn!',
+};
+const WEATHER_COLOR = { snow: '#bfe8ff', fog: '#c9c9d4', wind: '#dff0ff', mud: '#c9a06b' };
 
 // Eis liegt als halbtransparente Schicht ÜBER dem Asphalt und blendet beim
 // Zufrieren ein — Fahrbahnstreifen und Graffiti schimmern durchs Eis
@@ -1305,40 +1328,53 @@ const snowLayers = [
   makeSnowLayer(260, 0.26, 0.95, 2.3, 3.6),
 ];
 
-function startSnow() {
+// kind/dir gesetzt = Replik übernimmt die Wahl des Hosts (kein eigener Zufall,
+// keine erneute Netz-Nachricht); ohne Argumente würfelt Host/Solo/Bot selbst.
+function startWeather(kind, dir) {
+  weatherKind = kind || WEATHER_KINDS[Math.floor(Math.random() * WEATHER_KINDS.length)];
+  if (weatherKind === 'wind') windDir = kind ? (dir || 1) : (Math.random() < 0.5 ? -1 : 1);
   snowActive = true;
   snowEndAt = elapsed + 18 + Math.random() * 8;
-  flashPad('❄️ EISZONE — die Fahrbahn friert zu!', '#bfe8ff');
-  playFrost();
-  if (netRole === 'host') netSendJson({ k: 'snow', on: 1 });
+  flashPad(WEATHER_MSG[weatherKind], WEATHER_COLOR[weatherKind]);
+  if (weatherKind === 'snow') playFrost();
+  if (!kind && netRole === 'host') netSendJson({ k: 'weather', kind: weatherKind, dir: windDir, on: 1 });
 }
 
-function endSnow(silent = false) {
+function endWeather(silent = false) {
   snowActive = false;
   nextSnowAt = elapsed + 35 + Math.random() * 20;
-  if (netRole === 'host') netSendJson({ k: 'snow', on: 0, silent: silent ? 1 : 0 });
+  if (netRole === 'host') netSendJson({ k: 'weather', on: 0, silent: silent ? 1 : 0 });
   if (silent) {
     // Runden-Reset / Menü: Zustand sofort trockenlegen statt auszublenden
-    snowLevel = iceLevel = 0;
+    snowLevel = iceLevel = fogLevel = windLevel = mudLevel = 0;
+    scene.fog.near = FOG_NORMAL.near; scene.fog.far = FOG_NORMAL.far;
     applyAtmosphere();
   } else {
-    flashPad('☀️ Eiszone überstanden — die Bahn taut auf!', '#e6edf3');
+    flashPad(WEATHER_END_MSG[weatherKind] ?? '☀️ Wetter überstanden!', '#e6edf3');
   }
 }
 
-function updateSnow(dt) {
-  if (state === 'playing' && netRole !== 'client') { // Replik: Schnee schaltet der Host
-    if (!snowActive && snowZones && elapsed >= nextSnowAt) startSnow();
-    else if (snowActive && elapsed >= snowEndAt) endSnow();
+function updateWeather(dt) {
+  if (state === 'playing' && netRole !== 'client') { // Replik: Wetter schaltet der Host
+    if (!snowActive && snowZones && elapsed >= nextSnowAt) startWeather();
+    else if (snowActive && elapsed >= snowEndAt) endWeather();
   }
 
-  // Schnee setzt langsam ein (~6 s bis zum Schneetreiben), klingt zügiger ab;
-  // das Eis bildet sich mit Verzögerung hinter dem Schneefall und taut nach
-  const prev = snowLevel + iceLevel;
+  // Jede Art setzt langsam ein (~6 s), klingt zügiger ab; das Eis bildet sich
+  // mit Verzögerung hinter dem Schneefall und taut nach. Nur die AKTIVE Art
+  // rampt zum Ziel hoch, alle anderen klingen (falls von zuvor noch > 0) ab.
+  const prev = snowLevel + iceLevel + fogLevel + windLevel + mudLevel;
   const target = snowActive ? 1 : 0;
-  snowLevel += (target - snowLevel) * Math.min(1, dt * (target ? 0.35 : 0.7));
+  const rampTo = (cur, tgt) => cur + (tgt - cur) * Math.min(1, dt * (tgt ? 0.35 : 0.7));
+  snowLevel = rampTo(snowLevel, weatherKind === 'snow' ? target : 0);
   iceLevel += (snowLevel - iceLevel) * Math.min(1, dt * 0.5);
-  if (Math.abs(snowLevel + iceLevel - prev) > 0.0004) applyAtmosphere();
+  fogLevel = rampTo(fogLevel, weatherKind === 'fog' ? target : 0);
+  windLevel = rampTo(windLevel, weatherKind === 'wind' ? target : 0);
+  mudLevel = rampTo(mudLevel, weatherKind === 'mud' ? target : 0);
+  if (Math.abs(snowLevel + iceLevel + fogLevel + windLevel + mudLevel - prev) > 0.0004) applyAtmosphere();
+
+  scene.fog.near = FOG_NORMAL.near - (FOG_NORMAL.near - FOG_ZONE.near) * fogLevel;
+  scene.fog.far = FOG_NORMAL.far - (FOG_NORMAL.far - FOG_ZONE.far) * fogLevel;
 
   iceOverlayMat.opacity = 0.85 * iceLevel;
   iceOverlayMat.visible = iceLevel > 0.01;
@@ -4622,9 +4658,13 @@ function botAct(p, bot) {
   const tz = Math.max(rushMode ? frontierZ + 2 : -4, Math.min(PLATFORM_Z_MAX - 1.2, bot.targetZ + bot.noiseZ * 0.4));
   let ex = tx - t.position.x, ez = tz - t.position.z;
   // Geschwindigkeits-Vorhalt (PD statt reinem P): bremst vor dem Ziel statt
-  // drüber hinauszuschießen — in der Luft (wenig Grip) und auf Eis stärker
-  const lead = !p.grounded ? 0.22 : iceLevel > 0.3 ? 0.35 : 0.10;
+  // drüber hinauszuschießen — in der Luft (wenig Grip), auf Eis und im
+  // Schlamm (beide senken denselben Grip-Wert k) stärker
+  const lead = !p.grounded ? 0.22 : (iceLevel > 0.3 || mudLevel > 0.3) ? 0.35 : 0.10;
   ex -= t.velocity.x * lead; ez -= t.velocity.z * lead;
+  // Seitenwind: gegen die Windrichtung vorhalten statt erst zu verwehen und
+  // dann hinterherzusteuern
+  if (windLevel > 0.15) ex -= windDir * windLevel * 1.2;
   p.padX += Math.abs(ex) < 0.12 ? 0 : Math.max(-1, Math.min(1, ex * d.gain));
   p.padZ += Math.abs(ez) < 0.12 ? 0 : Math.max(-1, Math.min(1, ez * d.gain));
 
@@ -4902,7 +4942,7 @@ function backToMenu() {
   // botMode bleibt wie soloMode stehen: so rendert der Menü-Hintergrund weiter
   // konsistent (Vollbild-Aspect); der nächste startGame() setzt beide neu
   $('touchui').classList.add('hidden');
-  if (snowActive) endSnow(true);
+  if (snowActive) endWeather(true);
   clearObstacles(); clearPowerups(); clearLasers(); clearRushTiles(); clearSharks();
   const m = $('msg');
   if (MENU_HTML) m.innerHTML = MENU_HTML;
@@ -4934,7 +4974,7 @@ function updateDiveBtn() {
     ? '🏃 Modus: RUSH (Bahn wächst nach vorn)'
     : '⚔️ Modus: DUELL (feste Bahn)';
   const sn = $('snowbtn');
-  if (sn) sn.textContent = snowZones ? '❄️ Eiszonen: AN' : '🌤️ Eiszonen: AUS';
+  if (sn) sn.textContent = snowZones ? '🌦️ Wetter: AN' : '🌤️ Wetter: AUS';
   const bb = $('botdiffbtn');
   if (bb) bb.textContent = `🤖 Bot-Stärke: ${BOT_LABELS[botDiff]}`;
   const fc = $('fpscapbtn');
@@ -5015,7 +5055,7 @@ document.addEventListener('click', (e) => {
   if (id === 'snowbtn') {
     snowZones = !snowZones;
     localStorage.setItem('runordie_snow', snowZones ? '1' : '0');
-    if (!snowZones && snowActive) endSnow(true); // laufende Eiszone sofort beenden
+    if (!snowZones && snowActive) endWeather(true); // laufendes Wetter sofort beenden
     updateDiveBtn();
   }
   if (id === 'botdiffbtn') {
@@ -5101,7 +5141,7 @@ function resetRound() {
   $('netpause')?.classList.add('hidden'); // Spiel-Overlay verdeckt sonst das Sieger-Banner
   clearObstacles(); clearPowerups(); clearLasers(); clearRushTiles(); clearSharks();
   elapsed = 0; spawnTimer = 1.2; puTimer = 4; sharkTimer = 6; firstDeathAt = 0; spawnCount = 0;
-  if (snowActive) endSnow(true);
+  if (snowActive) endWeather(true);
   nextSnowAt = 28 + Math.random() * 17;
   if (netRole === 'host') rosterSlots = [...netRoster]; // zwischenzeitlich Gegangene ausparken
   players.forEach((p, i) => { if (rosterSlots.includes(i)) unparkPlayer(p); else parkPlayer(p); });
@@ -5371,14 +5411,20 @@ function updatePlayer(p, dt) {
       const invuln = perfNow() < p.invulnUntil;
       if (invuln !== p.wasInvuln) { p.wasInvuln = invuln; updatePowerupHud(); }
       if (invuln) p.goldBubble.material.emissiveIntensity = 0.6 + 0.4 * Math.sin(elapsed * 10);
-      const spd = RUN_SPEED * (slowed ? 0.45 : 1);
-      // Vereisung: Grip sinkt stufenlos mit dem Eisgrad — bei Volleis rutscht
-      // die Figur fast ungebremst weiter
-      const k = p.grounded ? 0.28 + (ICE_GRIP - 0.28) * iceLevel : 0.07;
+      // Schlamm bremst zusätzlich die Höchstgeschwindigkeit (bis -40 % bei vollem Schlamm)
+      const spd = RUN_SPEED * (slowed ? 0.45 : 1) * (1 - mudLevel * 0.4);
+      // Vereisung: Grip sinkt stufenlos mit dem Eisgrad — bei Volleis rutscht die
+      // Figur fast ungebremst weiter. Schlamm zieht denselben Grip-Wert zäher
+      // in Richtung MUD_GRIP (träge statt rutschig, weniger extrem als Volleis)
+      const k = p.grounded
+        ? 0.28 + (ICE_GRIP - 0.28) * iceLevel + (MUD_GRIP - 0.28) * mudLevel
+        : 0.07;
       if (!p.tackling) { // während der Grätsche rutscht man ungebremst
         t.velocity.x += (dx * spd - t.velocity.x) * k;
         t.velocity.z += (dz * spd - t.velocity.z) * k;
       }
+      if (p.conveyorVx) t.velocity.x += p.conveyorVx * dt; // Förderband schiebt zusätzlich
+      if (windLevel > 0.01) t.velocity.x += windDir * WIND_ACCEL * windLevel * dt; // Seitenwind, immer (auch in der Luft)
 
       // Schwebe-Feder hält den Torso auf Laufhöhe
       if (p.grounded && perfNow() > p.jumpLock) {
@@ -5740,7 +5786,7 @@ function animate() {
     }
   }
   updateFx(dt);
-  updateSnow(dt);
+  updateWeather(dt);
   netRecTick(dt);
   $('btnBug').classList.toggle('hidden', !netRec.length || (state !== 'playing' && state !== 'roundEnd'));
 
@@ -6593,10 +6639,23 @@ function netPredictSeat(p, dt) {
     const len = Math.hypot(dx, dz);
     if (len > 1) { dx /= len; dz /= len; }
     const slowed = perfNow() < p.slowUntil;
-    const spd = RUN_SPEED * (slowed ? 0.45 : 1);
-    const k = grounded ? 0.28 + (ICE_GRIP - 0.28) * iceLevel : 0.07;
+    const spd = RUN_SPEED * (slowed ? 0.45 : 1) * (1 - mudLevel * 0.4);
+    const k = grounded
+      ? 0.28 + (ICE_GRIP - 0.28) * iceLevel + (MUD_GRIP - 0.28) * mudLevel
+      : 0.07;
     pr.vx += (dx * spd - pr.vx) * k;
     pr.vz += (dz * spd - pr.vz) * k;
+    if (windLevel > 0.01) pr.vx += windDir * WIND_ACCEL * windLevel * dt;
+    if (grounded) { // Förderband: derselbe Fußabdruck-Check wie in updatePlayer
+      for (const o of obstacles) {
+        if (!o.conveyor) continue;
+        const b = o.body, half = b.shapes[0].halfExtents;
+        if (Math.abs(pr.z - b.position.z) < half.z + 0.3 && Math.abs(pr.x - b.position.x) < half.x + 0.3) {
+          pr.vx += o.conveyor.vx * dt;
+          break;
+        }
+      }
+    }
     // Schwebe-Feder nur außerhalb des Jump-Locks — sonst liest der Raycast direkt
     // nach dem Sprung noch "grounded" (Position hat sich ja noch nicht bewegt) und
     // klemmt vy in genau dem Frame wieder auf ~0, in dem JUMP_V gerade gesetzt wurde
@@ -7153,7 +7212,7 @@ function netApplyEvent(m) {
       if (netRole === 'client' && state !== 'menu') {
         diveAlways = netLobbySettings.dive;
         noStun = netLobbySettings.stun;
-        if (snowZones !== netLobbySettings.snow) { snowZones = netLobbySettings.snow; if (!snowZones && snowActive) endSnow(true); }
+        if (snowZones !== netLobbySettings.snow) { snowZones = netLobbySettings.snow; if (!snowZones && snowActive) endWeather(true); }
         dayMode = netLobbySettings.sky;
         punchStun = netLobbySettings.punch;
         if (netLobbySettings.cam !== rotMode) toggleRotMode(false); // 🎥 Kamera-Regel live (in-memory)
@@ -7166,7 +7225,7 @@ function netApplyEvent(m) {
       (m.segIds || []).forEach((sid, i) => { if (segs[i]) segs[i].netId = sid; });
       return;
     }
-    case 'snow': m.on ? startSnow() : endSnow(!!m.silent); return;
+    case 'weather': m.on ? startWeather(m.kind, m.dir) : endWeather(!!m.silent); return;
     case 'fx': netApplyFx(m); return;
   }
 }
@@ -7281,7 +7340,7 @@ function netLobbySettingLabel(key, v) {
   switch (key) {
     case 'dive':  return v ? '🤸 Hechtsprung: IMMER' : '🤸 Hechtsprung: nur mit 💎';
     case 'stun':  return v ? '💫 Stun: AUS (nur Schieben)' : '💫 Stun: AN';
-    case 'snow':  return v ? '❄️ Eiszonen: AN' : '🌤️ Eiszonen: AUS';
+    case 'snow':  return v ? '🌦️ Wetter: AN' : '🌤️ Wetter: AUS';
     case 'sky':   return v ? '☀️ Tag' : '🌙 Nacht';
     case 'punch': return v ? '🥊 Boxen: STUN' : '🥊 Boxen: NORMAL';
     case 'cam':   return v ? '🎥 Kamera: DREHBAR' : '🎥 Kamera: FEST';
@@ -7302,7 +7361,7 @@ function netToggleLobbySetting(key) {
   if (netMySlot !== 0) return; // nur der Host darf umstellen
   if (key === 'dive') { diveAlways = !diveAlways; localStorage.setItem('runordie_diveAlways', diveAlways ? '1' : '0'); }
   else if (key === 'stun') { noStun = !noStun; localStorage.setItem('runordie_noStun', noStun ? '1' : '0'); }
-  else if (key === 'snow') { snowZones = !snowZones; localStorage.setItem('runordie_snow', snowZones ? '1' : '0'); if (!snowZones && snowActive) endSnow(true); }
+  else if (key === 'snow') { snowZones = !snowZones; localStorage.setItem('runordie_snow', snowZones ? '1' : '0'); if (!snowZones && snowActive) endWeather(true); }
   else if (key === 'sky') { toggleDaySky(); }
   else if (key === 'punch') { punchStun = !punchStun; localStorage.setItem('runordie_punchStun', punchStun ? '1' : '0'); }
   else if (key === 'cam') { toggleRotMode(); } // 🎥 freie Kamera — setzt yaw/Torso mit zurück + speichert
@@ -8507,7 +8566,7 @@ function renderProfReport(d, opts = {}) {
 }
 
 // Debug-Hook für automatisierte Tests
-window.__game = { players, obstacles, powerups, world, cams, sky, fxRings, lasers, sharks, renderer, spawnShark, spawnLaser, spawnPowerup, spawnWave, toggleDaySky, toggleRotMode, camTarget, startSnow, endSnow, runGpuProfile, cpuBuf, analyzeLiveFrames, renderProfReport,
+window.__game = { players, obstacles, powerups, world, cams, sky, fxRings, lasers, sharks, renderer, spawnShark, spawnLaser, spawnPowerup, spawnWave, toggleDaySky, toggleRotMode, camTarget, startWeather, endWeather, runGpuProfile, cpuBuf, analyzeLiveFrames, renderProfReport,
   startGame, backToMenu, invariants: botInvariants,
   // sticky-Bots überleben Menü-Starts — abschalten mit setBot(i, null)
   setBot: (i, diff) => { botCtl[i] = diff ? makeBot(diff, true) : null; },
@@ -8518,6 +8577,8 @@ window.__game = { players, obstacles, powerups, world, cams, sky, fxRings, laser
   get botMode() { return botMode; }, get elapsed() { return elapsed; },
   get snowActive() { return snowActive; }, get snowLevel() { return snowLevel; }, get iceLevel() { return iceLevel; },
   get snowZones() { return snowZones; },
+  get weatherKind() { return weatherKind; }, get fogLevel() { return fogLevel; },
+  get windLevel() { return windLevel; }, get mudLevel() { return mudLevel; },
   // Online-Modus (Test-Harness): Lobby steuern und Netz-Zustand einsehen
   netShowOnlineMenu, netCreateRoom, netJoinRoom, netStartOnline, netLeave, netShowStats, netShowPublicRooms,
   get netPublicRooms() { return netPublicRooms.slice(); }, get netIsPublic() { return netIsPublic; },
