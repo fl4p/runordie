@@ -7483,8 +7483,11 @@ function netJoinRoom(code) {
 // um den Render-Overlay herum gesichert und wiederhergestellt. So lässt sich die
 // Interpolation/Vorhersage (Ruckeln, Gummiband, Wandkollision) solo erleben.
 let netTest = false;
-const NET_TEST_PING = 120;    // ms simuliertes RTT (Anzeige)
-const NET_TEST_ONEWAY = 0.06; // s Einweg-Verzögerung der Snapshots (RTT/2)
+// ?lag=<ms> simuliertes RTT im Testraum, Standard 0 (kein Extra-Delay = reines
+// Loopback, snappigstes Gefühl). Einweg = RTT/2 verzögert die Snapshot-Zustellung
+// (und speist netOneWay() für den Wand-Rückspul-Ausgleich). Auf [0,2000] geklemmt.
+const NET_TEST_PING = Math.max(0, Math.min(2000, +new URLSearchParams(location.search).get('lag') || 0)); // ms RTT (Anzeige)
+const NET_TEST_ONEWAY = NET_TEST_PING / 2000; // ms RTT -> s Einweg (RTT/2)
 const netLoopQ = [];          // {t, snap} — verzögerte Host-Snapshots (In-Page-Loopback)
 let netTestSnapAt = 0;
 function netStartTestRoom() {
