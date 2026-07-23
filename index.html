@@ -5531,10 +5531,12 @@ function netActPush(slot, a) {
 const netSnaps = [];     // decodierte Snapshots für die Interpolation
 // Interpolationspuffer der Replik. Von 0.12 auf 0.08 gesenkt: er dominiert die Eingabe-
 // verzögerung unter Option A; 0.08 = 1.6 Snapshot-Perioden (20 Hz) puffern noch Jitter,
-// sparen aber ~40 ms Lag. Per ?interp=<ms> (20–300) justierbar — stottert es auf einer
-// ruckeligen Verbindung, hochsetzen; für minimale Latenz runter (Risiko: Umwelt-Ruckler).
+// sparen aber ~40 ms Lag. Per ?interp=<ms> justierbar (auf [30,300] geklemmt) — stottert
+// es auf einer ruckeligen Verbindung, hochsetzen; für minimale Latenz runter (Ruckel-Risiko).
 let NET_INTERP = 0.08;
-{ const _ip = +new URLSearchParams(location.search).get('interp'); if (_ip >= 20 && _ip <= 300) NET_INTERP = _ip / 1000; }
+// Jeden angegebenen Wert übernehmen (nicht still ignorieren), aber auf [30,300] ms
+// klemmen: unter ~30 ms bleibt vom 20-Hz-Puffer nichts, die Umwelt fängt an zu ruckeln.
+{ const _ip = +new URLSearchParams(location.search).get('interp'); if (Number.isFinite(_ip) && _ip > 0) NET_INTERP = Math.max(0.03, Math.min(0.3, _ip / 1000)); }
 // Test/Diagnose: P2P abschalten -> alles läuft übers Relay (nur so greift die
 // künstliche Server-Latenz LAG, WebRTC ginge direkt an ihr vorbei).
 const netNoP2P = new URLSearchParams(location.search).get('nop2p') === '1';
