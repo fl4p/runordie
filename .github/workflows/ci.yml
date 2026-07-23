@@ -1,0 +1,49 @@
+# CI für das RUN OR DIE Backend: Unit- und E2E-Tests bei jedem Push/PR.
+# Das Spiel-Frontend (index.html) liegt auf GitHub Pages; hier läuft nur der
+# Server-Code (Relay + Konten-API) samt seiner Test-Suiten.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # better-sqlite3 ist ein natives Modul -> npm ci baut es. ws + playwright-core
+      # (devDependency) kommen mit.
+      - name: Install deps
+        run: npm ci
+
+      # Playwright-Chromium (+ Systembibliotheken) installieren. Die CLI-Version an
+      # die installierte playwright-core binden, damit die Chromium-Revision zu
+      # chromium.executablePath() passt (sonst zeigt der Fallback ins Leere).
+      - name: Install Chromium
+        run: npx --yes playwright@"$(node -p "require('playwright-core/package.json').version")" install --with-deps chromium
+
+      - name: Unit tests (db + seats)
+        run: npm run test:unit
+
+      - name: Smoke — frontend features (index.html)
+        run: npm run test:smoke
+
+      - name: E2E — reconnect
+        run: npm run test:e2e
+
+      - name: E2E — online (accounts, rooms, presence, settings, seats, kick)
+        run: npm run test:online
+
+      - name: E2E — latency (LAG=100)
+        run: npm run test:latency

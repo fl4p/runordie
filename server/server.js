@@ -12,12 +12,12 @@ import { randomUUID } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import { handleApi } from './api.js';
 import { userForToken, recordOnline } from './db.js';
+import { MAX_PLAYERS, roomClientSockets, usedSlots, freeSlots, seatCount, seatName } from './seats.js';
 
 const PORT = +(process.env.PORT || 8080);
 const LAG = +(process.env.LAG || 0); // ms künstliche Einweg-Latenz (Latenz-Tests)
 const JITTER = +(process.env.JITTER || 0); // ms zufälliger Zuschlag auf LAG (Jitter-Tests)
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const MAX_PLAYERS = 4;
 const MAX_CONNS = +(process.env.MAX_CONNS || 500); // Gesamt-Verbindungslimit
 const JOIN_BURST = 20;      // erlaubte create/join-Versuche …
 const JOIN_WINDOW_MS = 10000; // … pro Socket in diesem Fenster (gegen Code-Brute-Force)
@@ -137,26 +137,7 @@ function clearOnline(ws) {
 // gemischt mit Online). ws.slots hält ihre absoluten Raum-Slots; ws.slot bleibt der
 // erste davon (Host-Erkennung: slot===0). r.clients bildet JEDEN Client-Slot -> ws ab
 // (bei 2 Sitzen zeigen zwei Keys auf dieselbe ws).
-const roomClientSockets = (room) => new Set(room.clients.values()); // dedupliziert 2-Sitz-Clients
-function usedSlots(room) {
-  const used = new Set(room.host.slots || []);
-  for (const s of room.clients.keys()) used.add(s);
-  return used;
-}
-function freeSlots(room, n) {
-  const used = usedSlots(room);
-  const out = [];
-  for (let s = 0; s < MAX_PLAYERS && out.length < n; s++) if (!used.has(s)) out.push(s);
-  return out.length === n ? out : null;
-}
-const seatCount = (msg) => (msg.seats | 0) === 2 ? 2 : 1;
-// Anzeigename je Sitz einer Verbindung: Sitz 0 = Erstkonto, Sitz 1 = eigenes
-// Zweitkonto, falls angemeldet — sonst die ②-Markierung des Erstkontos.
-function seatName(ws, i) {
-  if (i === 0) return ws.user ? ws.user.username : null;
-  if (ws.user2) return ws.user2.username;
-  return ws.user ? ws.user.username + ' ②' : null;
-}
+// Sitzplatz-/Raum-Helfer sind nach seats.js ausgelagert (unit-getestet).
 
 function newCode() {
   for (let tries = 0; tries < 50; tries++) {

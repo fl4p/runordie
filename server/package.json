@@ -10,8 +10,12 @@
     "errors": "node errors.js",
     "bugreports": "node bugreports.js",
     "netlog": "node netlog.js",
+    "test:unit": "node --test test/db.unit.mjs test/seats.unit.mjs",
     "test:e2e": "node test/reconnect.e2e.mjs",
-    "test:latency": "node test/latency.e2e.mjs"
+    "test:latency": "node test/latency.e2e.mjs",
+    "test:online": "node test/online.e2e.mjs",
+    "test:smoke": "node test/smoke.e2e.mjs",
+    "test": "npm run test:unit && npm run test:smoke && npm run test:e2e && npm run test:online && npm run test:latency"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",

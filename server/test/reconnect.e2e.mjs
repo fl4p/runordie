@@ -9,7 +9,7 @@
 // Braucht `playwright-core` (devDependency) + ein installiertes Chromium. Der
 // Standardpfad passt zum Playwright-Cache dieses Rechners; per CHROMIUM=… ändern.
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,8 +19,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER = join(HERE, '..', 'server.js');
 const PORT = +(process.env.PORT || 8390);
 const BASE = `http://localhost:${PORT}/`;
-const CHROMIUM = process.env.CHROMIUM ||
-  '/home/fab/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome';
+const HARDCODED = '/home/fab/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome';
+const CHROMIUM = process.env.CHROMIUM || (existsSync(HARDCODED) ? HARDCODED : chromium.executablePath());
 const ARGS = ['--use-gl=swiftshader', '--enable-unsafe-swiftshader', '--mute-audio',
   '--autoplay-policy=no-user-gesture-required', '--disable-background-timer-throttling',
   '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding'];

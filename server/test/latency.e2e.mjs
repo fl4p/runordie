@@ -7,7 +7,7 @@
 //   npm run test:latency         (aus dem server/-Verzeichnis)
 //   CHROMIUM=/pfad/zu/chrome npm run test:latency
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,8 +18,8 @@ const SERVER = join(HERE, '..', 'server.js');
 const PORT = +(process.env.PORT || 8395);
 const LAG = +(process.env.LAG || 100);
 const BASE = `http://localhost:${PORT}/`;
-const CHROMIUM = process.env.CHROMIUM ||
-  '/home/fab/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome';
+const HARDCODED = '/home/fab/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome';
+const CHROMIUM = process.env.CHROMIUM || (existsSync(HARDCODED) ? HARDCODED : chromium.executablePath());
 const ARGS = ['--use-gl=swiftshader', '--enable-unsafe-swiftshader', '--mute-audio',
   '--autoplay-policy=no-user-gesture-required', '--disable-background-timer-throttling',
   '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding'];
