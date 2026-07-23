@@ -6084,15 +6084,16 @@ function netApplySnapshots() {
 // noch gar nicht kennt).
 const NET_PRED_CORRECT = 6;  // 1/s Angleichrate an die Host-Position (exponentiell)
 const NET_PRED_SNAP = 2.5;   // m — katastrophaler Ausreißer, alle Achsen (Runde/Reconnect/Tod) hart resyncen
-// Ungemodelltes Ereignis (Schubs/Schild-Block/Grätschen-Schleuder/Hindernis-Stun —
-// von hier aus nicht vorhergesagt): eng und SOFORT zurücksetzen statt über hunderte
-// ms weich nachzuziehen — ein kurzer sichtbarer Sprung schlägt spürbar falsches
-// Stehen ("von etwas getroffen, dem ich ausgewichen bin"). Getrennt von Y: ein
-// vorhergesagter Sprung führt LEGITIM weit vor rawY her, bis der Host-Sprung im
-// Snapshot ankommt — ein gemeinsamer Skalar-Snap würde jeden Sprung zurückreißen.
+// Ungemodelltes HORIZONTALES Ereignis (Schubs/Schild-Block/Grätschen-Schleuder/
+// Hindernis-Stun — von hier aus nicht vorhergesagt): eng und SOFORT zurücksetzen
+// statt über hunderte ms weich nachzuziehen — ein kurzer sichtbarer Sprung schlägt
+// spürbar falsches Stehen ("von etwas getroffen, dem ich ausgewichen bin"). NUR
+// horizontal: ein vorhergesagter Sprung führt die GESAMTE Flugzeit legitim vor rawY
+// her (viel länger als das 0.2s-Grace) — ein Y-Snap ließ ihn strobend zum Boden
+// zurückreißen. Vertikale Ausreißer deckt der 2.5m-Katastrophenfall + die weiche
+// Y-Korrektur ab (== Verhalten vor der Snap-Einführung, das nie ruckelte).
 const NET_PRED_SNAP_H = 0.6; // m — horizontale Abweichung (x/z)
-const NET_PRED_SNAP_V = 0.8; // m — vertikale Abweichung AUSSERHALB des Sprung-Grace
-const NET_PRED_JUMP_GRACE = 0.2; // s nach einem vorhergesagten Sprung: Y-Korrektur/-Snap pausiert
+const NET_PRED_JUMP_GRACE = 0.2; // s nach einem vorhergesagten Sprung: Y-Korrektur pausiert
 
 // Frischeste ROHE (nicht auf Renderzeit interpolierte) Torso-Pose eines Slots aus
 // dem Snapshot-Puffer — als Korrektur-Ziel besser als die um NET_INTERP verzögerte
@@ -6141,13 +6142,10 @@ function netPredictSeat(p, dt) {
     if (Math.hypot(pr.x - rawX, pr.y - rawY, pr.z - rawZ) > NET_PRED_SNAP) {
       // Katastrophaler Ausreißer: alle Achsen hart zurück
       pr.x = rawX; pr.y = rawY; pr.z = rawZ; pr.vx = pr.vy = pr.vz = 0;
-    } else {
-      if (Math.hypot(pr.x - rawX, pr.z - rawZ) > NET_PRED_SNAP_H) {
-        pr.x = rawX; pr.z = rawZ; pr.vx = 0; pr.vz = 0;
-      }
-      if (!inJumpGrace && Math.abs(pr.y - rawY) > NET_PRED_SNAP_V) {
-        pr.y = rawY; pr.vy = 0;
-      }
+    } else if (Math.hypot(pr.x - rawX, pr.z - rawZ) > NET_PRED_SNAP_H) {
+      // Nur horizontal snappen (s. Kommentar an NET_PRED_SNAP_H) — Y bleibt der
+      // weichen Korrektur überlassen, damit vorhergesagte Sprünge nicht ruckeln.
+      pr.x = rawX; pr.z = rawZ; pr.vx = 0; pr.vz = 0;
     }
 
     _rayFrom.set(pr.x, pr.y, pr.z);
@@ -6211,6 +6209,37 @@ function netPredictSeat(p, dt) {
     pr.x += (rawX - pr.x) * c;
     if (!inJumpGrace) pr.y += (rawY - pr.y) * c;
     pr.z += (rawZ - pr.z) * c;
+
+    // Entpenetration als LETZTER Schritt: die weiche Korrektur oben zieht pr blind
+    // Richtung Host-Wahrheit (RTT-alt) und ist NICHT kollisionsgeprüft — sie kann
+    // die eigene Figur in eine Gegenwarts-Wand (E) hineinziehen, obwohl der
+    // Hindernis-Scan das aktive Hineinlaufen längst gestoppt hat. Darum zum Schluss
+    // den Torso aus jedem überlappenden Hindernis auf die nächste horizontale Fläche
+    // schieben (Y macht die Schwebe-Feder/Boden), damit die gerenderte Figur nie
+    // sichtbar in der Wand steckt. Auf der Kontaktachse die einwärts gerichtete
+    // Relativgeschwindigkeit kappen — sonst drückt die Korrektur nächsten Frame gleich
+    // wieder rein und es zittert an der Fläche.
+    for (const o of obstacles) {
+      const b = o.body;
+      if (b.isJumpPad) continue;
+      const he = b.shapes[0]?.halfExtents;
+      if (!he) continue;
+      const dxp = pr.x - b.position.x, dyp = pr.y - b.position.y, dzp = pr.z - b.position.z;
+      const penX = he.x + 0.3 - Math.abs(dxp);
+      const penY = he.y + 0.9 - Math.abs(dyp);
+      const penZ = he.z + 0.3 - Math.abs(dzp);
+      if (penX > 0 && penY > 0 && penZ > 0) {
+        if (penX <= penZ) {
+          const s = dxp < 0 ? -1 : 1;
+          pr.x = b.position.x + s * (he.x + 0.3);
+          if ((pr.vx - b.velocity.x) * s < 0) pr.vx = b.velocity.x;
+        } else {
+          const s = dzp < 0 ? -1 : 1;
+          pr.z = b.position.z + s * (he.z + 0.3);
+          if ((pr.vz - b.velocity.z) * s < 0) pr.vz = b.velocity.z;
+        }
+      }
+    }
   }
 
   const ox = pr.x - authX, oy = pr.y - authY, oz = pr.z - authZ;
