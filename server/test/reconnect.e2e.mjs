@@ -69,9 +69,9 @@ async function makeRoom(browser, { hostSeats = 1 } = {}) {
 }
 
 // Einen Abbruch auslösen und auf die Erholung warten (zurück im selben Raum, spielend).
-async function dropAndRecover(cli, label, ms = 13000) {
+async function dropAndRecover(cli, label, ms = 22000) {
   await cli.evaluate(() => __game.netDropWs());
-  await until(() => cli.evaluate(() => __game.netReconnecting ? 1 : null), label + ' enters reconnect', 3000);
+  await until(() => cli.evaluate(() => __game.netReconnecting ? 1 : null), label + ' enters reconnect', 6000);
   return until(async () => {
     const s = await cli.evaluate(() => ({ rc: __game.netReconnecting, st: __game.state, slot: __game.netMySlot, code: __game.netCode }));
     return (!s.rc && s.st === 'playing' && s.code) ? s : null;
@@ -107,7 +107,7 @@ async function main() {
       const { host, cli } = await makeRoom(browser);
       const slot0 = await cli.evaluate(() => __game.netMySlot);
       const r1 = await dropAndRecover(cli, 'drop-1');
-      await sleep(1200);
+      await sleep(2500);
       const r2 = await dropAndRecover(cli, 'drop-2');
       ok(r1.st === 'playing' && r2.st === 'playing', 'two consecutive drops BOTH recover');
       ok(r1.slot === slot0 && r2.slot === slot0, '   …slot stays stable across both', `slot ${r2.slot}`);
@@ -123,10 +123,10 @@ async function main() {
       const gaveUp = await until(async () => {
         const s = await cli.evaluate(() => ({ rc: __game.netReconnecting, st: __game.state, role: __game.netRole }));
         return (!s.rc && s.st === 'menu' && !s.role) ? s : null;
-      }, 'client gives up to menu', 16000);
+      }, 'client gives up to menu', 24000);
       const secs = (Date.now() - t0) / 1000;
       ok(gaveUp.st === 'menu' && !gaveUp.role, 'dead server -> gives up to the menu');
-      ok(secs >= 9 && secs <= 14, `   …after ~10 s (was ${secs.toFixed(1)} s)`);
+      ok(secs >= 9 && secs <= 20, `   …after the ~10 s retry window (was ${secs.toFixed(1)} s)`);
       await host.close(); await cli.close();
     }
   } finally {

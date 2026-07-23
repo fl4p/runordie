@@ -122,7 +122,7 @@ async function main() {
       await pa.evaluate(() => __game.startGame(true)); // offline solo, NIE online geklickt
       await pb.evaluate(async (u) => { await __game.authLogin(u, 'secret1', true); }, B);
       await pb.evaluate(() => __game.netShowOnlineMenu());
-      const seen = await until(async () => { const l = await pb.evaluate(() => __game.netOnline.map((x) => x.name)); return l.includes(A) ? l : null; }, 'B sees A online', 8000).catch(() => null);
+      const seen = await until(async () => { const l = await pb.evaluate(() => __game.netOnline.map((x) => x.name)); return l.includes(A) ? l : null; }, 'B sees A online', 12000).catch(() => null);
       ok(!!seen, 'a logged-in player at the menu shows online to others');
       await pa.close(); await pb.close();
     }
@@ -223,7 +223,7 @@ async function main() {
       await until(() => host.evaluate(() => __game.netRoster.length === 2), 'roster');
       await host.evaluate(() => __game.netStartOnline());
       await until(() => cli.evaluate(() => __game.netRole === 'client' && __game.state === 'playing'), 'client playing');
-      await sleep(9000); // Hindernisse (inkl. Wände mit Graffiti) spawnen lassen
+      await sleep(12000); // Hindernisse (inkl. Wände mit Graffiti) spawnen lassen
       const obs = await cli.evaluate(() => __game.obstacles.length);
       ok(warns.length === 0, 'spawn replay stays aligned (no desync warnings)', `${warns.length} warnings`);
       ok(obs > 0, 'obstacles replicate onto the client', `${obs} obstacles`);

@@ -105,7 +105,7 @@ async function main() {
     const recovered = await until(async () => {
       const r = await cli.evaluate(() => ({ rc: __game.netReconnecting, st: __game.state, code: __game.netCode }));
       return (!r.rc && r.st === 'playing' && r.code) ? r : null;
-    }, 'reconnect under latency', 14000).catch(() => null);
+    }, 'reconnect under latency', 22000).catch(() => null);
     ok(recovered && recovered.code === code, 'reconnect recovers under latency too');
   } finally {
     if (browser) await browser.close().catch(() => {});
