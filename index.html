@@ -6087,6 +6087,12 @@ function netApplySnapshots() {
 }
 
 // ---- Client-Vorhersage: eigene Figur(en) sofort auf Eingaben reagieren lassen ----
+// STATUS: seit "Option A ist jetzt STANDARD" (s. NET_PREDICT weiter unten) auf dem
+// Standardpfad TOTER CODE — netPredictSeat gibt sofort zurück (pr.offset=0), sobald
+// NET_PREDICT false ist (Default). Bleibt erhalten für den Vergleich per ?predict=1
+// (reaktiver, kann in Wände clippen) gegen den Standard (kein Clipping, mehr Lag,
+// s. syncMeshes' Wand-Rückspulung). Bei Änderungen an dieser Funktion beide Pfade
+// testen — ?predict=1 ist kein totes Feature, nur nicht mehr voreingestellt.
 // Bisher kam JEDE Spielerpose — auch die eigene — nur aus interpolierten Snapshots
 // (~RTT + 120 ms Puffer), das machte Laufen/Springen/Ausweichen spürbar träge und
 // ließ die eigene Figur wie durch Hindernisse "phasen", bis die Korrektur eintraf.
