@@ -453,9 +453,10 @@
     </span>
   </details>
   <span class="mkeys">⌨️ 1 = Einzelspieler · 2 = Gegen Bot · beliebige Taste = 2 Spieler · ESC = Menü</span>
-  <!-- Build-Kennung: Datum + Commit-Kurz-SHA (Stand des Builds). Format bewusst
-       einzeilig, damit ein Deploy-Stempel (sed/CI) genau diese Zeile ersetzen kann. -->
-  <span class="mver">RUN OR DIE · v2026.07.23 · 76395a0</span></div>
+  <!-- Build-Kennung: Commit-Zeitpunkt (UTC). Wird vom pre-commit-Hook (.githooks/)
+       automatisch gestempelt — diese eine Zeile bitte einzeilig lassen (der Hook
+       ersetzt genau <span class="mver">RUN OR DIE · v2026.07.23 · 20:11 UTC</span> per sed). -->
+  <span class="mver">RUN OR DIE · v2026.07.23 · 20:11 UTC</span></div>
 
 <script type="importmap">
 { "imports": {

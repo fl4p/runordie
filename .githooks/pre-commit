@@ -1,0 +1,13 @@
+#!/bin/sh
+# Build-Kennung im Menü (.mver) automatisch mit dem Commit-Zeitpunkt (UTC) stempeln,
+# damit die angezeigte Version nie veraltet (der hand-gesetzte Datumsstring lag sonst
+# regelmäßig einen Tag daneben). Läuft nur, wenn index.html Teil des Commits ist —
+# ändert sich die ausgelieferte Seite nicht, bleibt auch die Version stehen.
+# DEFENSIV: darf einen Commit unter keinen Umständen blockieren (immer exit 0).
+git diff --cached --name-only 2>/dev/null | grep -qx 'index.html' || exit 0
+grep -q 'class="mver"' index.html 2>/dev/null || exit 0
+D=$(date -u +%Y.%m.%d 2>/dev/null); T=$(date -u +%H:%M 2>/dev/null)
+[ -n "$D" ] || exit 0
+STAMP="RUN OR DIE · v${D} · ${T} UTC"
+sed -i "s|<span class=\"mver\">[^<]*</span>|<span class=\"mver\">${STAMP}</span>|" index.html 2>/dev/null && git add index.html 2>/dev/null
+exit 0
