@@ -4592,7 +4592,7 @@ function backToMenu() {
   if (MENU_HTML) m.innerHTML = MENU_HTML;
   m.style.color = '';
   m.classList.remove('hidden');
-  if (netTest) { netTest = false; netTestBuf.length = 0; for (let i = 1; i < botCtl.length; i++) if (botCtl[i]?.sticky) botCtl[i] = null; } // Testraum beenden
+  if (netTest) { netTest = false; netLoopQ.length = 0; netSnaps.length = 0; netMySeats = [0]; for (let i = 1; i < botCtl.length; i++) if (botCtl[i]?.sticky) botCtl[i] = null; } // Testraum beenden
   updateDiveBtn();
   applySoloLayout(); // Steuer-Labels/Scorebar nach Online-Runden zurücksetzen
   netEnsurePresence(); // angemeldet? -> schon im Hauptmenü online/einladbar sein
@@ -5203,7 +5203,6 @@ function animate() {
 
   pollGamepads();
   applyTouchInput();
-  netTestDelayInput(); // Testraum: lokale Bewegung um das simulierte Ping verzögern
   updateBots();
   netTick(dt); // Online: Host wendet Client-Eingaben an, Client posiert die Replik
 
@@ -5357,6 +5356,7 @@ function animate() {
   }
 
   syncMeshes();
+  netTestOverlay(dt); // Testraum: Spieler über echten Client-Netcode (Interpolation+Vorhersage) rendern
   updateCam(cams[0], netRole ? netSeat(0) : player1, dt);
   if ((!soloMode && !botMode && !netRole) || netSplit()) updateCam(cams[1], netRole ? netSeat(1) : player2, dt);
 
@@ -7249,16 +7249,22 @@ function netJoinRoom(code) {
 }
 
 // Testraum (Code "TEST"): eine LOKALE Partie gegen 2 Bots, KEIN Server — aber mit
-// simuliertem 120-ms-Ping, damit sich das Online-Gefühl (verzögerte Steuerung)
-// solo ausprobieren/testen lässt. Deine Bewegungseingaben werden um die Ping-Zeit
-// verzögert angewandt (genau wie eine Aktion, die erst zum Host und zurück muss).
+// simuliertem 120-ms-Ping, das den ECHTEN Client-Netcode fährt. Der Sim läuft
+// autoritativ (wie ein Host), erzeugt 20-Hz-Snapshots in eine In-Page-Loopback-
+// Warteschlange (verzögert = RTT/2), und die SPIELER werden über genau den echten
+// Client-Pfad gerendert: netApplySnapshots (Interpolation) + netApplyPrediction
+// (eigene Figur). Damit der autoritative Sim ungestört bleibt, werden die Bodies
+// um den Render-Overlay herum gesichert und wiederhergestellt. So lässt sich die
+// Interpolation/Vorhersage (Ruckeln, Gummiband, Wandkollision) solo erleben.
 let netTest = false;
-const NET_TEST_PING = 120;          // ms simuliertes Ping
-const netTestBuf = [];              // Eingabepuffer {t, keys, padX, padZ} für die Verzögerung
+const NET_TEST_PING = 120;    // ms simuliertes RTT (Anzeige)
+const NET_TEST_ONEWAY = 0.06; // s Einweg-Verzögerung der Snapshots (RTT/2)
+const netLoopQ = [];          // {t, snap} — verzögerte Host-Snapshots (In-Page-Loopback)
+let netTestSnapAt = 0;
 function netStartTestRoom() {
   ensureAudio();
   netTest = true;
-  netTestBuf.length = 0;
+  netLoopQ.length = 0; netSnaps.length = 0; netTestSnapAt = 0; netMySeats = [0];
   soloMode = false; botMode = true; // Bot-Duell-Layout: Vollbild-Kamera auf den Menschen
   botCtl[1] = makeBot('hard', true); // sticky: überleben Rundenwechsel
   botCtl[2] = makeBot('hard', true);
@@ -7269,17 +7275,35 @@ function netStartTestRoom() {
   $('msg').classList.add('hidden');
   $('touchui').classList.toggle('hidden', !isTouch);
   resetRound();
-  flashPad(`🧪 Testraum · 2 Bots · ~${NET_TEST_PING} ms simuliertes Ping`, '#4dd2ff');
+  flashPad(`🧪 Testraum · 2 Bots · ~${NET_TEST_PING} ms Ping (echter Netcode)`, '#4dd2ff');
 }
-// Bewegungseingabe des lokalen Spielers um NET_TEST_PING verzögert anwenden.
-function netTestDelayInput() {
+const netTestEncodePose = (p) => { const a = []; for (const { body } of p.parts) a.push(body.position.x, body.position.y, body.position.z, body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w); return a; };
+const netTestSaveBodies = () => players.map((p) => p.parked ? null : p.parts.map(({ body }) => [body.position.x, body.position.y, body.position.z, body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w]));
+function netTestRestoreBodies(saved) {
+  for (let i = 0; i < players.length; i++) {
+    const s = saved[i]; if (!s) continue;
+    const parts = players[i].parts;
+    for (let j = 0; j < parts.length; j++) { const b = parts[j].body, v = s[j]; b.position.set(v[0], v[1], v[2]); b.quaternion.set(v[3], v[4], v[5], v[6]); }
+  }
+}
+// Nach syncMeshes() aufgerufen: die Spieler-Meshes über den echten Client-Pfad neu posieren.
+function netTestOverlay(dt) {
   if (!netTest || state !== 'playing') return;
-  const p = player1, now = perfNow();
-  netTestBuf.push({ t: now, f: p.keys.f, b: p.keys.b, l: p.keys.l, r: p.keys.r, px: p.padX, pz: p.padZ });
-  const cutoff = now - NET_TEST_PING / 1000;
-  while (netTestBuf.length > 1 && netTestBuf[1].t <= cutoff) netTestBuf.shift();
-  const d = netTestBuf[0];
-  if (d) { p.keys.f = d.f; p.keys.b = d.b; p.keys.l = d.l; p.keys.r = d.r; p.padX = d.px; p.padZ = d.pz; }
+  const now = perfNow();
+  if (now - netTestSnapAt >= 0.05) { // 20 Hz Host-Snapshots in die Loopback-Queue
+    netTestSnapAt = now;
+    netLoopQ.push({ t: now, snap: { tHost: now, arrived: 0, players: activePlayers().map((p) => ({ slot: p.id - 1, pose: netTestEncodePose(p) })) } });
+  }
+  while (netLoopQ.length && netLoopQ[0].t <= now - NET_TEST_ONEWAY) { // verzögert zustellen
+    const s = netLoopQ.shift().snap; s.arrived = now;
+    if (!netSnaps.length || s.tHost > netSnaps[netSnaps.length - 1].tHost) { netSnaps.push(s); if (netSnaps.length > 24) netSnaps.shift(); }
+  }
+  if (!netSnaps.length) return;
+  const saved = netTestSaveBodies();   // autoritative Bodies sichern
+  netApplySnapshots();                 // ECHTE Interpolation (Bots + Basis der eigenen Figur)
+  netApplyPrediction(dt);              // ECHTE Vorhersage der eigenen Figur (Slot 0)
+  for (const p of players) { if (p.parked) continue; for (const { body, mesh } of p.parts) { mesh.position.copy(body.position); mesh.quaternion.copy(body.quaternion); } }
+  netTestRestoreBodies(saved);         // Bodies zurück -> Sim läuft ungestört weiter
 }
 
 // Offline-Spielbarkeit: Service Worker cacht das Spiel samt CDN-Modulen.
