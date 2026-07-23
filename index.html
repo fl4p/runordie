@@ -3103,7 +3103,12 @@ const cams = [makeCam(), makeCam()];
 
 const _camScratch = new THREE.Vector3(); // updateCam läuft 1-2x pro Frame
 function updateCam(cam, p, dt) {
-  const t = p.torso.position;
+  // Der TORSO-MESH-Position folgen, nicht dem Body: syncMeshes() spiegelt Body->Mesh
+  // vor jedem updateCam, also überall identisch — AUSSER im Testraum-Overlay, wo das
+  // Mesh die Client-Sicht (interpoliert+vorhergesagt) zeigt, während der Body schon
+  // auf autoritativ zurückgesetzt wurde. So folgt die Kamera der gerenderten Figur
+  // (springt mit) statt dem autoritativen Sprung (Kamera hoch, Ragdoll unten).
+  const t = p.parts[0].mesh.position;
   const k = 1 - Math.exp(-6 * dt);
   if (rotMode) {
     // Gedämpftes Rig: Yaw und Ankerpunkt werden GEMEINSAM geglättet, Position und
@@ -3755,6 +3760,7 @@ function tryPunch(p) {
 
 function tryJump(p) {
   if (netRole === 'client') { netAct('jump', netSeatIndexOf(p)); netPredictJump(p); return; } // Aktion entscheidet der Host, lokal nur sofortiges Feedback
+  if (netTest && p === player1) netPredictJump(p); // Testraum: Sprung auch der Client-Vorhersage melden (echter Sprung folgt unten)
   if (!p.alive || p.ragdoll || p.tackling || state !== 'playing') return;
   // Hängend: jede Sprungtaste zieht ein Stück hoch, oben angekommen -> über die Kante stemmen
   if (p.hanging) {
