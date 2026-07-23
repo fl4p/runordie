@@ -6131,24 +6131,30 @@ function netPredictSeat(p, dt) {
       ? Math.max(-6, Math.min(6, (RIDE_HEIGHT - _rayRes.distance) * 14))
       : pr.vy + GRAVITY * dt;
 
-    // Grobe Wand-Kollision je Achse (kurzer Raycast in Bewegungsrichtung): bei
-    // Treffer die Geschwindigkeit des getroffenen Körpers übernehmen statt hart
-    // auf 0 zu setzen — vereint "Wand blockt" (Geschwindigkeit ~0) und "Schieber/
-    // Walze schiebt mich" (Geschwindigkeit ungleich 0) in einer Regel; Haie zählen
-    // mit (selbe Kollisionsgruppe), keine echte Kontakt-/Gelenkphysik nötig
-    if (Math.abs(pr.vx) > 0.01) {
-      _rayFrom.set(pr.x, pr.y + 0.15, pr.z);
-      _rayTo.set(pr.x + Math.sign(pr.vx) * (Math.abs(pr.vx) * dt + 0.32), pr.y + 0.15, pr.z);
-      _rayRes.reset();
-      world.raycastClosest(_rayFrom, _rayTo, { collisionFilterMask: GROUP.OBST, skipBackfaces: true }, _rayRes);
-      if (_rayRes.hasHit && !_rayRes.body?.isJumpPad) pr.vx = _rayRes.body.velocity.x;
-    }
-    if (Math.abs(pr.vz) > 0.01) {
-      _rayFrom.set(pr.x, pr.y + 0.15, pr.z);
-      _rayTo.set(pr.x, pr.y + 0.15, pr.z + Math.sign(pr.vz) * (Math.abs(pr.vz) * dt + 0.32));
-      _rayRes.reset();
-      world.raycastClosest(_rayFrom, _rayTo, { collisionFilterMask: GROUP.OBST, skipBackfaces: true }, _rayRes);
-      if (_rayRes.hasHit && !_rayRes.body?.isJumpPad) pr.vz = _rayRes.body.velocity.z;
+    // Grobe Kollision je Achse: RELATIVE Schließgeschwindigkeit zum Hindernis
+    // prüfen, nicht nur die eigene Bewegung — sonst reagiert ein STEHENDER (oder
+    // quer laufender) Spieler gar nicht auf ein heranrauschendes Hindernis
+    // (Schieber/Walze/Hai): pr.vx/vz bleiben ~0, kein Raycast feuert, und das
+    // Hindernis fährt in der Vorhersage einfach durch die eingefrorene Figur,
+    // bis Minuten später die Host-Korrektur eintrifft. Bei Kontakt diesen Frame
+    // die Geschwindigkeit des Hindernisses übernehmen statt hart auf 0 zu setzen
+    // — vereint "Wand blockt" und "Schieber/Walze schiebt mich" in einer Regel;
+    // Haie zählen mit (selbe Kollisionsgruppe). Direkter Hindernis-Scan statt
+    // Raycast: die Liste wird ohnehin nur einmal durchlaufen, kein Zwischenschritt
+    // über world.raycastClosest nötig.
+    for (const o of obstacles) {
+      const b = o.body;
+      if (b.isJumpPad) continue;
+      const he = b.shapes[0]?.halfExtents;
+      if (!he || Math.abs(pr.y - b.position.y) > he.y + 0.9) continue;
+      const relVx = pr.vx - b.velocity.x;
+      if (Math.abs(relVx) > 0.01 &&
+          Math.abs((pr.x + relVx * dt) - b.position.x) < he.x + 0.32 &&
+          Math.abs(pr.z - b.position.z) < he.z + 0.32) pr.vx = b.velocity.x;
+      const relVz = pr.vz - b.velocity.z;
+      if (Math.abs(relVz) > 0.01 &&
+          Math.abs((pr.z + relVz * dt) - b.position.z) < he.z + 0.32 &&
+          Math.abs(pr.x - b.position.x) < he.x + 0.32) pr.vz = b.velocity.z;
     }
 
     pr.x += pr.vx * dt;
