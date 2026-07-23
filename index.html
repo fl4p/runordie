@@ -441,7 +441,7 @@
   <details class="mpanel"><summary>⚙️ Einstellungen</summary>
     <span class="pbody">
       <span class="sgh">🎲 Spielregeln</span>
-      <button id="divebtn"></button><button id="stunbtn"></button><button id="punchbtn"></button><button id="rushbtn"></button><button id="snowbtn"></button><button id="laserkillbtn"></button><button id="botdiffbtn"></button>
+      <button id="divebtn"></button><button id="stunbtn"></button><button id="punchbtn"></button><button id="rushbtn"></button><button id="snowbtn"></button><button id="botdiffbtn"></button>
       <span class="sgh">🎥 Ansicht</span>
       <button id="rotcambtn"></button>
       <span class="sgh">🖥️ Grafik &amp; System</span>
@@ -2513,8 +2513,7 @@ function updateLasers(dt) {
           playDeflect();
           continue;
         }
-        if (laserKill) killPlayer(p); // "Laser sofort tödlich"-Modus
-        else enterRagdoll(p, hitStun(0.8));
+        enterRagdoll(p, hitStun(0.8));
         for (const { body } of p.parts) {
           // Sanfterer Schub nach hinten: +4 warf die Figur aus der Bahnmitte
           // fast garantiert über die Hinterkante
@@ -3786,22 +3785,6 @@ function tryPunch(p) {
 function tryJump(p) {
   if (netRole === 'client') { netAct('jump', netSeatIndexOf(p)); netPredictJump(p); return; } // Aktion entscheidet der Host, lokal nur sofortiges Feedback
   if (netTest && p === player1) netPredictJump(p); // Testraum: Sprung auch der Client-Vorhersage melden (echter Sprung folgt unten)
-  // Ragdoll-Rand-Rettung: wer im Ragdoll an/über der Bahnkante hängt (weggeboxt/
-  // gegrätscht), zieht sich mit der Sprungtaste zurück auf die Bahn — sonst kann
-  // man nach einem Wegschub gar nichts tun (Bug-Report #7). Knappes Fenster:
-  // nur nahe der Kante, nicht zu tief gefallen, mit Cooldown gegen Dauer-Rettung.
-  if (p.alive && p.ragdoll && state === 'playing') {
-    const t = p.torso.position;
-    const overEdge = Math.abs(t.x) > PLATFORM_HALF_W - 0.5 && Math.abs(t.x) < PLATFORM_HALF_W + 4;
-    if (overEdge && t.y > -5 && t.z > PLATFORM_Z_MIN - 3 && t.z < PLATFORM_Z_MAX + 8 && perfNow() > (p.rescueCd || 0)) {
-      p.rescueCd = perfNow() + 0.5;
-      exitRagdoll(p);
-      for (const { body } of p.parts) { body.position.y = Math.max(body.position.y, 0.6); body.velocity.set(-Math.sign(t.x) * 6, 7, body.velocity.z * 0.3); }
-      p.jumps = 1;
-      playJump(2);
-      return;
-    }
-  }
   if (!p.alive || p.ragdoll || p.tackling || state !== 'playing') return;
   // Hängend: jede Sprungtaste zieht ein Stück hoch, oben angekommen -> über die Kante stemmen
   if (p.hanging) {
@@ -4531,7 +4514,6 @@ let elapsed = 0, spawnTimer = 0, puTimer = 0, sharkTimer = 6, roundEndAt = 0, fi
 let soloMode = false;
 let diveAlways = localStorage.getItem('runordie_diveAlways') === '1';
 let noStun = localStorage.getItem('runordie_noStun') === '1';
-let laserKill = localStorage.getItem('runordie_laserKill') === '1'; // Laser töten sofort statt zu stunnen
 // Stun-Box-Modus: Schläge haben doppelten Cooldown, werfen den Getroffenen
 // dafür deutlich länger um (echter Stun statt kurzem Umkippen)
 let punchStun = localStorage.getItem('runordie_punchStun') === '1';
@@ -4682,8 +4664,6 @@ function updateDiveBtn() {
   if (s) s.textContent = noStun
     ? '💫 Hindernis-Stun: AUS (nur Schieben)'
     : '💫 Hindernis-Stun: AN';
-  const lk = $('laserkillbtn');
-  if (lk) lk.textContent = laserKill ? '⚡ Laser: SOFORT TÖDLICH' : '⚡ Laser: Stun (Standard)';
   const pb = $('punchbtn');
   if (pb) pb.textContent = punchStun
     ? '🥊 Boxen: STUN (längerer Cooldown, Treffer stunnt)'
@@ -4754,11 +4734,6 @@ document.addEventListener('click', (e) => {
   if (id === 'stunbtn') {
     noStun = !noStun;
     localStorage.setItem('runordie_noStun', noStun ? '1' : '0');
-    updateDiveBtn();
-  }
-  if (id === 'laserkillbtn') {
-    laserKill = !laserKill;
-    localStorage.setItem('runordie_laserKill', laserKill ? '1' : '0');
     updateDiveBtn();
   }
   if (id === 'punchbtn') {
@@ -5553,16 +5528,20 @@ function netApplyPong(ts) {
 // Timeout weiter ins tote P2P und der Empfänger bliebe so lange eingefroren.
 function netP2PProbe() {
   const now = perfNow();
+  // Erst prüfen, wenn BEIDE Kanäle offen sind: sonst könnte in der winzigen Lücke,
+  // in der 'fast' schon offen ist aber 'rel' (das im Menü/Lobby via Ping/Pong das
+  // Lebenszeichen liefert) noch nicht, fälschlich ein gesunder Peer gekappt werden.
+  // Silent Death lässt ohnehin beide readyState='open' — die Bedingung schwächt nichts ab.
   if (netRole === 'host') {
     for (const slot of Object.keys(netPeers)) {
       const peer = netPeers[slot];
-      if (peer?.fast?.readyState === 'open' && now - (peer.lastRecv || 0) > NET_P2P_TIMEOUT) {
+      if (peer?.fast?.readyState === 'open' && peer?.rel?.readyState === 'open' && now - (peer.lastRecv || 0) > NET_P2P_TIMEOUT) {
         if (netWs?.readyState === 1) netWs.send(JSON.stringify({ k: 'p2pdrop', to: +slot }));
         netRtcClose(slot);
         flashPad(`📡 Direktverbindung zu Spieler ${+slot + 1} tot — Relay übernimmt`, '#ffd23d');
       }
     }
-  } else if (netPeer && netPeer.fast?.readyState === 'open' && now - (netPeer.lastRecv || 0) > NET_P2P_TIMEOUT) {
+  } else if (netPeer && netPeer.fast?.readyState === 'open' && netPeer.rel?.readyState === 'open' && now - (netPeer.lastRecv || 0) > NET_P2P_TIMEOUT) {
     if (netWs?.readyState === 1) netWs.send(JSON.stringify({ k: 'p2pdrop' })); // Relay stempelt 'from'
     try { netPeer.pc.close(); } catch { /* egal */ }
     netPeer = null;
@@ -6757,8 +6736,10 @@ function netOnMessage(ev) {
 function netApplyEvent(m) {
   switch (m.k) {
     case 'pong': if (m.to === netMySlot) netApplyPong(m.ts); return; // Ping-Echo (Relay)
-    case 'p2pdrop': // Host meldet tote P2P -> eigene Direktverbindung kappen, Relay übernimmt
-      if (netPeer) { try { netPeer.pc.close(); } catch { /* egal */ } netPeer = null; }
+    case 'p2pdrop': // Host meldet MEINE tote P2P -> eigene Direktverbindung kappen, Relay übernimmt.
+      // m.to-Filter zwingend: das Relay broadcastet Host-JSON an ALLE Clients (wie bei 'pong'),
+      // ohne ihn würde der Ausfall EINES Clients allen anderen die gesunde P2P mit-kappen.
+      if (m.to === netMySlot && netPeer) { try { netPeer.pc.close(); } catch { /* egal */ } netPeer = null; }
       return;
     case 'lobby':
       netRoster = netSanitizeRoster(m.roster) || netRoster;
