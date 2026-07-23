@@ -74,7 +74,11 @@ async function makeRoom(browser, { hostSeats = 1 } = {}) {
 // Einen Abbruch auslösen und auf die Erholung warten (zurück im selben Raum, spielend).
 async function dropAndRecover(cli, label, ms = 22000) {
   await cli.evaluate(() => __game.netDropWs());
-  await until(() => cli.evaluate(() => __game.netReconnecting ? 1 : null), label + ' enters reconnect', 6000);
+  // NICHT auf den flüchtigen netReconnecting=true-Zustand pochen: bei schnellem
+  // Reconnect rutscht er zwischen zwei Polls durch (auf ausgelasteten CI-Runnern
+  // erst recht). Kurz propagieren lassen (onclose -> netStartReconnect), dann die
+  // eigentliche Invariante prüfen — wieder im selben Raum, spielend.
+  await sleep(1000);
   return until(async () => {
     const s = await cli.evaluate(() => ({ rc: __game.netReconnecting, st: __game.state, slot: __game.netMySlot, code: __game.netCode }));
     return (!s.rc && s.st === 'playing' && s.code) ? s : null;
