@@ -456,7 +456,7 @@
   <!-- Build-Kennung: Commit-Zeitpunkt (UTC), automatisch gestempelt vom pre-commit-
        Hook (.githooks/). Die folgende mver-Zeile bitte einzeilig lassen — der Hook
        ersetzt ihren Inhalt per sed anhand des Klassennamens. -->
-  <span class="mver">RUN OR DIE · v2026.07.23 · 20:12 UTC</span></div>
+  <span class="mver">RUN OR DIE · v2026.07.23 · 20:58 UTC</span></div>
 
 <script type="importmap">
 { "imports": {
@@ -1851,6 +1851,18 @@ const texConcrete = concreteTex();
 texHazard.repeat.set(1.6, 1);
 texConcrete.repeat.set(3, 1.2);
 
+// Förderband-Pfeile: zeigen die Schubrichtung des Fließbands an
+const texArrow = canvasTex(128, 64, (g, w, h) => {
+  g.fillStyle = '#1c2b33'; g.fillRect(0, 0, w, h);
+  g.fillStyle = '#4dd2ff';
+  for (const y0 of [4, 36]) {
+    g.beginPath();
+    g.moveTo(14, y0 + 4); g.lineTo(58, y0 + 12); g.lineTo(14, y0 + 20);
+    g.lineTo(26, y0 + 12); g.closePath(); g.fill();
+  }
+});
+texArrow.repeat.set(3, 1);
+
 // Material mit pro-Hindernis gekachelter Textur (Klon wird beim Entfernen disposed)
 // Textur-Klone gecacht: jeder Klon ist eine eigene GPU-Textur samt Mipmap-
 // Upload beim ersten Draw — bislang mehrere Uploads pro Welle mitten im
@@ -1881,6 +1893,10 @@ const obstacles = [];
 const obstMats = {
   sweeper: new THREE.MeshStandardMaterial({ map: texHazard, roughness: 0.5 }),
   roller: new THREE.MeshStandardMaterial({ map: texConcrete, roughness: 0.7 }),
+  gate: new THREE.MeshStandardMaterial({ color: 0x3a4048, emissive: 0xff2545, emissiveIntensity: 0.25, roughness: 0.45, metalness: 0.5 }),
+  conveyor: new THREE.MeshStandardMaterial({ map: texArrow, emissive: 0x1a6a8c, emissiveMap: texArrow, emissiveIntensity: 0.5, roughness: 0.5 }),
+  turret: new THREE.MeshStandardMaterial({ color: 0x2a2f38, emissive: 0xff2545, emissiveIntensity: 0.3, roughness: 0.4, metalness: 0.4 }),
+  dart: new THREE.MeshStandardMaterial({ color: 0xff3030, emissive: 0xff2020, emissiveIntensity: 0.8, roughness: 0.3, metalness: 0.6 }),
 };
 
 function addObstBody(shape, pos, mat, geo, instanced = false) {
@@ -1912,10 +1928,10 @@ function addObstBody(shape, pos, mat, geo, instanced = false) {
 // den Gewichts-Grenzen einen anderen Hindernis-Typ bauen (Geister-Hindernisse)
 function spawnObstacle(speed, barWeight = Math.max(0, 1 - elapsed / 30) * 2) {
   // Rot-weiße Latten werden mit der Zeit seltener und kommen ab 30 s gar nicht mehr
-  const r = Math.random() * (barWeight + 3);
+  const r = Math.random() * (barWeight + 5);
   const type = r < barWeight
     ? 'bar'
-    : ['wall', 'sweeper', 'roller'][Math.min(2, Math.floor(r - barWeight))];
+    : ['wall', 'sweeper', 'roller', 'strobe', 'gate'][Math.min(4, Math.floor(r - barWeight))];
 
   if (type === 'bar') {
     // Niedrige Latte über die volle Breite -> drüberspringen
@@ -1955,9 +1971,41 @@ function spawnObstacle(speed, barWeight = Math.max(0, 1 - elapsed / 30) * 2) {
     );
     o.sweep = { amp: PLATFORM_HALF_W - 2.2, omega: 1.1 + Math.random() * 0.7, phase: Math.random() * Math.PI * 2 };
     o.body.velocity.set(0, 0, speed);
-  } else {
+  } else if (type === 'roller') {
     spawnRoller(speed, spawnFrontZ);
+  } else if (type === 'strobe') {
+    spawnStrobeWall(speed);
+  } else {
+    spawnGate(speed);
   }
+}
+
+// ---------- Blinkwand: flackert im Takt zwischen solide und passierbar ----------
+function spawnStrobeWall(speed) {
+  const H = 1.6;
+  const o = addObstBody(
+    new CANNON.Box(new CANNON.Vec3(PLATFORM_HALF_W, H, 0.3)),
+    new CANNON.Vec3(0, H, spawnFrontZ),
+    tiledMat(texHazard, PLATFORM_HALF_W / 2, (H * 2) / 1.6, { transparent: true }),
+    new THREE.BoxGeometry(PLATFORM_HALF_W * 2, H * 2, 0.6)
+  );
+  o.body.velocity.set(0, 0, speed);
+  // solide (onDur) <-> passierbar (offDur), Phase zufällig versetzt; die letzten
+  // 0.35 s der passierbaren Phase flackern als Vorwarnung, bevor sie hart wird
+  o.strobe = { onDur: 1.0 + Math.random() * 0.5, offDur: 1.2 + Math.random() * 0.6, phase: Math.random() * 10 };
+}
+
+// ---------- Drehschranke: rotierender Arm, Lücke wandert mit der Drehung ----------
+function spawnGate(speed) {
+  const armLen = PLATFORM_HALF_W * 1.85, armH = 0.85, armT = 0.4;
+  const o = addObstBody(
+    new CANNON.Box(new CANNON.Vec3(armLen / 2, armH, armT / 2)),
+    new CANNON.Vec3(0, armH, spawnFrontZ),
+    obstMats.gate,
+    new THREE.BoxGeometry(armLen, armH * 2, armT)
+  );
+  o.body.velocity.set(0, 0, speed);
+  o.gate = { armLen, angVel: (Math.random() < 0.5 ? 1 : -1) * (0.9 + Math.random() * 0.5), phase: Math.random() * Math.PI * 2 };
 }
 
 // Rollende Walze über die volle Breite (einzeln und als Walzen-Trio in spawnWave)
@@ -2111,7 +2159,8 @@ function explodeBlock(o) {
 // Stampfer und keine dicken Tunnelsegmente (he.z > 0.8)
 function breachTarget(body) {
   const o = obstacles.find((ob) => ob.body === body);
-  if (!o || o.boom || o.sweep || o.spin || o.wreck || o.piston || o.instanced || body.isJumpPad) return null;
+  if (!o || o.boom || o.sweep || o.spin || o.wreck || o.piston || o.instanced || body.isJumpPad ||
+      o.gate || o.chute || o.pfloor || o.conveyor || o.turret) return null;
   const he = body.shapes[0]?.halfExtents;
   if (!he || he.y < 0.5 || he.x < 1.1 || he.z > 0.8) return null;
   return o;
@@ -2777,7 +2826,9 @@ function spawnBoomBlock(x, y, z, speed) {
 }
 
 function spawnWave(speed) {
-  const roll = Math.random();
+  // Skala >1: die bestehenden Formationen (0.09-0.86, Tunnel bis 1.0) behalten
+  // ihr GENAUES relatives Gewicht, die vier neuen teilen sich den Rest (1.0-1.4)
+  const roll = Math.random() * 1.4;
   if (roll < 0.09) { spawnWrecker(speed); return; }
   if (roll < 0.18) { spawnPiston(speed); return; }
   if (roll < 0.27) {
@@ -2897,7 +2948,9 @@ function spawnWave(speed) {
     pad.body.isObstacle = false; // Pad stunnt nicht
     pad.body.isJumpPad = true;
     pad.pulse = true;
-  } else {
+    return;
+  }
+  if (roll < 1.0) {
     // Tunnel: Betondach + Pfeiler mit 2 Durchgängen; oben drüber geht per Doppelsprung
     const zHalf = 2, pillarH = 1.1, roofH = 0.35, roofY = pillarH * 2 + roofH;
     const roof = addObstBody(
@@ -2922,7 +2975,122 @@ function spawnWave(speed) {
       );
       pillar.body.velocity.set(0, 0, speed);
     }
+    return;
   }
+  if (roll < 1.1) {
+    // DRUCKPLATTEN-FELD: mehrere Platten versetzt über die Breite — wer drauf
+    // steht, muss weiter, bevor sie nach kurzer Verzögerung hochschnellt
+    const lanes = [-5, -1.7, 1.7, 5];
+    for (let i = 0; i < 3; i++) {
+      const x = lanes[Math.floor(Math.random() * lanes.length)];
+      spawnPressureFloor(x, spawnFrontZ + i * 3.4, speed);
+    }
+    return;
+  }
+  if (roll < 1.2) {
+    // FÖRDERBAND: breite, flache Platte schiebt seitlich — Gegensteuern nötig
+    const vx = (Math.random() < 0.5 ? -1 : 1) * (3.5 + Math.random() * 2);
+    spawnConveyor(vx, speed);
+    return;
+  }
+  if (roll < 1.3) {
+    // ENGSTELLE: zwei Wände schieben sich beim Anrollen von außen zusammen
+    spawnChute(speed);
+    return;
+  }
+  // GESCHÜTZTURM: lädt sichtbar auf und schießt dann einen schnellen Pfeil
+  // eine feste Spur entlang
+  spawnTurret(speed);
+}
+
+// ---------- Druckplatte: senkt sich unter Last, schnellt nach kurzer Verzögerung hoch ----------
+// Nutzt exakt den Arm-per-Kontakt-Mechanismus der TNT-Kisten (spawnBoomBlock),
+// nur ohne Kettenreaktion/Explosion — das Auslösen entfernt sie über denselben
+// {k:'explode', id}-Netzweg wie eine gezündete Kiste.
+function spawnPressureFloor(x, z, speed) {
+  const o = addObstBody(
+    new CANNON.Box(new CANNON.Vec3(1.5, 0.12, 1.5)),
+    new CANNON.Vec3(x, 0.12, z),
+    tiledMat(texHazard, 1.6, 1.6),
+    new THREE.BoxGeometry(3, 0.24, 3)
+  );
+  o.body.isObstacle = false; // Betreten stunnt nicht, nur das Auslösen
+  o.body.velocity.set(0, 0, speed);
+  o.pfloor = { armed: false, popAt: 0 };
+  o.body.addEventListener('collide', (e) => {
+    if (o.pfloor.armed) return;
+    if (e.body.collisionFilterGroup & GROUP.PALL) {
+      o.pfloor.armed = true;
+      o.pfloor.popAt = perfNow() + 0.55;
+    }
+  });
+  return o;
+}
+
+function popPressureFloor(o) {
+  const pos = o.body.position;
+  playPunchMiss(); // kurzes "Wusch" als Auslöse-Cue
+  const R = 2.0;
+  for (const p of players) {
+    if (!p.alive || perfNow() < p.invulnUntil) continue;
+    if (p.torso.position.vsub(pos).length() > R) continue;
+    if (p.shield > 0) { p.shield--; updatePowerupHud(); playDeflect(); continue; }
+    enterRagdoll(p, hitStun(0.9));
+    for (const { body } of p.parts) body.velocity.y = 9;
+  }
+  const i = obstacles.indexOf(o);
+  if (i >= 0) { removeObstacle(o); obstacles.splice(i, 1); }
+  if (netRole === 'host') netSendJson({ k: 'explode', id: o.netId });
+}
+
+// ---------- Förderband: flache Platte, schiebt Spieler seitlich ----------
+function spawnConveyor(vx, speed) {
+  const o = addObstBody(
+    new CANNON.Box(new CANNON.Vec3(PLATFORM_HALF_W, 0.1, 1.8)),
+    new CANNON.Vec3(0, 0.1, spawnFrontZ),
+    obstMats.conveyor,
+    new THREE.BoxGeometry(PLATFORM_HALF_W * 2, 0.2, 3.6)
+  );
+  o.body.isObstacle = false; // schiebt nur, stunnt nicht
+  o.body.velocity.set(0, 0, speed);
+  o.conveyor = { vx };
+  if (vx < 0) o.mesh.scale.x = -1; // Pfeile zeigen dieselbe Textur in Gegenrichtung
+  return o;
+}
+
+// ---------- Engstelle: zwei Wände schieben sich beim Anrollen zusammen ----------
+function spawnChute(speed) {
+  const H = 1.7, half = PLATFORM_HALF_W, G = 2.6; // G = finale Lückenbreite
+  for (const side of [-1, 1]) {
+    const w = half * 0.62, hw = w / 2;
+    const o = addObstBody(
+      new CANNON.Box(new CANNON.Vec3(hw, H, 0.35)),
+      new CANNON.Vec3(side * (half - hw), H, spawnFrontZ),
+      tiledMat(texBrickRed, w / 1.6, (H * 2) / 1.6, { roughness: 0.85 }),
+      new THREE.BoxGeometry(w, H * 2, 0.7)
+    );
+    o.body.velocity.set(0, 0, speed);
+    o.chute = {
+      hw, side,
+      x0: side * (half - hw),
+      xTarget: side * (G / 2 + hw), // Innenkante läuft auf ±G/2 zusammen
+      spawnElapsed: elapsed, dur: 2.2,
+    };
+  }
+}
+
+// ---------- Geschützturm: lädt auf, schießt dann einen schnellen Pfeil geradeaus ----------
+function spawnTurret(speed) {
+  const x = (Math.random() * 2 - 1) * (PLATFORM_HALF_W - 1.2);
+  const o = addObstBody(
+    new CANNON.Box(new CANNON.Vec3(0.4, 0.9, 0.4)),
+    new CANNON.Vec3(x, 0.9, spawnFrontZ),
+    obstMats.turret,
+    new THREE.BoxGeometry(0.8, 1.8, 0.8)
+  );
+  o.body.velocity.set(0, 0, speed);
+  o.pulse = true; // sichtbares Aufladen (teilt sich den Puls-Mechanismus mit dem Sprung-Pad)
+  o.turret = { chargeUntil: elapsed + 0.8 + Math.random() * 0.4, fired: false, boostSpeed: speed + 22 };
 }
 
 // ---------- Power-ups ----------
@@ -4006,7 +4174,11 @@ function botFindGapX(p, zRef) {
   const spans = [];
   for (const o of obstacles) {
     const b = o.body, he = b.shapes[0]?.halfExtents;
-    if (!he || b.isJumpPad || o.sweep || o.wreck || o.piston || o.spin) continue;
+    // gate: he.x ist der LOKALE Arm-Halbwert, nicht die Weltraum-Projektion bei
+    // aktueller Drehung — als statische Spanne ungeeignet, eigener Threat-Fall
+    // rechnet den Drehwinkel. pfloor/conveyor sind begehbar, kein Hindernis.
+    if (!he || b.isJumpPad || o.sweep || o.wreck || o.piston || o.spin ||
+        o.gate || o.pfloor || o.conveyor) continue;
     if (Math.abs(b.position.z - zRef) > 1.6) continue;
     if (b.position.y - he.y > 1.9) continue; // Tunneldach: drunter durch
     const pad = o.boom ? 2.4 : 0.35;         // TNT: Explosions-Radius ist 3.6 — Kettenreaktionen treffen auch "sichere" 1-2 m Abstand
@@ -4050,6 +4222,12 @@ function botScanThreat(p, bot, horizonCap) {
     if (o.piston) { if (Math.abs(t.position.x - b.position.x) < 3.6) add('piston', tta, o); continue; }
     if (o.sweep) { add('sweep', tta, o); continue; }
     if (o.spin) { add('roller', tta, o); continue; }
+    if (o.conveyor) continue; // schiebt nur seitlich — die Zielsteuerung gleicht das laufend selbst aus
+    // erst gefährlich, sobald scharf — und nur, wenn der Bot überhaupt in Reichweite ist
+    if (o.pfloor) { if (o.pfloor.armed && Math.abs(t.position.x - b.position.x) < 3.0) add('pfloor', tta, o); continue; }
+    if (o.strobe) { add('strobe', tta, o); continue; }
+    if (o.gate) { add('gate', tta, o); continue; }
+    if (o.chute) { add('chute', tta, o); continue; }
     const he = b.shapes[0]?.halfExtents;
     if (!he) continue;
     if (b.position.y - he.y > 1.9) continue; // Tunneldach
@@ -4106,7 +4284,10 @@ function botSecondaryJump(p, bot) {
     if (tta < 0 || tta > 0.45) continue;
     if (o.spin) { jumpAt = Math.min(jumpAt ?? 9e9, perfNow() + Math.max(0, tta - 0.30)); continue; }
     const he = b.shapes[0]?.halfExtents;
-    if (!he || o.sweep || o.wreck || o.piston || o.boom || b.isJumpPad) continue;
+    // Neue Sondertypen haben eigene Timing-Logik in botHandleThreat — hier
+    // nur die schlichten, statischen Box-Hindernisse als Fallback behandeln
+    if (!he || o.sweep || o.wreck || o.piston || o.boom || b.isJumpPad ||
+        o.gate || o.chute || o.strobe || o.pfloor || o.conveyor || o.turret) continue;
     if (Math.abs(t.position.x - b.position.x) > he.x + 0.7) continue;
     const need = (b.position.y + he.y) - (t.position.y - RIDE_HEIGHT);
     if (need > 0 && need < 1.3) jumpAt = Math.min(jumpAt ?? 9e9, perfNow() + Math.max(0, tta - 0.30));
@@ -4191,6 +4372,46 @@ function botHandleThreat(p, bot, th) {
       const gap = botFindGapX(p, z0);
       bot.targetX = gap ?? Math.sign(t.position.x || 1) * (PLATFORM_HALF_W - d.edgeMargin);
       bot.targetZ = botDodgeZ(t);
+      return;
+    }
+    case 'pfloor': { // scharfe Platte: seitlich raus, bevor sie hochschnellt
+      const b = th.o.body;
+      const away = (t.position.x >= b.position.x ? 1 : -1) * 3;
+      bot.targetX = Math.min(PLATFORM_HALF_W - d.edgeMargin, Math.max(-(PLATFORM_HALF_W - d.edgeMargin), b.position.x + away));
+      bot.targetZ = botDodgeZ(t);
+      return;
+    }
+    case 'strobe': {
+      // Zustand BEI ANKUNFT vorhersagen (dieselbe Zyklus-Formel wie der Tick):
+      // solide -> springen (Höhe braucht Doppelsprung), passierbar -> einfach durch
+      const S = th.o.strobe;
+      const cyc = (elapsed + th.tta + S.phase) % (S.onDur + S.offDur);
+      bot.targetX = t.position.x;
+      bot.targetZ = botDodgeZ(t);
+      if (cyc >= S.offDur) bot.plan = { type: 'jump', at: perfNow() + Math.max(0, th.tta - 0.30), dbl: true };
+      return;
+    }
+    case 'gate': {
+      // Projizierte Halbbreite des Arms bei Ankunft: Drehwinkel vorausrechnen,
+      // nahe 90°/270° ist der Arm kantenschmal (durchlaufen), sonst springen
+      const G = th.o.gate;
+      const angAt = G.angVel * (elapsed + th.tta) + G.phase;
+      const projHalf = (G.armLen / 2) * Math.abs(Math.cos(angAt));
+      bot.targetX = t.position.x;
+      bot.targetZ = botDodgeZ(t);
+      if (projHalf > 1.0) bot.plan = { type: 'jump', at: perfNow() + Math.max(0, th.tta - 0.30), dbl: true };
+      return;
+    }
+    case 'chute': { // Innenkante der eigenen Seite bei Ankunft vorausrechnen, Mittellücke ansteuern
+      const C = th.o.chute;
+      const frac = Math.min(1, Math.max(0, (elapsed + th.tta - C.spawnElapsed) / C.dur));
+      const xAt = C.x0 + (C.xTarget - C.x0) * frac;
+      const innerEdgeAt = xAt - C.side * C.hw;
+      bot.targetX = 0;
+      bot.targetZ = botDodgeZ(t);
+      // Lücke bei Ankunft nahe der engsten Stelle (min. Innenkante ist ±1.3 m,
+      // s. spawnChute): zusätzlich drüberspringen statt die Nadelöhr-Lücke zu riskieren
+      if (Math.abs(innerEdgeAt) < 1.5) bot.plan = { type: 'jump', at: perfNow() + Math.max(0, th.tta - 0.30), dbl: true };
       return;
     }
     case 'box': {
@@ -5020,6 +5241,21 @@ function updatePlayer(p, dt) {
       }
     }
 
+    // Förderband: derselbe Fußabdruck-Check wie beim Sprung-Pad, schiebt aber
+    // seitlich statt zu katapultieren (angewendet unten in der Bewegungs-Zeile)
+    p.conveyorVx = 0;
+    if (p.grounded && !p.ragdoll) {
+      for (const o of obstacles) {
+        if (!o.conveyor) continue;
+        const b = o.body, half = b.shapes[0].halfExtents;
+        if (Math.abs(t.position.z - b.position.z) < half.z + 0.3 &&
+            Math.abs(t.position.x - b.position.x) < half.x + 0.3) {
+          p.conveyorVx = o.conveyor.vx;
+          break;
+        }
+      }
+    }
+
     // Stun abgelaufen -> wieder aufrichten. Über der Bahn darf man immer
     // aufstehen — auch wenn ein harter Treffer (Hai, Stampfer, Explosion) den
     // Torso auf/unter Straßenniveau gepresst hat. Ohne das blieb man im Asphalt
@@ -5213,6 +5449,12 @@ function obstacleKind(o) {
   if (o.piston) return 'piston';
   if (o.body.isJumpPad) return 'jumppad';
   if (o.spin) return 'roller';
+  if (o.strobe) return 'strobe';
+  if (o.gate) return 'gate';
+  if (o.pfloor) return 'pfloor';
+  if (o.conveyor) return 'conveyor';
+  if (o.chute) return 'chute';
+  if (o.turret) return o.turret.fired ? 'dart' : 'turret';
   return 'obstacle';
 }
 
@@ -5398,6 +5640,36 @@ function animate() {
       o.body.position.y = y;
       o.body.velocity.y = vy;
     }
+    if (o.strobe) {
+      // solide (onDur) <-> passierbar (offDur); collisionResponse=false lässt
+      // Spieler im passierbaren Zustand einfach hindurchlaufen (kein Stun-Check
+      // nötig, da isObstacle im selben Zug auf false geht)
+      const S = o.strobe;
+      const cyc = (elapsed + S.phase) % (S.onDur + S.offDur);
+      const preWarn = cyc > S.offDur - 0.35 && cyc < S.offDur;
+      const solid = cyc >= S.offDur;
+      o.body.collisionResponse = solid;
+      o.body.isObstacle = solid;
+      o.mesh.material.opacity = solid ? 0.95 : (preWarn ? 0.3 + 0.3 * Math.sin(elapsed * 40) : 0.1);
+    }
+    if (o.gate) {
+      // Kinematisch: Rotation direkt aus elapsed, kein Drehmoment nötig
+      o.body.quaternion.setFromAxisAngle(CANNON.Vec3.UNIT_Y, o.gate.angVel * elapsed + o.gate.phase);
+    }
+    if (o.chute) {
+      const C = o.chute;
+      const frac = Math.min(1, Math.max(0, (elapsed - C.spawnElapsed) / C.dur));
+      o.body.position.x = C.x0 + (C.xTarget - C.x0) * frac;
+    }
+    if (o.turret && !o.turret.fired && elapsed >= o.turret.chargeUntil) {
+      // Feuert: schießt mit fester Zusatzgeschwindigkeit die Spur entlang —
+      // dieselbe Instanz wird zum Geschoss (kein neues Objekt, nichts zu syncen)
+      o.turret.fired = true;
+      o.pulse = false;
+      o.mesh.material = obstMats.dart;
+      o.mesh.scale.set(0.75, 0.6, 2.8);
+      o.body.velocity.z = o.turret.boostSpeed;
+    }
   }
 
   // Gezündete Blöcke explodieren nach kurzer Lunte (Replik: Explosion kommt als
@@ -5414,6 +5686,10 @@ function animate() {
         o.boom.knockUntil = 0;
       }
       if (o.boom.armed && perfNow() > o.boom.fuseAt) explodeBlock(o);
+    }
+    for (let i = obstacles.length - 1; i >= 0; i--) {
+      const o = obstacles[i];
+      if (o.pfloor?.armed && perfNow() > o.pfloor.popAt) popPressureFloor(o);
     }
   }
 
