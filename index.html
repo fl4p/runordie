@@ -3895,12 +3895,12 @@ function doDive(p) {
 const BOT_DIFFS = {
   // chase: einmal angebissen, bleibt der Bot so viele Sekunden am Gegner dran
   // (statt jeden Denk-Takt neu zu würfeln) — das macht die Jagd fühlbar
-  easy:   { react: 0.32, jitter: 0.20, gain: 1.2, aimErr: 1.2,  mistakeP: 0.15, horizon: 1.0, aggro: 0.20, tackleP: 0.05, puWant: 0.30, edgeMargin: 1.0, chase: 0.8 },
-  medium: { react: 0.18, jitter: 0.10, gain: 2.0, aimErr: 0.5,  mistakeP: 0.05, horizon: 2.0, aggro: 0.50, tackleP: 0.12, puWant: 0.60, edgeMargin: 1.5, chase: 2.0 },
+  easy:   { react: 0.32, jitter: 0.20, gain: 1.2, aimErr: 1.2,  mistakeP: 0.15, horizon: 1.0, aggro: 0.20, tackleP: 0.10, puWant: 0.30, edgeMargin: 1.0, chase: 0.8 },
+  medium: { react: 0.18, jitter: 0.10, gain: 2.0, aimErr: 0.5,  mistakeP: 0.05, horizon: 2.0, aggro: 0.50, tackleP: 0.25, puWant: 0.60, edgeMargin: 1.5, chase: 2.0 },
   // horizon 3.0: bei Tempo 16 m/s braucht die Querung zur Lücke bis zu ~2.3 s —
   // wer die Wand erst 2 s vorher sieht, wird eingeholt, gestunnt und über die
   // Hinterkante geschoben (Stun-Lock, aus den Soak-Trails)
-  hard:   { react: 0.10, jitter: 0.04, gain: 3.6, aimErr: 0.15, mistakeP: 0.01, horizon: 3.0, aggro: 0.85, tackleP: 0.22, puWant: 1.0, edgeMargin: 2.3, chase: 3.5 },
+  hard:   { react: 0.10, jitter: 0.04, gain: 3.6, aimErr: 0.15, mistakeP: 0.01, horizon: 3.0, aggro: 0.85, tackleP: 0.45, puWant: 1.0, edgeMargin: 2.3, chase: 3.5 },
 };
 const BOT_LABELS = { easy: 'LEICHT', medium: 'MITTEL', hard: 'SCHWER' };
 
@@ -4236,7 +4236,7 @@ function botThink(p, bot) {
     bot.targetZ = f.z;
     const dist = f.vsub(t.position).length();
     if (dist < PUNCH_RANGE * 0.9 + d.aimErr * 0.3) bot.plan = { type: 'punch' };
-    else if (dist > 2.5 && dist < 6 && p.grounded && Math.random() < d.tackleP) {
+    else if (dist > 2.0 && dist < 7 && p.grounded && Math.random() < d.tackleP) { // Slide trifft bis ~7 m — breites Fenster, öfter würfeln
       // Grätsche = ~7 m ungebremster Slide: nur, wenn der Auslauf auf der Bahn bleibt
       const len = Math.hypot(f.x - t.position.x, f.z - t.position.z) || 1;
       const lx = t.position.x + ((f.x - t.position.x) / len) * 8.5;
