@@ -1608,7 +1608,7 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
   const p = {
     id, color, spawn: new CANNON.Vec3(spawnX, RIDE_HEIGHT + 0.1, 4),
     group, otherGroup, parts: [], score: 0,
-    alive: true, ragdoll: false, jumps: 0, grounded: false,
+    alive: true, ragdoll: false, jumps: 0, grounded: false, stuckT: 0,
     jumpLock: 0, stunUntil: -1, hitCooldown: 0,
     keys: { f: false, b: false, l: false, r: false },
     padX: 0, padZ: 0,
@@ -1746,6 +1746,7 @@ function exitRagdoll(p) {
 function resetPlayer(p) {
   p.alive = true; p.jumps = 0; p.jumpLock = 0; p.hitCooldown = 0;
   p.airCharges = 0; p.shield = 0; p.punchPower = 0; p.breach = 0; p.punchCooldown = 0; p.yaw = 0; p.diving = false;
+  p.stuckT = 0;
   p.slowUntil = 0; p.wasSlowed = false; p.magnetUntil = 0; p.wasMagnet = false;
   p.ghostUntil = 0; p.ghostCharges = 0;
   if (p.wasGhost) { p.wasGhost = false; applyGhostVisual(p, false); } // Respawn sichtbar
@@ -3764,6 +3765,14 @@ function tryJump(p) {
     }
     return;
   }
+  // Festgeklemmt (z.B. oben am Tunneldach): jede Sprungtaste zieht die Figur
+  // ein Stück hoch und schiebt sie leicht nach vorn, bis sie sich löst
+  if (p.stuckT > 0.3 && !p.grounded) {
+    p.stuckT = 0;
+    for (const { body } of p.parts) { body.position.y += 0.2; body.velocity.y = 6; body.velocity.z -= 1.5; }
+    playJump(1);
+    return;
+  }
   // Impuls auf ALLE Körperteile, sonst bremsen die baumelnden Gliedmaßen den Sprung aus
   if (p.grounded) {
     for (const { body } of p.parts) body.velocity.y = JUMP_V;
@@ -4879,6 +4888,10 @@ function updatePlayer(p, dt) {
         t.quaternion.setFromAxisAngle(CANNON.Vec3.UNIT_Y, rotMode ? p.yaw : 0);
       }
     }
+    // Festgeklemmt: erhöht, ohne Bodenkontakt, kaum Bewegung (z.B. oben am
+    // Tunneldach eingekeilt) — dann darf die Sprungtaste hochziehen (s. tryJump)
+    p.stuckT = (!p.grounded && !p.ragdoll && !p.diving && t.position.y > 1.5 &&
+      Math.abs(t.velocity.y) < 1.5 && Math.abs(t.velocity.z) < 2.5) ? p.stuckT + dt : 0;
 
     // Sprung-Pad: katapultiert über Mega-Wände – löst schon beim bloßen
     // Darüberlaufen aus (nicht erst, wenn man sauber oben aufsteht)
@@ -4998,8 +5011,11 @@ function updatePlayer(p, dt) {
       const len = Math.hypot(dx, dz);
       if (len > 1) { dx /= len; dz /= len; }
 
-      // Dreh-Modus: Eingabe vom Figuren- ins Welt-Koordinatensystem drehen
-      if (rotMode && (dx || dz)) {
+      // Dreh-Modus: Eingabe vom Figuren- ins Welt-Koordinatensystem drehen.
+      // Auf Touch NICHT: dort dreht die freie Kamera nur die Ansicht, die
+      // Steuerung bleibt bildschirmfest — sonst wurde "seitwärts" bei gedrehter
+      // Kamera zu vor/zurück und die Figur klemmte in x (Bug-Report #3)
+      if (rotMode && !isTouch && (dx || dz)) {
         const c = Math.cos(p.yaw), s = Math.sin(p.yaw);
         const wx = dx * c + dz * s;
         const wz = -dx * s + dz * c;
