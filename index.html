@@ -5529,11 +5529,12 @@ function netActPush(slot, a) {
   netActQueue.push([slot, a]);
 }
 const netSnaps = [];     // decodierte Snapshots für die Interpolation
-// Interpolationspuffer der Replik. Von 0.12 auf 0.08 gesenkt: er dominiert die Eingabe-
-// verzögerung unter Option A; 0.08 = 1.6 Snapshot-Perioden (20 Hz) puffern noch Jitter,
-// sparen aber ~40 ms Lag. Per ?interp=<ms> justierbar (auf [30,300] geklemmt) — stottert
-// es auf einer ruckeligen Verbindung, hochsetzen; für minimale Latenz runter (Ruckel-Risiko).
-let NET_INTERP = 0.08;
+// Interpolationspuffer der Replik — dominiert die Eingabeverzögerung unter Option A.
+// Auf 0.05 (= 1 Snapshot-Periode bei 20 Hz) gesetzt, vom Nutzer als Sweet Spot gewählt.
+// Gesamt-Lag = NET_INTERP + Einweg-Netz: im Testraum kommen +60 ms (120 ms RTT) obendrauf,
+// real im selben WLAN nur ~5–15 ms — echtes Spiel fühlt sich also snappier an als der Test.
+// Per ?interp=<ms> justierbar (auf [30,300] geklemmt) — ruckelt es, hochsetzen.
+let NET_INTERP = 0.05;
 // Jeden angegebenen Wert übernehmen (nicht still ignorieren), aber auf [30,300] ms
 // klemmen: unter ~30 ms bleibt vom 20-Hz-Puffer nichts, die Umwelt fängt an zu ruckeln.
 { const _ip = +new URLSearchParams(location.search).get('interp'); if (Number.isFinite(_ip) && _ip > 0) NET_INTERP = Math.max(0.03, Math.min(0.3, _ip / 1000)); }
