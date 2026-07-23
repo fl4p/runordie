@@ -5503,6 +5503,8 @@ let netSnapTimer = 0;   // zeitbasierter Snapshot-Takt (20 Hz, unabhängig von d
 let netInputTimer = 0;
 let netPing = 0;        // Client: gemessene Rundlaufzeit zum Host (ms), 0 = noch unbekannt
 let netPingTimer = 0;   // Sende-Intervall des Ping-Pakets
+const NET_P2P_TIMEOUT = 2.5; // s ohne P2P-Empfang trotz "offenem" fast-Kanal -> still tot -> Relay
+let netP2PTimer = 0;    // Drossel für den P2P-Gesundheitswächter (netP2PProbe)
 
 // Ping messen: Client schickt {k:'ping',ts}, Host echot {k:'pong',ts} zurück.
 // Über denselben Kanal wie das Gameplay (P2P wenn offen, sonst Relay) -> realistisch.
@@ -5514,6 +5516,33 @@ function netSendPing() {
 function netApplyPong(ts) {
   const rtt = Math.round((perfNow() - ts) * 1000);
   if (rtt >= 0 && rtt < 60000) netPing = rtt;
+}
+// P2P-Gesundheitswächter gegen "Silent Death": ein DataChannel kann readyState
+// 'open' behalten und trotzdem ins Leere senden/empfangen (v.a. auf Mobil bei
+// Funkwechsel). readyState lügt also — als Lebenszeichen dient stattdessen
+// peer.lastRecv (auf jedes empfangene P2P-Paket gestempelt). Kommt über einen
+// offenen fast-Kanal > NET_P2P_TIMEOUT nichts mehr an, gilt er als tot: kappen,
+// das Relay übernimmt automatisch (Snapshots/Eingaben fallen zurück, und der Ping
+// läuft wieder, weil netSendPing dann aufs Relay fällt). Die Gegenseite per Relay
+// ({k:'p2pdrop'}) sofort mitkappen — sonst sendet SIE noch bis zu ihrem eigenen
+// Timeout weiter ins tote P2P und der Empfänger bliebe so lange eingefroren.
+function netP2PProbe() {
+  const now = perfNow();
+  if (netRole === 'host') {
+    for (const slot of Object.keys(netPeers)) {
+      const peer = netPeers[slot];
+      if (peer?.fast?.readyState === 'open' && now - (peer.lastRecv || 0) > NET_P2P_TIMEOUT) {
+        if (netWs?.readyState === 1) netWs.send(JSON.stringify({ k: 'p2pdrop', to: +slot }));
+        netRtcClose(slot);
+        flashPad(`📡 Direktverbindung zu Spieler ${+slot + 1} tot — Relay übernimmt`, '#ffd23d');
+      }
+    }
+  } else if (netPeer && netPeer.fast?.readyState === 'open' && now - (netPeer.lastRecv || 0) > NET_P2P_TIMEOUT) {
+    if (netWs?.readyState === 1) netWs.send(JSON.stringify({ k: 'p2pdrop' })); // Relay stempelt 'from'
+    try { netPeer.pc.close(); } catch { /* egal */ }
+    netPeer = null;
+    flashPad('📡 Direktverbindung tot — Relay übernimmt', '#ffd23d');
+  }
 }
 let netStaleWarnAt = 0; // Snapshot-Watchdog: frühester Zeitpunkt der nächsten Warnung
 let netLastSnapAt = 0;  // Watchdog-Basis, solange noch kein Snapshot ankam
@@ -5595,15 +5624,17 @@ function netRtcWireHost(slot, peer) {
   peer.fast.binaryType = 'arraybuffer';
   // Input-Frame trägt den Sitz (Byte 1) -> auf den absoluten Slot des Peers mappen
   peer.fast.onmessage = (ev) => {
+    peer.lastRecv = perfNow(); // Lebenszeichen für netP2PProbe
     const dv = new DataView(ev.data);
     netHandleInputFrame(peer.slots?.[dv.getUint8(1)], dv, 0);
   };
   peer.rel.onmessage = (ev) => {
+    peer.lastRecv = perfNow();
     let m; try { m = JSON.parse(ev.data); } catch { return; }
     if (m.k === 'act' && netRole === 'host') netActPush(peer.slots?.[m.seat | 0] ?? slot, m.a);
     else if (m.k === 'ping') { try { peer.rel.send(JSON.stringify({ k: 'pong', ts: m.ts })); } catch { /* egal */ } }
   };
-  peer.fast.onopen = () => flashPad(`🔗 Direktverbindung zu Spieler ${slot + 1}`, '#6ee75c');
+  peer.fast.onopen = () => { peer.lastRecv = perfNow(); flashPad(`🔗 Direktverbindung zu Spieler ${slot + 1}`, '#6ee75c'); };
 }
 
 // Host: baut die P2P-Verbindung zu einem frisch gejointen Client auf (slots = dessen Sitze)
@@ -5612,7 +5643,7 @@ async function netRtcOffer(slot, slots) {
   try {
     const pc = new RTCPeerConnection(NET_RTC_CFG);
     const peer = {
-      pc, slots: slots || [slot],
+      pc, slots: slots || [slot], lastRecv: perfNow(), // Startwert: Aufbauzeit nicht als Stille zählen
       fast: pc.createDataChannel('fast', { ordered: false, maxRetransmits: 0 }),
       rel: pc.createDataChannel('rel'),
     };
@@ -5641,7 +5672,7 @@ async function netRtcAnswer(m) {
   try {
     if (m.sdp?.type === 'offer') {
       const pc = new RTCPeerConnection(NET_RTC_CFG);
-      const peer = { pc, fast: null, rel: null };
+      const peer = { pc, fast: null, rel: null, lastRecv: perfNow() }; // s. netP2PProbe
       netPeer = peer;
       pc.ondatachannel = (e) => {
         const ch = e.channel;
@@ -5649,14 +5680,16 @@ async function netRtcAnswer(m) {
         if (ch.label === 'fast') {
           ch.binaryType = 'arraybuffer';
           ch.onmessage = (ev) => {
+            peer.lastRecv = perfNow(); // Lebenszeichen für netP2PProbe
             const dv = new DataView(ev.data);
             if (dv.getUint8(0) === 1 && netRole === 'client') {
               try { netDecodeSnapshot(dv); } catch { /* verkürzter Frame */ }
             }
           };
-          ch.onopen = () => flashPad('🔗 Direktverbindung zum Host aktiv', '#6ee75c');
+          ch.onopen = () => { peer.lastRecv = perfNow(); flashPad('🔗 Direktverbindung zum Host aktiv', '#6ee75c'); };
         } else { // 'rel': der Client empfängt hier das Pong der Ping-Messung
           ch.onmessage = (ev) => {
+            peer.lastRecv = perfNow();
             let mm; try { mm = JSON.parse(ev.data); } catch { return; }
             if (mm.k === 'pong') netApplyPong(mm.ts);
           };
@@ -6337,6 +6370,8 @@ function netWatchdog() {
 
 function netTick(dt) {
   if (!netRole) return;
+  netP2PTimer -= dt;
+  if (netP2PTimer <= 0) { netP2PProbe(); netP2PTimer = 0.5; } // 2×/s: tote P2P zügig kappen
   if (netRole === 'host') {
     for (const [slot, a] of netActQueue) {
       const p = players[slot];
@@ -6688,6 +6723,7 @@ function netOnMessage(ev) {
     if (m.k === 'act' && netRole === 'host' && (m.from | 0) > 0) netActPush(m.from | 0, m.a);
     if (m.k === 'rtc' && (m.from | 0) > 0) netRtcHostSignal(m.from | 0, m);
     if (m.k === 'ping' && (m.from | 0) > 0) netSendJson({ k: 'pong', ts: m.ts, to: m.from }); // Ping-Echo (Relay)
+    if (m.k === 'p2pdrop' && (m.from | 0) > 0) netRtcClose(m.from | 0); // Client meldet tote P2P -> Peer kappen, Relay
     return;
   }
   netApplyEvent(m);
@@ -6696,6 +6732,9 @@ function netOnMessage(ev) {
 function netApplyEvent(m) {
   switch (m.k) {
     case 'pong': if (m.to === netMySlot) netApplyPong(m.ts); return; // Ping-Echo (Relay)
+    case 'p2pdrop': // Host meldet tote P2P -> eigene Direktverbindung kappen, Relay übernimmt
+      if (netPeer) { try { netPeer.pc.close(); } catch { /* egal */ } netPeer = null; }
+      return;
     case 'lobby':
       netRoster = netSanitizeRoster(m.roster) || netRoster;
       if ('names' in m) netNames = netSanitizeNames(m.names);
