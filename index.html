@@ -296,7 +296,7 @@
     background: rgba(13,17,23,.6); color: #e6edf3; text-transform: uppercase; text-align: center;
   }
   #msg input:focus { outline: none; border-color: rgba(77,210,255,.6); box-shadow: 0 0 0 3px rgba(77,210,255,.15); }
-  .powerups { top: 12px; font-size: 22px; letter-spacing: 3px; text-shadow: 0 2px 8px #000; }
+  .powerups { top: 12px; font-size: 22px; letter-spacing: 3px; text-shadow: 0 2px 8px #000; white-space: pre; line-height: 1.25; }
   #pu1 { left: 14px; }
   #pu2 { left: calc(50% + 16px); }
   #pu3 { left: 14px; top: 44px; }
@@ -2993,21 +2993,45 @@ function clearPowerups() {
   powerups.length = 0;
 }
 
+// Powerup-Symbole eines Spielers, je Sorte eine Zeile -> vertikale Liste (white-space:pre)
+function powerupLines(p) {
+  const now = perfNow();
+  const lines = [];
+  if (p.airCharges) lines.push('💎'.repeat(p.airCharges));
+  if (p.punchPower) lines.push('🥊'.repeat(p.punchPower));
+  if (p.breach) lines.push('💣'.repeat(p.breach));
+  if (p.ghostCharges) lines.push('🌑'.repeat(p.ghostCharges));
+  if (p.shield > 0) lines.push('🛡'.repeat(p.shield));
+  if (now < p.slowUntil) lines.push('🐌');
+  if (now < p.magnetUntil) lines.push('🧲');
+  if (now < p.invulnUntil) lines.push('⭐');
+  if (now < p.ghostUntil) lines.push('🌫️');
+  return lines.join('\n');
+}
+
+// Nur die EIGENEN Sitze aufs HUD: online die lokale(n) Sicht(en) (Einzel = oben links,
+// Splitscreen = links/rechts), offline die lokalen Spieler. Fremde Powerups bleiben verborgen.
+function ownHudPlayers() {
+  if (netRole) return netMySeats.map((s) => players[s]);
+  if (soloMode || botMode) return [player1];
+  return [player1, player2];
+}
+
 function updatePowerupHud() {
+  // Sicht-Zustand (Tarnung + Effektblasen) für ALLE Avatare pflegen, unabhängig vom HUD
   for (const p of players) {
-    const el = 'pu' + p.id;
-    if (p.parked) { $(el).textContent = ''; continue; }
-    const slowed = perfNow() < p.slowUntil;
-    const invuln = perfNow() < p.invulnUntil;
+    if (p.parked) continue;
     const ghost = perfNow() < p.ghostUntil;
     if (ghost !== p.wasGhost) { p.wasGhost = ghost; applyGhostVisual(p, ghost); }
-    $(el).textContent = '💎'.repeat(p.airCharges) + '🥊'.repeat(p.punchPower) + '💣'.repeat(p.breach || 0)
-      + '🌑'.repeat(p.ghostCharges || 0)
-      + (p.shield > 0 ? ' ' + '🛡'.repeat(p.shield) : '') + (slowed ? ' 🐌' : '')
-      + (perfNow() < p.magnetUntil ? ' 🧲' : '') + (invuln ? ' ⭐' : '') + (ghost ? ' 🌫️' : '');
     p.bubble.visible = p.shield > 0 && !ghost;   // Effektblasen würden die Tarnung verraten
-    p.slowBubble.visible = slowed && !ghost;
-    p.goldBubble.visible = invuln && !ghost;
+    p.slowBubble.visible = perfNow() < p.slowUntil && !ghost;
+    p.goldBubble.visible = perfNow() < p.invulnUntil && !ghost;
+  }
+  // Felder pu1..pu4 der Reihe nach den eigenen Sitzen zuordnen, der Rest bleibt leer
+  const own = ownHudPlayers();
+  for (let i = 0; i < 4; i++) {
+    const p = own[i];
+    $('pu' + (i + 1)).textContent = p && !p.parked ? powerupLines(p) : '';
   }
 }
 
