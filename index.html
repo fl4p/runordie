@@ -456,7 +456,7 @@
   <!-- Build-Kennung: Commit-Zeitpunkt (UTC), automatisch gestempelt vom pre-commit-
        Hook (.githooks/). Die folgende mver-Zeile bitte einzeilig lassen — der Hook
        ersetzt ihren Inhalt per sed anhand des Klassennamens. -->
-  <span class="mver">RUN OR DIE · v2026.07.24 · 07:38 UTC</span></div>
+  <span class="mver">RUN OR DIE · v2026.07.24 · 07:52 UTC</span></div>
 
 <script type="importmap">
 { "imports": {
@@ -1657,7 +1657,7 @@ function createPlayer(id, color, darkColor, spawnX, group, otherGroup) {
     tackling: false, tackleCd: 0,
     hanging: false, hangCd: 0, hangLift: 0, hangUntil: 0,
     punchCooldown: 0, breach: 0, arms: [],
-    yaw: 0, padYawRate: 0, diving: false,
+    yaw: 0, padYawRate: 0, diving: false, tornado: null,
   };
 
   const v = (x, y, z) => new CANNON.Vec3(x, y, z);
@@ -1790,7 +1790,7 @@ function resetPlayer(p) {
   p.ghostUntil = 0; p.ghostCharges = 0;
   if (p.wasGhost) { p.wasGhost = false; applyGhostVisual(p, false); } // Respawn sichtbar
   p.invulnUntil = 0; p.wasInvuln = false;
-  p.tackling = false; p.tackleCd = 0; p.hanging = false; p.hangCd = 0; p.hangLift = 0;
+  p.tackling = false; p.tackleCd = 0; p.hanging = false; p.hangCd = 0; p.hangLift = 0; p.tornado = null;
   exitRagdoll(p);
   for (const { body, mesh } of p.parts) {
     body.position.set(p.spawn.x + body.initOffset.x, p.spawn.y + body.initOffset.y, p.spawn.z + body.initOffset.z);
@@ -2821,6 +2821,90 @@ function removeShark(S) {
 function clearSharks() {
   for (const S of sharks) removeShark(S);
   sharks.length = 0;
+}
+
+// ---------- Tornado: saugt Spieler ein, wirbelt sie im Kreis, schleudert sie weg ----------
+// Kein CANNON-Körper nötig (wie bei Lasern) — reine Positions-Formel aus `elapsed`,
+// läuft identisch auf Host UND Client (Sichtbarkeit), das Einsaugen/Wirbeln/Auswerfen
+// selbst lebt in updatePlayer und läuft damit automatisch nur host-seitig.
+const tornadoes = [];
+const texTornado = stripeTex('#4a4030', '#241d12');
+texTornado.repeat.set(3, 5);
+const tornadoMat = new THREE.MeshStandardMaterial({
+  map: texTornado, transparent: true, opacity: 0.55, side: THREE.DoubleSide,
+  roughness: 0.9, depthWrite: false,
+});
+const tornadoDustMat = new THREE.MeshBasicMaterial({ color: 0x4a3a24, transparent: true, opacity: 0.3, depthWrite: false });
+
+const TORNADO_CAPTURE_R = 2.0; // Einsaug-Radius (horizontal)
+const TORNADO_SPIN_R = 1.15;   // Wirbel-Radius, sobald erfasst
+const TORNADO_LIFT_Y = 3.6;    // Hubhöhe im Wirbel
+const TORNADO_DUR = 1.8;       // Sekunden im Wirbel
+const TORNADO_EJECT_V = 11;    // horizontale Schleuder-Geschwindigkeit
+const TORNADO_EJECT_UP = 7;    // vertikaler Schub beim Auswurf
+
+function spawnTornado() {
+  const funnelH = 6, rTop = 2.3, rBot = 0.35;
+  const funnel = new THREE.Mesh(
+    new THREE.CylinderGeometry(rTop, rBot, funnelH, 16, 6, true),
+    tornadoMat
+  );
+  funnel.position.y = funnelH / 2;
+  const dust = new THREE.Mesh(new THREE.CircleGeometry(TORNADO_CAPTURE_R, 24), tornadoDustMat);
+  dust.rotation.x = -Math.PI / 2;
+  dust.position.y = 0.05;
+  const grp = new THREE.Group();
+  grp.add(funnel, dust);
+  const x0 = (Math.random() * 2 - 1) * (PLATFORM_HALF_W - 2.5);
+  grp.position.set(x0, 0, spawnFrontZ);
+  scene.add(grp);
+  tornadoes.push({
+    grp, funnel, x0, x: x0, z: spawnFrontZ, speed: baseSpeed(),
+    driftAmp: 1.5 + Math.random() * 1.5, driftOmega: 0.4 + Math.random() * 0.3, driftPhase: Math.random() * Math.PI * 2,
+  });
+}
+
+function removeTornado(T) {
+  scene.remove(T.grp);
+  T.grp.traverse((n) => n.geometry?.dispose()); // Materialien sind geteilt
+}
+
+// Auswerfen: zufällige horizontale Richtung + Hoch- und Rückwurf, dann normaler
+// Ragdoll-Stun (wie jeder andere Hindernis-Treffer) — läuft nur host-seitig,
+// da nur von updatePlayer()/updateTornadoes() aus aufgerufen
+function ejectFromTornado(p) {
+  const ang = Math.random() * Math.PI * 2;
+  p.tornado = null;
+  enterRagdoll(p, hitStun(1.0));
+  for (const { body } of p.parts) {
+    body.velocity.x = Math.cos(ang) * TORNADO_EJECT_V;
+    body.velocity.z = Math.sin(ang) * TORNADO_EJECT_V;
+    body.velocity.y = TORNADO_EJECT_UP;
+  }
+  spawnShockwave(p.torso.position, { x: 0, y: 1, z: 0 }, true);
+  playPunchMiss(); // Whoosh
+}
+
+function clearTornadoes() {
+  for (const T of tornadoes) removeTornado(T);
+  tornadoes.length = 0;
+  for (const p of players) p.tornado = null; // keine toten Verweise auf entfernte Tornados
+}
+
+function updateTornadoes(dt) {
+  for (let i = tornadoes.length - 1; i >= 0; i--) {
+    const T = tornadoes[i];
+    T.z += T.speed * dt;
+    T.x = T.x0 + T.driftAmp * Math.sin(T.driftOmega * elapsed + T.driftPhase);
+    T.grp.position.set(T.x, 0, T.z);
+    T.funnel.rotation.y += dt * 3.2; // sichtbarer Eigendreh
+    if (T.z > despawnBehindZ()) {
+      // Gefangene Spieler dieses Tornados sofort auswerfen statt hängenzulassen
+      for (const p of players) if (p.tornado?.T === T) ejectFromTornado(p);
+      removeTornado(T);
+      tornadoes.splice(i, 1);
+    }
+  }
 }
 
 // ---------- Wellen: Sprung-Pad + Mega-Wand oder Tunnel ----------
@@ -4247,6 +4331,17 @@ function botScanThreat(p, bot, horizonCap) {
     if (Math.abs(t.position.z - S.body.position.z) < 2.0 && S.body.position.y > -1) add('shark', 0.15, S);
   }
 
+  // Tornado: normale Anflugzeit-Formel, aber nur wenn der Bot horizontal
+  // überhaupt in Einsaugreichweite geraten könnte (die Drift macht eine
+  // genaue Vorhersage unnötig — der Fall wird jeden Think-Takt neu bewertet)
+  for (const T of tornadoes) {
+    const closure = T.speed - t.velocity.z;
+    if (closure < 0.3) continue;
+    const tta = (t.position.z - T.z) / closure;
+    if (tta < -0.3 || tta > hz) continue;
+    if (Math.abs(t.position.x - T.x) < TORNADO_CAPTURE_R + 4) add('tornado', tta, T);
+  }
+
   for (const o of obstacles) {
     const b = o.body;
     const closure = b.velocity.z - t.velocity.z;
@@ -4349,6 +4444,13 @@ function botHandleThreat(p, bot, th) {
       const sz = th.o.body.position.z;
       bot.targetZ = sz + (t.position.z >= sz ? 2.6 : -2.6);
       bot.targetX = t.position.x;
+      return;
+    }
+    case 'tornado': { // von der aktuellen Trichter-x wegsteuern, Sicherheitsabstand über den Einsaugradius hinaus
+      const T = th.o;
+      const away = (t.position.x >= T.x ? 1 : -1);
+      bot.targetX = Math.min(PLATFORM_HALF_W - d.edgeMargin, Math.max(-(PLATFORM_HALF_W - d.edgeMargin), T.x + away * (TORNADO_CAPTURE_R + 2.5)));
+      bot.targetZ = botDodgeZ(t);
       return;
     }
     case 'wreck': // Kugel pendelt bis |x|≈4.9 — sicherer Korridor an der Seite
@@ -4810,7 +4912,7 @@ function applyPowerMode() {
 }
 // Ringpuffer für das Live-Frame-Profil (echtes Gameplay): Frame-Intervall, CPU-JS-Zeit u. a.
 const cpuBuf = { top: 0, tr: 0, intervals: [], cpu: [], logic: [], rsub: [], heap: [] };
-let elapsed = 0, spawnTimer = 0, puTimer = 0, sharkTimer = 6, roundEndAt = 0, firstDeathAt = 0, spawnCount = 0;
+let elapsed = 0, spawnTimer = 0, puTimer = 0, sharkTimer = 6, tornadoTimer = 20, roundEndAt = 0, firstDeathAt = 0, spawnCount = 0;
 let soloMode = false;
 let diveAlways = localStorage.getItem('runordie_diveAlways') === '1';
 let noStun = localStorage.getItem('runordie_noStun') === '1';
@@ -4945,7 +5047,7 @@ function backToMenu() {
   // konsistent (Vollbild-Aspect); der nächste startGame() setzt beide neu
   $('touchui').classList.add('hidden');
   if (snowActive) endWeather(true);
-  clearObstacles(); clearPowerups(); clearLasers(); clearRushTiles(); clearSharks();
+  clearObstacles(); clearPowerups(); clearLasers(); clearRushTiles(); clearSharks(); clearTornadoes();
   const m = $('msg');
   if (MENU_HTML) m.innerHTML = MENU_HTML;
   m.style.color = '';
@@ -5141,8 +5243,8 @@ function submitSoloScore() {
 
 function resetRound() {
   $('netpause')?.classList.add('hidden'); // Spiel-Overlay verdeckt sonst das Sieger-Banner
-  clearObstacles(); clearPowerups(); clearLasers(); clearRushTiles(); clearSharks();
-  elapsed = 0; spawnTimer = 1.2; puTimer = 4; sharkTimer = 6; firstDeathAt = 0; spawnCount = 0;
+  clearObstacles(); clearPowerups(); clearLasers(); clearRushTiles(); clearSharks(); clearTornadoes();
+  elapsed = 0; spawnTimer = 1.2; puTimer = 4; sharkTimer = 6; tornadoTimer = 20; firstDeathAt = 0; spawnCount = 0;
   if (snowActive) endWeather(true);
   nextSnowAt = 28 + Math.random() * 17;
   if (netRole === 'host') rosterSlots = [...netRoster]; // zwischenzeitlich Gegangene ausparken
@@ -5262,9 +5364,42 @@ function updatePlayer(p, dt) {
     p.stuckT = (!p.grounded && !p.ragdoll && !p.diving && t.position.y > 1.5 &&
       Math.abs(t.velocity.y) < 1.5 && Math.abs(t.velocity.z) < 2.5) ? p.stuckT + dt : 0;
 
+    // Tornado: Einsaugen, solange man nicht schon gefangen/ragdoll/hängend/
+    // unverwundbar ist. ⭐ schützt komplett, 🛡 kostet eine Ladung und schiebt nur.
+    if (!p.ragdoll && !p.tornado && !p.hanging && perfNow() > p.invulnUntil) {
+      for (const T of tornadoes) {
+        const dxT = t.position.x - T.x, dzT = t.position.z - T.z;
+        if (dxT * dxT + dzT * dzT > TORNADO_CAPTURE_R * TORNADO_CAPTURE_R) continue;
+        if (p.shield > 0) { p.shield--; updatePowerupHud(); playDeflect(); break; }
+        p.diving = false; p.tackling = false;
+        p.tornado = {
+          T, start: elapsed, until: elapsed + TORNADO_DUR,
+          phase: Math.atan2(dzT, dxT), angVel: (Math.random() < 0.5 ? 1 : -1) * (7 + Math.random() * 3),
+        };
+        p.jumps = 0;
+        playSlowmo();
+        break;
+      }
+    }
+    if (p.tornado) {
+      const Tn = p.tornado;
+      if (elapsed >= Tn.until || !tornadoes.includes(Tn.T)) {
+        ejectFromTornado(p);
+      } else {
+        const dtCap = elapsed - Tn.start;
+        const ang = Tn.phase + Tn.angVel * dtCap;
+        const liftFrac = Math.min(1, dtCap / 0.4); // schnelles Hochziehen zu Beginn
+        t.velocity.set(0, 0, 0);
+        t.position.x = Tn.T.x + Math.cos(ang) * TORNADO_SPIN_R;
+        t.position.z = Tn.T.z + Math.sin(ang) * TORNADO_SPIN_R;
+        t.position.y += (TORNADO_LIFT_Y * liftFrac - t.position.y) * 0.25;
+        t.quaternion.setFromAxisAngle(CANNON.Vec3.UNIT_Y, ang * 2);
+      }
+    }
+
     // Sprung-Pad: katapultiert über Mega-Wände – löst schon beim bloßen
     // Darüberlaufen aus (nicht erst, wenn man sauber oben aufsteht)
-    if (!p.ragdoll && perfNow() > (p.padCd || 0)) {
+    if (!p.ragdoll && !p.tornado && perfNow() > (p.padCd || 0)) {
       for (const o of obstacles) {
         const b = o.body;
         if (!b.isJumpPad) continue;
@@ -5286,7 +5421,7 @@ function updatePlayer(p, dt) {
     // Förderband: derselbe Fußabdruck-Check wie beim Sprung-Pad, schiebt aber
     // seitlich statt zu katapultieren (angewendet unten in der Bewegungs-Zeile)
     p.conveyorVx = 0;
-    if (p.grounded && !p.ragdoll) {
+    if (p.grounded && !p.ragdoll && !p.tornado) {
       for (const o of obstacles) {
         if (!o.conveyor) continue;
         const b = o.body, half = b.shapes[0].halfExtents;
@@ -5314,7 +5449,7 @@ function updatePlayer(p, dt) {
     }
 
     // Kanten-Hängen: greifen, halten, hochziehen
-    if (!p.ragdoll && !p.grounded && !p.hanging && !p.diving && !p.tackling &&
+    if (!p.ragdoll && !p.grounded && !p.hanging && !p.diving && !p.tackling && !p.tornado &&
         t.velocity.y < 2 && perfNow() > p.hangCd) {
       const e = edgeGrabInfo(t.position);
       if (e) {
@@ -5352,7 +5487,7 @@ function updatePlayer(p, dt) {
       }
     }
 
-    if (!p.ragdoll) {
+    if (!p.ragdoll && !p.tornado) {
       // Grätsche: Timer + Treffer-Fenster
       if (p.tackling) {
         if (perfNow() > p.tackleUntil) {
@@ -5516,6 +5651,7 @@ function netRecSample() {
     ob: obstacles.map((o) => [r2(o.body.position.x), r2(o.body.position.y), r2(o.body.position.z), obstacleKind(o)]),
     sh: sharks.map((S) => [r2(S.body.position.x), r2(S.body.position.y), r2(S.body.position.z)]),
     la: lasers.map((L) => [r2(L.z), L.type]),
+    to: tornadoes.map((T) => [r2(T.x), r2(T.z)]),
   };
 }
 
@@ -5638,9 +5774,18 @@ function animate() {
           sharkTimer = 9 + Math.random() * 9;
         }
       }
+      // Tornado: ab 25 s, seltener als Haie (stärkere Disruption)
+      if (elapsed > 25) {
+        tornadoTimer -= dt;
+        if (tornadoTimer <= 0) {
+          netCall('spawnTornado');
+          tornadoTimer = 22 + Math.random() * 16;
+        }
+      }
     }
     updatePowerups(dt);
     updateLasers(envDt); // Replik: Laser-Vorschub friert bei Unterlauf mit ein
+    updateTornadoes(envDt); // Replik: Vorschub/Drift friert bei Unterlauf mit ein
     updateRush();
     hudTimer -= dt;
     if (hudTimer <= 0) {
@@ -6189,7 +6334,7 @@ function netApplyFx(m) {
 }
 
 // ---- Spawn-Replay: Host zeichnet Randoms auf, Client spielt sie ab ----
-const NET_SPAWNS = { spawnObstacle, spawnWave, spawnLaser, spawnShark, spawnRandomPowerup };
+const NET_SPAWNS = { spawnObstacle, spawnWave, spawnLaser, spawnShark, spawnTornado, spawnRandomPowerup };
 
 // Ids laufen im Snapshot als u16 übers Kabel — vor 65535 umbrechen, sonst
 // laufen die Drift-Korrekturen nach Stunden Host-Uptime still ins Leere
@@ -8568,7 +8713,7 @@ function renderProfReport(d, opts = {}) {
 }
 
 // Debug-Hook für automatisierte Tests
-window.__game = { players, obstacles, powerups, world, cams, sky, fxRings, lasers, sharks, renderer, spawnShark, spawnLaser, spawnPowerup, spawnWave, toggleDaySky, toggleRotMode, camTarget, startWeather, endWeather, runGpuProfile, cpuBuf, analyzeLiveFrames, renderProfReport,
+window.__game = { players, obstacles, powerups, world, cams, sky, fxRings, lasers, sharks, tornadoes, renderer, spawnShark, spawnLaser, spawnPowerup, spawnWave, spawnTornado, toggleDaySky, toggleRotMode, camTarget, startWeather, endWeather, runGpuProfile, cpuBuf, analyzeLiveFrames, renderProfReport,
   startGame, backToMenu, invariants: botInvariants,
   // sticky-Bots überleben Menü-Starts — abschalten mit setBot(i, null)
   setBot: (i, diff) => { botCtl[i] = diff ? makeBot(diff, true) : null; },
