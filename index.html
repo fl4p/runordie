@@ -456,7 +456,7 @@
   <!-- Build-Kennung: Commit-Zeitpunkt (UTC), automatisch gestempelt vom pre-commit-
        Hook (.githooks/). Die folgende mver-Zeile bitte einzeilig lassen — der Hook
        ersetzt ihren Inhalt per sed anhand des Klassennamens. -->
-  <span class="mver">RUN OR DIE · v2026.07.23 · 20:59 UTC</span></div>
+  <span class="mver">RUN OR DIE · v2026.07.24 · 07:38 UTC</span></div>
 
 <script type="importmap">
 { "imports": {
@@ -2863,8 +2863,10 @@ function spawnBoomBlock(x, y, z, speed) {
 
 function spawnWave(speed) {
   // Skala >1: die bestehenden Formationen (0.09-0.86, Tunnel bis 1.0) behalten
-  // ihr GENAUES relatives Gewicht, die vier neuen teilen sich den Rest (1.0-1.4)
-  const roll = Math.random() * 1.4;
+  // ihr GENAUES relatives Gewicht, die vier neuen teilen sich den Rest (1.0-1.5).
+  // Turret bekommt eine doppelt so breite Spanne wie die anderen drei (0.2 statt
+  // 0.1) — war als seltenste der neuen Gefahren kaum zu sehen.
+  const roll = Math.random() * 1.5;
   if (roll < 0.09) { spawnWrecker(speed); return; }
   if (roll < 0.18) { spawnPiston(speed); return; }
   if (roll < 0.27) {
